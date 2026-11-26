@@ -263,6 +263,9 @@ pub struct SumState {
     /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
     /// the call's template, so one run per site of the program text).
     /// 8 a Proxy trap's run for one key shape (rule PXGET: `trap_ctx`).
+    /// 9 a call of a shared run, for the call's template (rule
+    /// SHARED-SITE-RUN, `shared_run_site`): no site run, so its own calls
+    /// are template runs again.
     /// The fourth component is the function value a run's called
     /// parameter is bound to (`Summary::called`), else `NO_VAL`.
     /// Nothing in a key is another instance: the count is (sites +
@@ -1286,7 +1289,7 @@ impl Model {
             }
         }
         let lay = match key.0 {
-            0 | 7 => LAY_SITE | key.1,
+            0 | 7 | 9 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
             1 if this != NO_NODE => key.1,
             8 if this != NO_NODE => self.sum.trap_ctx[key.1 as usize].0,
@@ -1422,6 +1425,11 @@ impl Model {
             // the run of its key shape (10.5.8 step 8: the trap gets that
             // access's P, never another access's).
             _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
+            _ if lay == LAY_NONE
+                && let Some(site) = self.shared_run_site(call) =>
+            {
+                (9, site, ft)
+            }
             _ => (1, lay, ft),
         };
         // Widened (`past_work_bound`, above): no new calling context. The call
@@ -1430,7 +1438,7 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7 | 8
+            0 | 1 | 7 | 8 | 9
                 if widened
                     && !self
                         .sum
@@ -1530,7 +1538,8 @@ impl Model {
     /// callee at a site. (Folding by token alone let a recursion that
     /// reaches every closure of one function run each permutation of them:
     /// three.js `WebGLShadowMap` `renderObject`, 16 closures.) A call in the
-    /// shared run (no site, no object) keeps the shared run.
+    /// shared run (no site, no object) is its template's site
+    /// (`shared_run_site`).
     fn nested_site(&self, call: CallId, ft: Tok) -> Option<CallId> {
         if call == NO_NODE || (call as usize) < self.sum.n_prog {
             return None;
@@ -1562,6 +1571,32 @@ impl Model {
             }
         }
         Some(call)
+    }
+
+    /// Rule SHARED-SITE-RUN: a plain call an instance made (a copy of a
+    /// template, `tmpl_of`) inside a run that is no context of its own (no
+    /// site, no object: a function's shared run, as a callback a builtin
+    /// calls from inside an instance runs, and the runs below it) runs the
+    /// callee's run for the call's template (kind 9), one per site of the
+    /// program text. The shared run is the function's one body for every
+    /// call no site keys, as the body of a function without a summary is,
+    /// and that body's calls run per site; before this rule the shared
+    /// run's calls all ran the callee's shared run, so a literal one site
+    /// stores into an escaped object was the literal every other such site
+    /// reads (perry-web css/layout.ts `b.margin = edges(..)` and the edge
+    /// reads of `layoutInline`). A kind-9 run is no site run: its own plain
+    /// calls are kind-9 runs of their templates again, so no chain grows
+    /// below it and the runs are at most templates x function tokens.
+    fn shared_run_site(&self, call: CallId) -> Option<CallId> {
+        if call == NO_NODE || (call as usize) < self.sum.n_prog {
+            return None;
+        }
+        let t = *self.sum.tmpl_of.get(&call)?;
+        if !self.sum.site_tmpls.contains(&t) {
+            return None;
+        }
+        let cur = *self.sum.call_inst.get(&call)?;
+        (!self.sum.site_run.contains(&cur)).then_some(t)
     }
 
     fn site_of_call(&self, call: CallId) -> Option<CallId> {

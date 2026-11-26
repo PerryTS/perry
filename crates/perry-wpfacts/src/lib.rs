@@ -1032,7 +1032,7 @@ fn compute_act<'a>(
     }
     if cfg.profile || cfg.explain {
         // One count per instance key kind (`Summaries::inst_key`).
-        let mut kinds = [0usize; 9];
+        let mut kinds = [0usize; 10];
         let mut fnkeyed = 0;
         let mut fnval = 0;
         for &(k, l, _, v) in g.m.sum.inst_key.keys() {

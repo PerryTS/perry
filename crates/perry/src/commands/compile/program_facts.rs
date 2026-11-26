@@ -164,6 +164,60 @@ pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::
     out
 }
 
+/// The count a bound variable sets (`PERRY_FACTS_MAX_WORK` ...): `None`
+/// when unset or empty. A value that is no count stops the compile with an
+/// error: a bound that silently falls back to its default measures
+/// something else than was asked for.
+fn env_count(name: &str) -> Option<u64> {
+    let v = std::env::var(name).ok().filter(|v| !v.trim().is_empty())?;
+    match parse_count(&v) {
+        Some(n) => Some(n),
+        None => {
+            eprintln!(
+                "error: {name}={v} is not a count (a non-negative integer: 1000000000, 1_000_000_000 or 1e9)"
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// A non-negative integer written as digits (`_` separators allowed) or in
+/// scientific notation (`1e10`, `2.5E9`) whose value is a whole number that
+/// fits in a `u64`.
+fn parse_count(v: &str) -> Option<u64> {
+    let v = v.trim().replace('_', "");
+    if let Ok(n) = v.parse::<u64>() {
+        return Some(n);
+    }
+    let (m, e) = v.split_once(['e', 'E'])?;
+    let e: u32 = e.strip_prefix('+').unwrap_or(e).parse().ok()?;
+    let (int, frac) = m.split_once('.').unwrap_or((m, ""));
+    if int.is_empty() && frac.is_empty()
+        || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    // mantissa digits x 10^(e - fraction digits), exactly.
+    let digits = format!("{int}{frac}");
+    let shift = e.checked_sub(frac.len() as u32);
+    let digits = match shift {
+        Some(k) => format!("{digits}{}", "0".repeat(k as usize)),
+        None => {
+            let cut = (frac.len() as u32 - e) as usize;
+            let (keep, rest) = digits.split_at(digits.len() - cut);
+            if rest.bytes().any(|b| b != b'0') {
+                return None;
+            }
+            keep.to_string()
+        }
+    };
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    digits.parse::<u64>().ok()
+}
+
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
@@ -256,24 +310,11 @@ pub(crate) fn run(
             .ok()
             .filter(|s| !s.is_empty()),
         // Past either bound the program simply gets no facts (sound).
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
-        max_work: Some(
-            std::env::var("PERRY_FACTS_MAX_WORK")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_MAX_WORK),
-        ),
+        budget_secs: env_count("PERRY_FACTS_BUDGET_SECS").filter(|&s| s != 0),
+        max_work: Some(env_count("PERRY_FACTS_MAX_WORK").unwrap_or(DEFAULT_MAX_WORK)),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
         // Points-to entries bound (memory); past it the program gets no facts.
-        max_pts: Some(
-            std::env::var("PERRY_FACTS_MAX_PTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2_000_000_000),
-        ),
+        max_pts: Some(env_count("PERRY_FACTS_MAX_PTS").unwrap_or(2_000_000_000)),
         export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
@@ -1457,6 +1498,28 @@ impl<W: std::io::Write> std::io::Write for StableDump<'_, W> {
 }
 
 #[cfg(test)]
+mod count_tests {
+    use super::parse_count;
+
+    #[test]
+    fn a_bound_parses_digits_and_scientific_notation_or_is_refused() {
+        assert_eq!(parse_count("1000000000"), Some(1_000_000_000));
+        assert_eq!(parse_count("1_000_000_000"), Some(1_000_000_000));
+        assert_eq!(parse_count("1e10"), Some(10_000_000_000));
+        assert_eq!(parse_count("2.5E9"), Some(2_500_000_000));
+        assert_eq!(parse_count("1e+3"), Some(1000));
+        assert_eq!(parse_count("0"), Some(0));
+        assert_eq!(parse_count("1.50e1"), Some(15));
+        assert_eq!(parse_count("1.5e0"), None);
+        assert_eq!(parse_count("1e-3"), None);
+        assert_eq!(parse_count("-5"), None);
+        assert_eq!(parse_count("1e30"), None);
+        assert_eq!(parse_count("ten"), None);
+        assert_eq!(parse_count("e9"), None);
+    }
+}
+
+#[cfg(test)]
 mod stable_dump_tests {
     use super::*;
 
@@ -1566,10 +1629,7 @@ pub(crate) fn activation(
             .ok()
             .filter(|s| !s.is_empty()),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
+        budget_secs: env_count("PERRY_FACTS_BUDGET_SECS").filter(|&s| s != 0),
         // The activation pass alone, over the whole program: a larger bound
         // than the per-unit facts' (the Supabase CLI needs ~20x the default).
         max_work: Some(
