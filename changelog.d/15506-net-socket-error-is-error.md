@@ -1,0 +1,1 @@
+The `'error'` a `net.Socket` or `tls.TLSSocket` emits is a real `Error`: `err instanceof Error` holds, `Object.prototype.toString` reports `[object Error]`, and its own keys are Node's (`errno`, `code`, `syscall`, then `address` and `port` for a failed connect).
