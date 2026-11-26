@@ -209,6 +209,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         } else {
             let outer_content_type = take_pending_fetch_body_content_type();
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
+            let pending_bytes = take_pending_fetch_body_bytes();
             let stream = take_pending_fetch_body_stream_id();
             if stream.is_some() {
                 if request.keepalive {
@@ -232,7 +233,8 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
                 None
             } else {
                 dispatch::body_bytes_from_header(ptr)
-            };
+            }
+            .or(pending_bytes);
             request.body = match stream.map(drain_body_stream) {
                 Some((drained, error)) => {
                     if let Some(error) = error {

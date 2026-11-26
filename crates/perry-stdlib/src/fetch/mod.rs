@@ -426,6 +426,12 @@ thread_local! {
     // Response constructor to install Fetch's default Content-Type.
     static PENDING_FETCH_BODY_CONTENT_TYPE: Cell<Option<&'static str>> =
         const { Cell::new(None) };
+    // A binary BodyInit (Buffer / typed array / ArrayBuffer / Blob /
+    // IncomingMessage) copied to its raw bytes. Carried here, like a stream
+    // body, instead of as a StringHeader: a body may be longer than the
+    // maximum string length, which only `text()` / `json()` refuse.
+    static PENDING_FETCH_BODY_BYTES: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 pub(super) const BODY_CONTENT_TYPE_TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
@@ -438,6 +444,17 @@ pub(super) fn reset_pending_fetch_body_init() {
     PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(0));
     PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.set(0));
     PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.set(None));
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(None));
+}
+
+pub(super) fn set_pending_fetch_body_bytes(bytes: Option<Vec<u8>>) {
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(bytes));
+}
+
+/// The bytes of a binary body classified by `js_response_body_init_ptr`
+/// (which then returned a null body pointer), if any.
+fn take_pending_fetch_body_bytes() -> Option<Vec<u8>> {
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(None))
 }
 
 fn set_pending_fetch_body_iterable(value: f64) {
@@ -757,9 +774,11 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let form_data_content_type = form_data_body
         .as_ref()
         .map(|(_, content_type)| content_type.clone());
+    let pending_bytes = take_pending_fetch_body_bytes();
     let body_bytes = form_data_body
         .map(|(body, _)| body)
-        .or_else(|| fetch_request_body_bytes(body_ptr));
+        .or_else(|| fetch_request_body_bytes(body_ptr))
+        .or(pending_bytes);
     // Last: may run an async-iterable body's JS (the strings above are owned).
     let body_bytes = take_pending_fetch_body_stream_id()
         .map(crate::streams::drain_readable_into_bytes)
