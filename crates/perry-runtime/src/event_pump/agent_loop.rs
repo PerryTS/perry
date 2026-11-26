@@ -472,6 +472,10 @@ fn dispatch_staged() {
     if batch.is_empty() {
         return;
     }
+    // Node's poll phase runs the nextTick + microtask checkpoint after every
+    // I/O callback. Only the generated loop's poll asks for it (NXH13); taken,
+    // so a turn nested inside one of these callbacks runs none.
+    let checkpoint = super::take_poll_checkpoint();
     for completion in batch.drain(..) {
         if is_component_io(&completion) {
             STAGED.with(|staged| staged.borrow_mut().push(completion));
@@ -501,7 +505,11 @@ fn dispatch_staged() {
         } else {
             super::service_hooks::net_dispatch(completion);
         }
+        if checkpoint {
+            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+        }
     }
+    super::restore_poll_checkpoint(checkpoint);
     // Give the emptied allocation back so steady-state dispatch allocates
     // nothing (DESIGN §10 rule 1).
     STAGED.with(|staged| {
