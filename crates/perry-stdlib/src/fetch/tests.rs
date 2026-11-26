@@ -724,3 +724,47 @@ fn reflect_construct_with_new_target_links_its_prototype() {
     let bare = construct(headers.get_nanbox_f64());
     assert!(perry_runtime::JSValue::from_bits(bare.to_bits()).is_handle());
 }
+
+/// Reading a Request body hands its bytes to the reader: the record keeps only
+/// that a used body was present, so a refused `text()` of a huge body does not
+/// leave a second copy alive until the Request itself is collected.
+#[test]
+fn reading_a_request_body_moves_the_bytes_out_of_the_record() {
+    let request = unsafe {
+        js_request_new(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(TAG_UNDEFINED),
+        )
+    };
+    let id = handle_id(request);
+    let body = vec![97u8; 1 << 20];
+    let original = body.as_ptr();
+    REQUEST_REGISTRY.lock().unwrap().get_mut(&id).unwrap().body = Some(body);
+    let Ok(read) = consume_request_body(request) else {
+        panic!("first read must succeed");
+    };
+    assert_eq!(read.as_ptr(), original, "the reader owns the stored bytes");
+    {
+        let registry = REQUEST_REGISTRY.lock().unwrap();
+        let record = registry.get(&id).unwrap();
+        assert!(record.body_used);
+        assert_eq!(record.body.as_ref().map(Vec::capacity), Some(0));
+    }
+    assert!(matches!(
+        consume_request_body(request),
+        Err(RequestBodyError::Message(BODY_ALREADY_USED_MESSAGE))
+    ));
+    REQUEST_REGISTRY.lock().unwrap().remove(&id);
+}

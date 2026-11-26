@@ -1522,14 +1522,16 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, RequestBodyError> {
     let req = guard
         .get_mut(&id)
         .ok_or(RequestBodyError::Message("Invalid request handle"))?;
-    let body = match &req.body {
-        Some(body) => body.clone(),
-        None => return Ok(Vec::new()),
-    };
+    if req.body.is_none() {
+        return Ok(Vec::new());
+    }
     if req.body_used {
         return Err(RequestBodyError::Message(BODY_ALREADY_USED_MESSAGE));
     }
     req.body_used = true;
+    // Reading consumes the body: the reader owns the bytes and the record
+    // keeps only the fact that a (now used) body was present.
+    let body = req.body.as_mut().map(std::mem::take).unwrap_or_default();
     match req.body_error {
         Some(error) => Err(RequestBodyError::Thrown(error)),
         None => Ok(body),
