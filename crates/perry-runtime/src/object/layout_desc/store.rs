@@ -14,6 +14,9 @@ pub(super) unsafe fn family_slot_word(obj: *const ObjectHeader, slot: u32) -> u6
 
 /// Is a key after position `pos` of `obj`'s list present (its slot
 /// written)? Then a fill of `pos` in place would enumerate out of order.
+/// A private field (`key_attrs::entry_is_private`, e.g. the native payload
+/// slot) is no property key: it has no enumeration order, so a written one
+/// never puts a later property out of order.
 #[inline]
 pub(crate) unsafe fn later_late_key_present(
     obj: *const ObjectHeader,
@@ -32,6 +35,9 @@ pub(crate) unsafe fn later_late_key_present(
     let base = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     let (words, len) = super::super::key_attrs::storage_slot_words(keys);
     (first..count).any(|p| {
+        if super::super::key_attrs::entry_is_private(super::super::key_attrs::keys_entry(keys, p)) {
+            return false;
+        }
         let slot = if (p as usize) < len {
             super::super::key_attrs::slot_of_word(*words.add(p as usize), p)
         } else {
