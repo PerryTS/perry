@@ -64,6 +64,7 @@ Perry widgets map to HTML elements:
 | `TextField` | `<input type="text">` (`textfieldSetInputType` sets `tel`, `email`, `number`, `url` or `search`) |
 | `SecureField` | `<input type="password">` |
 | `Toggle` | `<input type="checkbox">` |
+| `RadioGroup` | `<fieldset role="radiogroup">` of `<input type="radio">` |
 | `Slider` | `<input type="range">` |
 | `Picker` | `<select>` |
 | `DatePicker` | `<input type="date">` |
@@ -79,6 +80,14 @@ Perry widgets map to HTML elements:
 | `Divider` | `<hr>` |
 | `Spacer` | `<div>` (flex: 1) |
 | `Label` | `<label for>` bound to its field |
+
+### Symbols
+
+Browsers have no system symbol set, so `ImageSymbol("star.fill")` draws `symbols/star.fill.svg`,
+resolved against the page URL, as a mask over the widget's colour: `imageSetTint` colours it like
+a native symbol image, and `widgetSetWidth` / `widgetSetHeight` size it (1em by default). The app
+ships one SVG per symbol name it uses, typically from an openly licensed icon set; Apple's SF
+Symbols may not be redistributed. A name without a file leaves the space empty.
 
 ## FFI Support
 

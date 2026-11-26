@@ -56,7 +56,9 @@ fn function_attribute_writes_are_owned_by_the_bag() {
 /// A function with the one own slot codegen gives a constructing function's
 /// `prototype`.
 fn function_with_prototype_slot() -> usize {
-    static INFO: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    per_test_global! {
+        static INFO: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    }
     let info = *INFO.get_or_init(|| {
         let mut info = unsafe { std::ptr::read(crate::fn_info!(body, 0)) };
         info.own_slots = 1;

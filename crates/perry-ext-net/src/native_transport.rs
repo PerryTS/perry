@@ -505,6 +505,9 @@ pub fn matches(owner: f64, snapshot: &tl::HandleSnapshot) -> bool {
 pub fn call(callback: f64, this: perry_ffi::JsThis, args: &[f64]) -> f64 {
     crate::payload_events::call(callback, this, args)
 }
+pub fn uncaught(error: f64) {
+    crate::payload_events::uncaught(error)
+}
 pub fn close_server(owner: f64) {
     crate::payload_server::close(owner, p::undefined());
 }

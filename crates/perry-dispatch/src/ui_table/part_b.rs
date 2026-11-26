@@ -414,6 +414,30 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    MethodRow {
+        method: "RadioGroup",
+        runtime: "perry_ui_radio_group_create",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "radioGroupAddItem",
+        runtime: "perry_ui_radio_group_add_item",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "radioGroupGetSelected",
+        runtime: "perry_ui_radio_group_get_selected",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "radioGroupSetSelected",
+        runtime: "perry_ui_radio_group_set_selected",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     // ---- NavigationStack ----
     MethodRow {
         method: "NavStack",
@@ -757,6 +781,14 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
     MethodRow {
         method: "onAppKeyUp",
         runtime: "perry_ui_app_set_on_key_up",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    // System Back (Android button/gesture); the handler returns true when it
+    // handled Back. No-op on other platforms.
+    MethodRow {
+        method: "onBackPressed",
+        runtime: "perry_ui_app_set_on_back",
         args: &[ArgKind::Closure],
         ret: ReturnKind::Void,
     },

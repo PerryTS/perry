@@ -33,10 +33,11 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64ReinterpretF64);
             }
             Expr::MathRound(x) => {
-                self.emit_expr(func, x);
-                func.instruction(&Instruction::F64ReinterpretI64);
-                func.instruction(&Instruction::F64Nearest);
-                func.instruction(&Instruction::I64ReinterpretF64);
+                // Not `f64.nearest`: that rounds a tie to even (2.5 → 2), and
+                // Math.round rounds it toward +∞ (2.5 → 3, -2.5 → -2).
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, x);
+                self.emit_memcall(func, "math_round", 1);
             }
             Expr::MathTrunc(x) => {
                 self.emit_frame_begin(func, 1);

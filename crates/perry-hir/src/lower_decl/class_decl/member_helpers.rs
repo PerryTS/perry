@@ -190,6 +190,7 @@ pub(super) fn lower_generic_computed_class_member(
         is_static: method.is_static,
         kind,
         source_order,
+        names_declaration: false,
     })
 }
 

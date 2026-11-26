@@ -1,0 +1,1 @@
+A static method declared after a computed member (`[K](){}`) no longer gets a second function info from its source-order registration: the registration reuses the declaration's body and its single `__clo$info`, so `PERRY_VERIFY_FACTS=1` no longer exits 86 on `G.viaLocal()`.

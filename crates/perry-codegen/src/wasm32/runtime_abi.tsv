@@ -1105,7 +1105,6 @@ js_crypto_encapsulate	ptr	f64
 js_crypto_encapsulate_async	f64	f64,f64
 js_crypto_generate_key_async	f64	i64,f64,f64
 js_crypto_generate_key_pair_async	f64	i64,f64,f64
-js_crypto_generate_key_pair_sync	f64	i64,i64
 js_crypto_generate_key_pair_sync_ec_p256	ptr	f64
 js_crypto_generate_key_pair_sync_ed25519	ptr	f64
 js_crypto_generate_key_pair_sync_named	ptr	i64,f64
@@ -3025,6 +3024,7 @@ js_perry_event_emit_in_resource	f64	f64,f64,f64,f64
 js_perry_event_emit_span_in_resource	f64	f64,f64,ptr,usize,ptr,usize
 js_perry_event_emit_span_rooted	f64	usize,usize,usize,ptr,usize,ptr,usize
 js_perry_event_get	f64	f64,f64
+js_perry_event_uncaught	f64	f64
 js_perry_native_f32	f64	f64
 js_perry_native_f64	f64	f64
 js_perry_native_i16	f64	f64

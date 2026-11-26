@@ -33,6 +33,9 @@ pub(super) struct WasmModuleEmitter {
     /// stored in WASM globals so cross-function references work, and so module-init
     /// LocalIds don't collide with other modules' identical LocalIds.
     pub(super) module_let_globals: BTreeMap<(usize, LocalId), u32>,
+    /// The source name of each binding a `PreallocateTdzBoxes` names, as (mod_idx, LocalId),
+    /// for the ReferenceError a read in its dead zone throws.
+    pub(super) tdz_names: BTreeMap<(usize, LocalId), String>,
     /// Locals a closure captures and someone mutates, as (mod_idx, LocalId). Each
     /// holds a runtime cell, so the closures and the enclosing function share one
     /// value; a plain local would give every closure its own snapshot.
@@ -132,6 +135,8 @@ pub(super) struct WasmModuleEmitter {
     /// serializer helper `vec3(v): string` must not capture the math
     /// library's `vec3(x,y,z)` for every caller in the program).
     pub(super) imported_func_indices: BTreeMap<(usize, String), u32>,
+    /// `import * as <local>` per consumer: `(consumer_module_idx, local)`.
+    pub(super) namespace_imports: BTreeMap<(usize, String), NamespaceImport>,
 }
 
 impl WasmModuleEmitter {
@@ -159,6 +164,7 @@ impl WasmModuleEmitter {
             global_map: BTreeMap::new(),
             num_globals: 0,
             module_let_globals: BTreeMap::new(),
+            tdz_names: BTreeMap::new(),
             boxed_locals: Default::default(),
             current_mod_idx: 0,
             class_ctor_map: BTreeMap::new(),
@@ -189,6 +195,7 @@ impl WasmModuleEmitter {
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
             imported_func_indices: BTreeMap::new(),
+            namespace_imports: BTreeMap::new(),
         }
     }
 

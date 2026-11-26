@@ -6,7 +6,7 @@
 //!
 //! Decision parity by construction: this module does not re-derive optimization
 //! or CPU tuning. It interprets the *same* argv `build_clang_compile_plan`
-//! produces for clang (`-O3`/explicit `-Os`, `-mcpu=native`, `-mllvm
+//! produces for clang (`-O3`/explicit `-Os`, `-march=x86-64-v3` / `-mcpu=native`, `-mllvm
 //! -inlinehint-threshold=N`, `-target <triple>`), so the two backends cannot
 //! drift on a decision without drifting on the plan — which the plan's own
 //! tests pin.

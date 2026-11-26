@@ -1032,9 +1032,6 @@ fn own_keys(
     // key is then a plain family key, and a definition with attributes
     // leaves the layout at run time, as before).
     let mut defined_attrs: HashMap<&str, Option<u8>> = HashMap::new();
-    // The keys a definition statement adds (HIR reserves only the keys
-    // `[[Set]]` stores create, `settle_reservations`).
-    let mut define_keys: BTreeSet<&str> = BTreeSet::new();
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -1066,7 +1063,6 @@ fn own_keys(
                         }
                     })
                     .or_insert((attrs != 0).then_some(attrs));
-                define_keys.insert(k);
                 if !stored.iter().any(|(x, _)| *x == k) {
                     stored.push((k, open));
                 }
@@ -1111,22 +1107,20 @@ fn own_keys(
     };
     // The reservations in the class's order: the order of the constructor's
     // first stores, a store in a branch, `switch` case, loop body or `try`
-    // at its place in the text (`constructor_store_keys`), the order the
-    // facts' birth lists them in. A stored key that is no reservation (one
-    // HIR leaves to the chain: an inherited field, a method or accessor
-    // name, a computed string key) follows them, as an execution that adds
-    // it after every reservation orders it (one that adds it earlier gets
-    // the object's overflow). A reservation the walk sees in no statement
+    // at its place in the text (`constructor_store_keys`). Every other key
+    // the walk stores (a definition, a class capture's stash, a key HIR
+    // leaves to the chain: an inherited field, a method or accessor name, a
+    // computed string key) goes where the constructor stores it: before the
+    // first reservation stored after it, so an execution adds the keys in
+    // layout order (the facts' birth, `compute_birth_keys`, merges the
+    // constructor's first-store order the same way). One stored after every
+    // reservation follows them. A reservation the walk sees in no statement
     // position (stored inside another store's value) is no initialization.
     let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
     for k in &reserved {
-        // A key a definition adds goes where the definition runs: before the
-        // first reservation stored after it, so the execution adds the keys
-        // in layout order.
         if let Some(at) = stored.iter().position(|(x, _)| *x == k.as_str()) {
             for (d, open) in &stored[..at] {
-                if define_keys.contains(d)
-                    && !reserved.iter().any(|r| r == d)
+                if !reserved.iter().any(|r| r == d)
                     && !keys.iter().any(|(x, _)| x == *d)
                 {
                     keys.push((key_of(d), *open));

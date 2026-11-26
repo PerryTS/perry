@@ -54,12 +54,21 @@ class PerryActivity : Activity() {
             window.setDecorFitsSystemWindows(true)
         }
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-        window.statusBarColor = android.graphics.Color.WHITE
-        window.navigationBarColor = android.graphics.Color.WHITE
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        // System bars follow the light/dark appearance (as iOS's status bar
+        // does): white with dark icons, or black with light icons.
+        val night = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val barColor = if (night) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+        window.statusBarColor = barColor
+        window.navigationBarColor = barColor
+        if (!night && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            var flags = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                flags = flags or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            }
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility =
-                android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            window.decorView.systemUiVisibility = flags
         }
 
         rootLayout = FrameLayout(this)
@@ -275,6 +284,18 @@ class PerryActivity : Activity() {
         super.onDestroy()
         PerryBridge.forwardMapsLifecycle("destroy")
         PerryBridge.nativeShutdown()
+    }
+
+    // System Back (button or gesture): the app's `onBackPressed` handler runs
+    // first; it returns true when it popped its own navigation.
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val handled = try {
+            PerryBridge.nativeBackPressed()
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        }
+        if (!handled) super.onBackPressed()
     }
 
     // Issue #1864: continuous keyboard events. Forward every hardware key

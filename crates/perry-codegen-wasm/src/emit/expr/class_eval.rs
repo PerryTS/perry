@@ -15,7 +15,7 @@ impl<'a> FuncEmitCtx<'a> {
             // Every evaluation of a class in a function body is fresh, the first one
             // included, so no evaluation is the shared class.
             Expr::ClassIsFirstEvaluation { value, .. } => {
-                self.emit_expr(func, value);
+                self.with_tdz_suppressed(|ctx| ctx.emit_expr(func, value));
                 func.instruction(&Instruction::Drop);
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
             }
@@ -33,11 +33,12 @@ impl<'a> FuncEmitCtx<'a> {
                 // ClassDefinitionEvaluation order: the binding, the computed names in
                 // source order, then static fields and blocks in source order.
                 let ctor_slot = self.class_ctor_slot(template);
+                let (base, init) = self.builtin_base_init(template);
                 self.emit_class_bridge(
                     func,
                     "class_eval_begin",
                     template,
-                    &[&Expr::Number(ctor_slot)],
+                    &[&Expr::Number(ctor_slot), &base, &Expr::Number(init)],
                 );
                 match evaluation_owner {
                     Some(owner) => {
@@ -64,7 +65,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 if !captured_args.is_empty() {
                     let caps = Expr::Array(captured_args.clone(), None);
-                    self.emit_class_bridge(func, "class_eval_caps", template, &[&caps]);
+                    self.with_tdz_suppressed(|ctx| {
+                        ctx.emit_class_bridge(func, "class_eval_caps", template, &[&caps])
+                    });
                     func.instruction(&Instruction::Drop);
                 }
                 for step in static_init_order {

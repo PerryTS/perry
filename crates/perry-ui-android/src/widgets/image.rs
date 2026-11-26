@@ -149,6 +149,56 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
     })
 }
 
+/// Create an image loaded from a URL (http(s) or file path). PerryBridge
+/// fetches + decodes it in the background and caches it by URL.
+pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
+    let url = if url_ptr.is_null() {
+        String::new()
+    } else {
+        unsafe { str_from_header(url_ptr) }.to_string()
+    };
+    let alt = if alt_ptr.is_null() {
+        String::new()
+    } else {
+        unsafe { str_from_header(alt_ptr) }.to_string()
+    };
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let jurl = env.new_string(&url).expect("url string");
+        let jalt = env.new_string(&alt).expect("alt string");
+        let view = env
+            .call_static_method(
+                bridge_cls,
+                jni::jni_str!("createUrlImage"),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/view/View;"),
+                &[JValue::Object(&jurl), JValue::Object(&jalt)],
+            )
+            .and_then(|v| v.l());
+        let handle = match view {
+            Ok(view) => {
+                let global =
+                    jni_bridge::new_global_ref(env, view).expect("Failed to create global ref");
+                super::register_widget(global)
+            }
+            Err(_) => {
+                let _ = env.exception_clear();
+                0
+            }
+        };
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+        if handle == 0 {
+            create_symbol(std::ptr::null())
+        } else {
+            handle
+        }
+    })
+}
+
 /// Create an image from a named system icon (SF Symbol name → Material Icon).
 /// Uses the same SF Symbol → Material Icons mapping as button.rs.
 pub fn create_symbol(name_ptr: *const u8) -> i64 {
@@ -156,10 +206,35 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
     jni_bridge::with_env(|env| {
         let _ = jni_bridge::push_local_frame(env, 32);
 
+        // Material Icons Round glyph when the name maps to one.
+        if let Some(lig) = super::material_symbols::glyph(&name) {
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let jlig = env.new_string(&lig).expect("glyph string");
+            let view = env
+                .call_static_method(
+                    bridge_cls,
+                    jni::jni_str!("createSymbolView"),
+                    jni::jni_sig!("(Ljava/lang/String;)Landroid/view/View;"),
+                    &[JValue::Object(&jlig)],
+                )
+                .and_then(|v| v.l());
+            if let Ok(view) = view {
+                let global =
+                    jni_bridge::new_global_ref(env, view).expect("Failed to create global ref");
+                let handle = super::register_widget(global);
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+                }
+                return handle;
+            }
+            let _ = env.exception_clear();
+        }
+
         let activity = super::get_activity(env);
 
-        // Use a TextView styled as an icon (Material Icons font) since Android
-        // doesn't have SF Symbols and resource-based icons require compile-time R.id
+        // Fallback: a TextView with an emoji / the name's first letters.
         let text_view = env
             .new_object(
                 jni::jni_str!("android/widget/TextView"),
@@ -232,6 +307,16 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
                 jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
                 &[JValue::Object(&params)],
             );
+            // Symbol views (TextViews): scale the glyph to the box.
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setSymbolSize"),
+                jni::jni_sig!("(Landroid/view/View;I)V"),
+                &[JValue::Object(view_ref.as_obj()), JValue::Int(w.min(h))],
+            );
 
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
@@ -251,6 +336,26 @@ pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let gi = (g * 255.0) as u32;
             let bi = (b * 255.0) as u32;
             let color = ((ai << 24) | (ri << 16) | (gi << 8) | bi) as i32;
+
+            // Symbol views are TextViews: tint = text colour.
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let is_symbol = env
+                .call_static_method(
+                    bridge_cls,
+                    jni::jni_str!("setSymbolColor"),
+                    jni::jni_sig!("(Landroid/view/View;I)Z"),
+                    &[JValue::Object(view_ref.as_obj()), JValue::Int(color)],
+                )
+                .and_then(|v| v.z())
+                .unwrap_or(false);
+            if is_symbol {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+                }
+                return;
+            }
 
             // setColorFilter(int color, PorterDuff.Mode mode)
             let mode_class = env

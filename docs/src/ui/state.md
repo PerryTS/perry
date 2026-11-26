@@ -48,6 +48,7 @@ Input control signatures:
 - `Slider(min, max, onChange)` — numeric slider, `onChange: (value: number) => void`
 - `Picker(onChange)` — dropdown, `onChange: (index: number) => void`; items via `pickerAddItem`
 - `WheelPicker(onChange)` — spinning selector on touch platforms and a scrollable selector elsewhere; items via `wheelPickerAddItem`
+- `RadioGroup(onChange)` — radio buttons on the web, a picker on native targets, `onChange: (index: number) => void` (not called on tvOS); items via `radioGroupAddItem`
 
 For programmatic-to-UI sync (state-drives-widget) use the dedicated binders:
 `stateBindTextfield`, `stateBindSlider`, `stateBindToggle`, `stateBindTextNumeric`,

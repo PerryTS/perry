@@ -17,7 +17,8 @@ impl WasmModuleEmitter {
             .collect();
 
         // First pass: collect all string literals
-        for (_, module) in modules {
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            self.current_mod_idx = mod_idx;
             self.collect_strings(module);
         }
 
@@ -741,6 +742,11 @@ impl WasmModuleEmitter {
                 };
                 let type_idx = self.get_type_idx(params, results);
                 let _ = type_idx;
+                // A call leaves a value either way: the call sites push `undefined`
+                // after a function in `void_funcs`, whichever path reaches it.
+                if !has_return {
+                    self.void_funcs.insert(ffi_import_idx);
+                }
                 self.func_name_map.insert(name.clone(), ffi_import_idx);
                 self.ffi_imports
                     .push((name.clone(), param_count, has_return));
@@ -1216,6 +1222,23 @@ impl WasmModuleEmitter {
                                         .or_insert(fidx);
                                 }
                             }
+                            let mut classes = BTreeMap::new();
+                            for name in &public {
+                                self.intern_string(name);
+                                if let Some(class) =
+                                    resolve_export_to_class(modules, &name_to_idx, src_idx, name, 8)
+                                {
+                                    classes.insert(name.clone(), class);
+                                }
+                            }
+                            self.namespace_imports.insert(
+                                (consumer_idx, local.clone()),
+                                NamespaceImport {
+                                    source: src_idx,
+                                    members: public.into_iter().collect(),
+                                    classes,
+                                },
+                            );
                         }
                     }
                 }
@@ -1706,8 +1729,7 @@ impl WasmModuleEmitter {
                         let gidx = self.global_map[&global.id];
                         func.instruction(&Instruction::GlobalSet(gidx));
                     } else if global.name == "__platform__" {
-                        // Web platform ID = 5
-                        func.instruction(&f64_const(5.0));
+                        func.instruction(&f64_const(WEB_PLATFORM_ID));
                         func.instruction(&Instruction::I64ReinterpretF64);
                         let gidx = self.global_map[&global.id];
                         func.instruction(&Instruction::GlobalSet(gidx));

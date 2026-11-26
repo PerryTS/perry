@@ -94,6 +94,14 @@ pub(crate) struct BodyLocals {
     numeric: crate::pts::FxHashSet<u32>,
     /// Declared by `let`, and every later write is a decrement.
     falling: crate::pts::FxHashSet<u32>,
+    /// Rule CU (`code_unit_read`): declared by `let` with a non-negative
+    /// integer literal, and every write is `x++`, `++x`, a non-negative
+    /// integer literal or `x = x + c` with such a `c`: a non-negative
+    /// integer Number at every read.
+    rising: crate::pts::FxHashSet<u32>,
+    /// Rule CU: `let b = a.length` with `b` and `a` stable: `b` is the
+    /// length of the value `a` holds at every read.
+    length_of: crate::pts::FxHashMap<u32, u32>,
 }
 
 /// `j <= i - c0` while narrowing `narrow` of `i` is not written.
@@ -147,6 +155,16 @@ fn arithmetic(e: &Expr) -> bool {
     }
 }
 
+/// A write that keeps `id` a non-negative integer (rule CU): a
+/// non-negative integer literal, or `id + c` / `c + id` with such a `c`.
+fn rising_write(id: u32, v: &Expr) -> bool {
+    let own = |e: &Expr| matches!(e, Expr::LocalGet(l) if *l == id);
+    nonneg_lit(v).is_some()
+        || matches!(v, Expr::Binary { op: BinaryOp::Add, left, right, .. }
+            if (own(left) && nonneg_lit(right).is_some())
+                || (own(right) && nonneg_lit(left).is_some()))
+}
+
 /// `j = j - c` with `c >= 0`.
 fn decrement(id: u32, v: &Expr) -> bool {
     matches!(v, Expr::Binary { op: BinaryOp::Sub, left, right, .. }
@@ -160,6 +178,8 @@ struct Scan {
     written: crate::pts::FxHashSet<u32>,
     not_numeric: crate::pts::FxHashSet<u32>,
     not_falling: crate::pts::FxHashSet<u32>,
+    not_rising: crate::pts::FxHashSet<u32>,
+    length_init: crate::pts::FxHashMap<u32, u32>,
 }
 
 impl Scan {
@@ -173,11 +193,16 @@ impl Scan {
                 if !decrement(*id, v) {
                     self.not_falling.insert(*id);
                 }
+                if !rising_write(*id, v) {
+                    self.not_rising.insert(*id);
+                }
             }
             Expr::Update { id, op, .. } => {
                 self.written.insert(*id);
                 if !matches!(op, UpdateOp::Decrement) {
                     self.not_falling.insert(*id);
+                } else {
+                    self.not_rising.insert(*id);
                 }
             }
             _ => {}
@@ -198,6 +223,17 @@ impl Scan {
                 self.lets.insert(*id);
                 if !init.as_ref().is_some_and(arithmetic) {
                     self.not_numeric.insert(*id);
+                }
+                if !init.as_ref().is_some_and(|e| nonneg_lit(e).is_some()) {
+                    self.not_rising.insert(*id);
+                }
+                if let Some(Expr::PropertyGet {
+                    object, property, ..
+                }) = init
+                {
+                    if let (Expr::LocalGet(a), "length") = (object.as_ref(), property.as_str()) {
+                        self.length_init.insert(*id, *a);
+                    }
                 }
                 if let Some(e) = init {
                     self.expr(e);
@@ -255,6 +291,7 @@ impl Scan {
                         self.written.insert(*id);
                         self.not_numeric.insert(*id);
                         self.not_falling.insert(*id);
+                        self.not_rising.insert(*id);
                     }
                     self.stmts(&c.body);
                 }
@@ -300,14 +337,21 @@ fn scan(f: FnIdx, params: &[perry_hir::Param], body: &[Stmt]) -> BodyLocals {
         written,
         not_numeric,
         not_falling,
+        not_rising,
+        length_init,
     } = s;
+    let stable: crate::pts::FxHashSet<u32> = declared
+        .iter()
+        .filter(|id| !written.contains(id))
+        .copied()
+        .collect();
+    let length_of = length_init
+        .into_iter()
+        .filter(|(b, a)| stable.contains(b) && stable.contains(a))
+        .collect();
     BodyLocals {
         f,
-        stable: declared
-            .iter()
-            .filter(|id| !written.contains(id))
-            .copied()
-            .collect(),
+        stable,
         numeric: lets
             .iter()
             .filter(|id| !not_numeric.contains(id))
@@ -318,6 +362,12 @@ fn scan(f: FnIdx, params: &[perry_hir::Param], body: &[Stmt]) -> BodyLocals {
             .filter(|id| !not_falling.contains(id))
             .copied()
             .collect(),
+        rising: lets
+            .iter()
+            .filter(|id| !not_rising.contains(id))
+            .copied()
+            .collect(),
+        length_of,
     }
 }
 
@@ -503,6 +553,56 @@ impl<'a> Gen<'a> {
             self.in_bounds.reads.insert((recv, idx));
         }
         kept
+    }
+
+    /// Rule CU: whether `object.charCodeAt(key)`, about to be walked, reads
+    /// a code unit of a String receiver: `object` is a stable local `a` of
+    /// the walked body, `key` is at most a rising counter `i` (its value
+    /// now: `i`, `i++` before its write, or a local derived below `i`),
+    /// and a live narrowing of `i`, not written since its test, implies
+    /// `i < a.length` or `i < b` for `b` the stable `let b = a.length`. A
+    /// String's length never changes, so `b` is the length of the String
+    /// `a` holds at the call; `i` is a non-negative integer below it, an
+    /// index of a code unit (ECMA-262 22.1.3.3: no NaN). The alias `b` is
+    /// admitted for Strings only: an Array's length may move after `b`.
+    pub(crate) fn code_unit_read(&self, fx: &Fx, object: &Expr, key: &Expr) -> bool {
+        let Some(body) = &self.in_bounds.body else {
+            return false;
+        };
+        if body.f != fx.f || self.m.cur_fn != fx.f {
+            return false;
+        }
+        let Expr::LocalGet(a) = object else {
+            return false;
+        };
+        let mi = fx.module;
+        let i = match key {
+            Expr::Update {
+                id,
+                op: UpdateOp::Increment,
+                prefix: false,
+                ..
+            } => Some(*id),
+            _ => self.in_bounds_key(mi, key),
+        };
+        let Some(i) = i else {
+            return false;
+        };
+        if !body.stable.contains(a)
+            || !body.rising.contains(&i)
+            || !self.in_bounds_own(mi, *a)
+            || !self.in_bounds_own(mi, i)
+        {
+            return false;
+        }
+        let f = self.m.cur_fn;
+        self.narrow.iter().rev().any(|n| {
+            n.key() == (mi, i, f)
+                && n.unwritten()
+                && (n.below_length_of() == Some(*a)
+                    || n.below_local_of()
+                        .is_some_and(|b| body.length_of.get(&b) == Some(a)))
+        })
     }
 
     /// Whether the store `a[key] = v` being walked is in bounds by the

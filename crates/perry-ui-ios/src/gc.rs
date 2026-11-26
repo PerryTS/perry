@@ -20,6 +20,7 @@ fn scan_roots(visitor: &mut GcRootVisitor<'_>) {
     crate::deeplinks::scan_ios_deeplinks_gc_roots(visitor);
     crate::drag_drop::scan_ios_drag_drop_gc_roots(visitor);
     crate::geolocation::scan_ios_geolocation_gc_roots(visitor);
+    crate::image_picker::scan_ios_image_picker_gc_roots(visitor);
     crate::location::scan_ios_location_gc_roots(visitor);
     crate::media_playback::scan_ios_media_playback_gc_roots(visitor);
     crate::menu::scan_ios_menu_gc_roots(visitor);

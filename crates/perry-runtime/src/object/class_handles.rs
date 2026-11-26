@@ -105,6 +105,11 @@ pub type TlsHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
 /// discriminant; 0 = not a server request/response handle.
 pub type HttpServerHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
 
+/// The probe's answer for a live `http.Server` / `https.Server` handle. Not
+/// [`HttpServerHandleKind`]s: their property reads stay with the handle dispatch.
+pub const HTTP_SERVER_KIND: u8 = 16;
+pub const HTTPS_SERVER_KIND: u8 = 17;
+
 /// What a perry-ext-http server handle is, by the constructor whose
 /// `.prototype` node gives it. The values are the probe's ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,9 +1,14 @@
 //! `ReadableStream.pipeTo` implementation details.
 
+use super::state::{
+    remove_reader, remove_writer, rs_rec, transform_of_writable, ws_rec, ReaderRef, RsRef,
+    WriterRef, WsRef,
+};
+use super::writable::acquire_writer;
 use super::{
-    box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, stream_id,
-    stream_value, transform_close, writable_stream_write, ReadableState, WritableState,
-    READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS, WRITABLE_STREAMS,
+    acquire_reader, box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error,
+    stream_id, stream_value, transform_close, writable_stream_write, AcquireError, ReadableState,
+    WritableState, TAG_UNDEFINED,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -26,88 +31,60 @@ struct PipeState {
     abort_listener: f64,
 }
 
+/// pipeTo's AcquireReadableStreamDefaultReader + AcquireWritableStreamDefault-
+/// Writer: the same reader and writer records getReader() / getWriter() mint
+/// lock the pair for the pipe's life (`release_pipe_locks` releases them,
+/// drops the records and retires the ids). A writable that cannot be locked
+/// releases the reader again.
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
-    let reader_id = idalloc::next_pipe_lock_id();
-    let writer_id = idalloc::next_pipe_lock_id();
-    // #6602: on failure the two freshly minted ids were never stamped (or were
-    // just unstamped) — recycle them. Runs after every registry guard in
-    // `try_acquire_pipe_locks` is released; a quarantine overflow inside the
-    // retire takes registry locks for eviction cleanup.
-    if let Err(message) = try_acquire_pipe_locks(readable_id, writable_id, reader_id, writer_id) {
-        retire_pipe_lock_ids(reader_id, writer_id);
-        return Err(message);
-    }
-    Ok(PipeLockIds {
-        reader_id,
-        writer_id,
-    })
-}
-
-fn try_acquire_pipe_locks(
-    readable_id: usize,
-    writable_id: usize,
-    reader_id: usize,
-    writer_id: usize,
-) -> Result<(), &'static str> {
-    {
-        let mut readable = READABLE_STREAMS.lock().unwrap();
-        match readable.get_mut(&readable_id) {
-            Some(s) if s.reader_handle.is_none() => {
-                s.reader_handle = Some(reader_id);
-            }
-            Some(_) => return Err("ReadableStream is locked"),
-            None => return Err("Invalid ReadableStream"),
+    let reader = unsafe { acquire_reader(RsRef(readable_id), false) }.map_err(|e| match e {
+        AcquireError::Locked => "ReadableStream is locked",
+        AcquireError::Missing => "Invalid ReadableStream",
+    })?;
+    match acquire_writer(WsRef(writable_id)) {
+        Ok(writer) => Ok(PipeLockIds {
+            reader_id: reader.0,
+            writer_id: writer.0,
+        }),
+        Err(e) => {
+            release_pipe_reader(readable_id, reader.0);
+            Err(match e {
+                AcquireError::Locked => "WritableStream is locked",
+                AcquireError::Missing => "Invalid WritableStream",
+            })
         }
     }
-    {
-        let mut writable = WRITABLE_STREAMS.lock().unwrap();
-        match writable.get_mut(&writable_id) {
-            Some(s) if s.writer_handle.is_none() => {
-                s.writer_handle = Some(writer_id);
-            }
-            Some(_) => {
-                if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
-                    if s.reader_handle == Some(reader_id) {
-                        s.reader_handle = None;
-                    }
-                }
-                return Err("WritableStream is locked");
-            }
-            None => {
-                if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
-                    if s.reader_handle == Some(reader_id) {
-                        s.reader_handle = None;
-                    }
-                }
-                return Err("Invalid WritableStream");
-            }
-        }
-    }
-    Ok(())
 }
 
-/// #6602: pipe lock ids are stamped as lock markers but never own a registry
-/// entry, so nothing else retires them — without this every pipeTo burned two
-/// band ids for the life of the process. Retirement keys on the allocator's
-/// ownership mark, so a duplicate release (close-fulfilled then a late
-/// rejection) is a no-op.
-fn retire_pipe_lock_ids(reader_id: usize, writer_id: usize) {
-    idalloc::retire_pipe_lock_id(reader_id);
-    idalloc::retire_pipe_lock_id(writer_id);
-}
-
-fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {
-    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
-        if s.reader_handle == Some(locks.reader_id) {
+/// ReadableStreamDefaultReaderRelease for a pipe reader: unlock the readable,
+/// drop the record (no wrapper of it exists, so the quarantine has nothing to
+/// keep) and retire the bare id. A second release finds no record.
+fn release_pipe_reader(readable_id: usize, reader_id: usize) {
+    if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
+        if s.reader_handle == Some(reader_id) {
             s.reader_handle = None;
         }
     }
-    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+    if remove_reader(ReaderRef(reader_id)).is_some() {
+        idalloc::retire_unused_id(reader_id);
+    }
+}
+
+/// Release the pipe's reader and writer (ReadableStreamDefaultReaderRelease /
+/// WritableStreamDefaultWriterRelease). Their records are removed at once and
+/// only the ids are retired: no wrapper of a pipe lock exists, so the
+/// quarantine has nothing to keep for them. A duplicate release
+/// (close-fulfilled then a late rejection) finds no record and does nothing.
+fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {
+    release_pipe_reader(readable_id, locks.reader_id);
+    if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
         if s.writer_handle == Some(locks.writer_id) {
             s.writer_handle = None;
         }
     }
-    retire_pipe_lock_ids(locks.reader_id, locks.writer_id);
+    if remove_writer(WriterRef(locks.writer_id)).is_some() {
+        idalloc::retire_unused_id(locks.writer_id);
+    }
 }
 
 #[inline]
@@ -297,8 +274,7 @@ enum PipeReadStep {
 }
 
 unsafe fn pipe_next_read(readable_id: usize) -> PipeReadStep {
-    let mut g = READABLE_STREAMS.lock().unwrap();
-    match g.get_mut(&readable_id) {
+    match rs_rec(RsRef(readable_id)).as_deref_mut() {
         Some(s) => {
             if let Some(c) = s.pop_chunk() {
                 PipeReadStep::Chunk(c)
@@ -362,7 +338,7 @@ unsafe fn finish_pipe(
         return;
     }
 
-    let close_promise = if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
+    let close_promise = if transform_of_writable(WsRef(writable_id)).is_some() {
         transform_close(writable_id)
     } else {
         js_writable_stream_close(stream_value(writable_id))
@@ -517,19 +493,15 @@ unsafe fn wait_for_shutdown_actions(
 }
 
 fn readable_can_cancel(readable_id: usize) -> bool {
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&readable_id)
+    rs_rec(RsRef(readable_id))
+        .as_deref()
         .map(|stream| stream.state == ReadableState::Readable)
         .unwrap_or(false)
 }
 
 fn writable_can_abort(writable_id: usize) -> bool {
-    WRITABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&writable_id)
+    ws_rec(WsRef(writable_id))
+        .as_deref()
         .map(|stream| {
             matches!(
                 stream.state,
@@ -540,10 +512,8 @@ fn writable_can_abort(writable_id: usize) -> bool {
 }
 
 unsafe fn writable_pipe_error(writable_id: usize) -> Option<u64> {
-    let state = WRITABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&writable_id)
+    let state = ws_rec(WsRef(writable_id))
+        .as_deref()
         .map(|stream| (stream.state, stream.error_value));
     match state {
         Some((WritableState::Errored, reason)) => Some(reason),
@@ -598,8 +568,8 @@ unsafe fn pipe_write_then_continue(
         // popping synchronously would bunch writes and break the 1/tick
         // write cadence.
         let park_now = {
-            let g = READABLE_STREAMS.lock().unwrap();
-            g.get(&readable_id)
+            rs_rec(RsRef(readable_id))
+                .as_deref()
                 .map(|s| s.chunks.is_empty() && s.state == ReadableState::Readable)
                 .unwrap_or(false)
         };
@@ -634,7 +604,7 @@ unsafe fn wait_for_next_read(
     state: PipeState,
 ) {
     let read_promise = js_promise_new();
-    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&readable_id) {
+    if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
         if s.state == ReadableState::Readable {
             s.pending_reads.push_back(read_promise);
         } else if s.state == ReadableState::Closed {
@@ -906,6 +876,43 @@ mod tests {
     }
 
     #[test]
+    fn pipe_locks_are_real_reader_and_writer_records_released_once() {
+        use crate::streams::state::{reader_exists, with_reader, with_writer, writer_exists};
+        let _serial = crate::streams::tests::serial_guard();
+        idalloc::test_reset_pools();
+        let readable = alloc_readable(0, 0, 0, 1.0);
+        let writable = alloc_writable(0, 0, 0, 1.0);
+        let locks = acquire_pipe_locks(readable, writable).unwrap();
+        assert_eq!(
+            with_reader(ReaderRef(locks.reader_id), |r| (r.stream_handle, r.locked)),
+            Some((readable, true))
+        );
+        assert_eq!(
+            with_writer(WriterRef(locks.writer_id), |w| (w.stream_handle, w.locked)),
+            Some((writable, true))
+        );
+        assert_eq!(
+            acquire_pipe_locks(readable, writable).err(),
+            Some("ReadableStream is locked")
+        );
+        release_pipe_locks(readable, writable, locks);
+        // A stale duplicate release (close-fulfilled then a late rejection)
+        // finds both released and retires nothing twice.
+        release_pipe_locks(readable, writable, locks);
+        assert_eq!(idalloc::test_pool_occurrences(locks.reader_id), 1);
+        assert_eq!(idalloc::test_pool_occurrences(locks.writer_id), 1);
+        // No wrapper of a pipe lock exists: release drops the records, only
+        // the bare ids sit in the quarantine.
+        assert!(!reader_exists(ReaderRef(locks.reader_id)));
+        assert!(!writer_exists(WriterRef(locks.writer_id)));
+        assert!(rs_rec(RsRef(readable)).unwrap().reader_handle.is_none());
+        assert!(ws_rec(WsRef(writable)).unwrap().writer_handle.is_none());
+        // The live streams themselves stay out of the pools.
+        assert_eq!(idalloc::test_pool_occurrences(readable), 0);
+        assert_eq!(idalloc::test_pool_occurrences(writable), 0);
+    }
+
+    #[test]
     fn source_error_respects_prevent_abort() {
         let _serial = crate::streams::tests::serial_guard();
         for prevent_abort in [false, true] {
@@ -931,46 +938,27 @@ mod tests {
             } else {
                 assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
                 assert_eq!(
-                    READABLE_STREAMS
-                        .lock()
-                        .unwrap()
-                        .get(&readable)
-                        .unwrap()
-                        .reader_handle,
+                    rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle,
                     Some(locks.reader_id)
                 );
                 assert_eq!(
-                    WRITABLE_STREAMS
-                        .lock()
-                        .unwrap()
-                        .get(&writable)
-                        .unwrap()
-                        .writer_handle,
+                    ws_rec(WsRef(writable)).as_deref().unwrap().writer_handle,
                     Some(locks.writer_id)
                 );
                 perry_runtime::promise::js_promise_run_microtasks();
                 assert_eq!(perry_runtime::promise::js_promise_state(promise), 2);
-                assert!(READABLE_STREAMS
-                    .lock()
-                    .unwrap()
-                    .get(&readable)
+                assert!(rs_rec(RsRef(readable))
+                    .as_deref()
                     .unwrap()
                     .reader_handle
                     .is_none());
-                assert!(WRITABLE_STREAMS
-                    .lock()
-                    .unwrap()
-                    .get(&writable)
+                assert!(ws_rec(WsRef(writable))
+                    .as_deref()
                     .unwrap()
                     .writer_handle
                     .is_none());
             }
-            let writable_state = WRITABLE_STREAMS
-                .lock()
-                .unwrap()
-                .get(&writable)
-                .unwrap()
-                .state;
+            let writable_state = ws_rec(WsRef(writable)).as_deref().unwrap().state;
             assert!(if prevent_abort {
                 writable_state == WritableState::Writable
             } else {
@@ -1005,38 +993,24 @@ mod tests {
         perry_runtime::promise::js_promise_run_microtasks();
         assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
         assert_eq!(
-            READABLE_STREAMS
-                .lock()
-                .unwrap()
-                .get(&readable)
-                .unwrap()
-                .reader_handle,
+            rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle,
             Some(locks.reader_id)
         );
         assert_eq!(
-            WRITABLE_STREAMS
-                .lock()
-                .unwrap()
-                .get(&writable)
-                .unwrap()
-                .writer_handle,
+            ws_rec(WsRef(writable)).as_deref().unwrap().writer_handle,
             Some(locks.writer_id)
         );
 
         js_promise_resolve(action, f64::from_bits(TAG_UNDEFINED));
         perry_runtime::promise::js_promise_run_microtasks();
         assert_eq!(perry_runtime::promise::js_promise_state(promise), 2);
-        assert!(READABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&readable)
+        assert!(rs_rec(RsRef(readable))
+            .as_deref()
             .unwrap()
             .reader_handle
             .is_none());
-        assert!(WRITABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&writable)
+        assert!(ws_rec(WsRef(writable))
+            .as_deref()
             .unwrap()
             .writer_handle
             .is_none());

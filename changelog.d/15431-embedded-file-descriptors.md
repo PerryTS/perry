@@ -1,0 +1,1 @@
+`fs.openSync`, `fs.open`, `fs.promises.open` and `fs.createReadStream` open a file embedded with `--embed` by its `$perryfs/<path>` (or bare embed-relative key), as `readFileSync` does, instead of failing with `ENOENT`. An embedded descriptor is read-only and has no OS file behind it, so it cannot be a child process's `stdio` (#15180).

@@ -25,9 +25,10 @@ use perry_ffi::{JsValue, TransientRootScope};
 use turnloop_http::http1;
 
 use super::wire::{self, Framing};
+use crate::server::client_error::{self, ClientError, ClientErrorKind};
 use crate::server::request::{alloc_incoming_message, incoming_socket_assign, IncomingMessage};
 use crate::server::response::{alloc_http1_server_response_for_turnloop, ResponseShape};
-use crate::server::server::{with_base_server, HttpPendingRequest};
+use crate::server::server::{with_base_server, with_base_server_mut, HttpPendingRequest};
 
 /// The request being decoded, before it becomes an `IncomingMessage`.
 struct Building {
@@ -472,7 +473,7 @@ enum Step {
     Upgrade(Building),
     /// A WebSocket upgrade an attached `WebSocketServer` will answer.
     WebSocket(Building),
-    Failed(&'static str),
+    Failed(turnloop_http::Error),
 }
 
 fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
@@ -485,7 +486,7 @@ fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
         }
         let step = match c.decoder.receive(&c.input) {
             Ok(step) => step,
-            Err(e) => return Step::Failed(e.code),
+            Err(e) => return Step::Failed(e),
         };
         let consumed = step.consumed;
         let mut outcome = Step::Idle;
@@ -643,8 +644,8 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 on_websocket(id, building);
                 return;
             }
-            Some(Step::Failed(code)) => {
-                bad_request(id, code);
+            Some(Step::Failed(error)) => {
+                bad_request(id, error);
                 return;
             }
         }
@@ -1114,11 +1115,24 @@ fn complete_response(conn_id: &RootedSocket, seq: u64, framing: Framing) {
 /// `res.destroy()` / `socket.destroy()` on the turnloop connection.
 pub(crate) fn destroy_connection(conn_id: &RootedSocket) {
     note_aborted(conn_id);
+    hold_until_closed(conn_id);
     net::destroy(conn_id.value());
+}
+
+/// A teardown in progress keeps the loop alive even on an `unref()`ed socket,
+/// as libuv's shutdown and closing handle do: `server.close()` waits for it.
+fn hold_until_closed(conn_id: &RootedSocket) {
+    if conn_id.is_current() && !net::has_ref(conn_id.value()) {
+        net::set_ref(conn_id.value(), true);
+    }
 }
 
 fn finish_and_close(conn_id: &RootedSocket) {
     cancel_deadline(conn_id);
+    // A WebSocket's close also waits for its peer, which holds nothing.
+    if !is_websocket(conn_id) {
+        hold_until_closed(conn_id);
+    }
     with_conn(conn_id, |c| c.closing = true);
     if net::shutdown(conn_id.value(), 0).is_err() {
         net::destroy(conn_id.value());
@@ -1163,18 +1177,75 @@ fn write_raw_notified(
     true
 }
 
-/// Answer a malformed request the way Node does: one 400, then close.
-fn bad_request(conn_id: &RootedSocket, _code: &str) {
-    write_raw(
-        conn_id,
-        b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-    );
+/// A request the decoder refused.
+fn bad_request(conn_id: &RootedSocket, error: turnloop_http::Error) {
+    let Some((in_body, input)) = with_conn(conn_id, |c| {
+        (c.building.is_some(), std::mem::take(&mut c.input))
+    }) else {
+        return;
+    };
+    let (code, reason) = client_error::parse_failure(error, &input, in_body);
+    if code == client_error::MISSING_HOST {
+        // Node parses this request and refuses it itself: no `'clientError'`.
+        answer_and_close(conn_id, code);
+        return;
+    }
+    let kind = ClientErrorKind::Parse {
+        reason,
+        raw_packet: Some(input),
+    };
+    fail(conn_id, code, kind, false);
+}
+
+/// Node's `socketOnError`: a `'clientError'` listener takes the socket over;
+/// without one the default answer goes out and the connection closes.
+fn fail(conn_id: &RootedSocket, code: &str, kind: ClientErrorKind, read_ended: bool) {
+    let Some(server_handle) = with_conn(conn_id, |c| c.server_handle) else {
+        return;
+    };
+    let listening = with_base_server(server_handle, |server| {
+        crate::server::server::server_has_event_listener(server, "clientError")
+    })
+    .unwrap_or(false);
+    if !listening || net::set_route(conn_id.value(), net::ROUTE).is_err() {
+        answer_and_close(conn_id, code);
+        return;
+    }
+    cancel_deadline(conn_id);
+    drop_exchange(conn_id);
+    queue_client_error(conn_id, server_handle, code, kind, read_ended);
+}
+
+fn queue_client_error(
+    conn_id: &RootedSocket,
+    server_handle: i64,
+    code: &str,
+    kind: ClientErrorKind,
+    read_ended: bool,
+) {
+    let error = ClientError {
+        socket: conn_id.value(),
+        code: code.to_string(),
+        kind,
+        read_ended,
+    };
+    with_base_server_mut(server_handle, move |server| {
+        server.with_client_errors(|errors| errors.push_back(error));
+    });
+}
+
+fn answer_and_close(conn_id: &RootedSocket, code: &str) {
+    write_raw(conn_id, client_error::default_response(code));
+    drop_exchange(conn_id);
+    finish_and_close(conn_id);
+}
+
+fn drop_exchange(conn_id: &RootedSocket) {
     with_conn(conn_id, |c| {
         c.closing = true;
         c.building = None;
         c.active = None;
     });
-    finish_and_close(conn_id);
 }
 
 // ── Terminal completions ────────────────────────────────────────────────────
@@ -1206,7 +1277,8 @@ fn on_eof(id: &RootedSocket) {
         // A TLS connection reaches EOF twice — the peer's `close_notify` and
         // then the TCP FIN — and the close must only be driven once.
         let already = std::mem::replace(&mut c.read_eof, true) || c.closing;
-        (already, c.active.is_some(), c.building.is_some())
+        let partial = c.building.is_some() || c.input.iter().any(|b| !b"\r\n".contains(b));
+        (already, c.active.is_some(), partial)
     });
     let Some((already, answering, partial)) = state else {
         return;
@@ -1221,9 +1293,12 @@ fn on_eof(id: &RootedSocket) {
         // unfinished response is closed with it.
         note_aborted(id);
     }
-    if partial {
-        // A half-sent request: Node destroys the socket without answering.
-        destroy_connection(id);
+    if partial && !answering {
+        let kind = ClientErrorKind::Parse {
+            reason: "Invalid EOF state",
+            raw_packet: None,
+        };
+        fail(id, "HPE_INVALID_EOF_STATE", kind, true);
         return;
     }
     finish_and_close(id);
@@ -1275,11 +1350,12 @@ fn on_timer(id: &RootedSocket) {
                 c.building = None;
                 c.input.clear();
             });
-            write_raw(
+            fail(
                 id,
-                b"HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n",
+                "ERR_HTTP_REQUEST_TIMEOUT",
+                ClientErrorKind::Timeout,
+                false,
             );
-            finish_and_close(id);
         }
         Some((Clock::KeepAlive(_), Some(left))) if left.is_zero() => finish_and_close(id),
         _ => refresh_deadline(id),
@@ -1299,7 +1375,14 @@ fn on_error(id: &RootedSocket, code: Option<&str>, syscall: Option<&str>, termin
         }
         return;
     }
-    let _ = (code, syscall, terminal);
+    let _ = terminal;
+    let server_handle = with_conn(id, |c| (!c.closing).then_some(c.server_handle)).flatten();
+    if let (Some(server_handle), Some(code)) = (server_handle, code) {
+        let kind = ClientErrorKind::Transport {
+            syscall: syscall.unwrap_or("read").to_string(),
+        };
+        queue_client_error(id, server_handle, code, kind, false);
+    }
     destroy_connection(id);
 }
 

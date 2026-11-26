@@ -5701,6 +5701,7 @@ dependencies = [
 name = "perry-stdlib-static"
 version = "0.5.1663"
 dependencies = [
+ "perry-runtime",
  "perry-stdlib",
 ]
 

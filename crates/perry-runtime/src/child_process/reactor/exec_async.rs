@@ -293,13 +293,15 @@ fn cp_exec_spawn_failed(cp: f64, exec: Box<CpExecPending>, error: &std::io::Erro
         spawn_error: Some((super::super::cp_io_error_code(error), error.to_string())),
         run_error: None,
     };
+    // Empty output always boxes.
     let (err, out, errout) = super::super::cp_exec_callback_args(
         &run,
         &exec.run_options,
         &exec.cmd,
         &exec.file,
         &exec.mode,
-    );
+    )
+    .unwrap_or_else(|_| crate::string::throw_invalid_string_length());
     cp_defer_exec_callback(f64::from_bits(exec.cb_bits), err, out, errout);
     cp
 }
@@ -332,14 +334,39 @@ pub(super) fn cp_exec_accumulate(
     None
 }
 
-/// Build the `CpRun` for a finished exec child and fire its callback.
+/// Build the `CpRun` for a finished exec child and fire its callback. Output
+/// too long to decode throws node's uncaught `RangeError: Invalid string
+/// length` (its join of the decoded chunks), after the captured output is
+/// released.
 pub(super) fn cp_exec_fire_close(
     exec: Box<CpExecPending>,
     code: Option<i32>,
     signal: Option<i32>,
     pid: i32,
 ) {
-    let exec = *exec;
+    let cb_bits = exec.cb_bits;
+    let Ok((err, out, errout)) = cp_exec_close_args(*exec, code, signal, pid) else {
+        crate::string::throw_invalid_string_length()
+    };
+    let cb = crate::fs::extract_closure_ptr(f64::from_bits(cb_bits));
+    if !cb.is_null() {
+        crate::closure::js_closure_call3(
+            cb,
+            crate::closure::plain_call_receiver(),
+            err,
+            out,
+            errout,
+        );
+    }
+}
+
+/// The `(err, stdout, stderr)` of a finished exec child; consumes its record.
+fn cp_exec_close_args(
+    exec: CpExecPending,
+    code: Option<i32>,
+    signal: Option<i32>,
+    pid: i32,
+) -> Result<(f64, f64, f64), crate::buffer::StringTooLong> {
     let run_error = if exec.exceeded {
         Some(CpRunError::MaxBuffer)
     } else if exec.timed_out {
@@ -364,23 +391,7 @@ pub(super) fn cp_exec_fire_close(
         spawn_error: None,
         run_error,
     };
-    let (err, out, errout) = super::super::cp_exec_callback_args(
-        &run,
-        &exec.run_options,
-        &exec.cmd,
-        &exec.file,
-        &exec.mode,
-    );
-    let cb = crate::fs::extract_closure_ptr(f64::from_bits(exec.cb_bits));
-    if !cb.is_null() {
-        crate::closure::js_closure_call3(
-            cb,
-            crate::closure::plain_call_receiver(),
-            err,
-            out,
-            errout,
-        );
-    }
+    super::super::cp_exec_callback_args(&run, &exec.run_options, &exec.cmd, &exec.file, &exec.mode)
 }
 
 /// Schedule a deferred `cb(err, stdout, stderr)` on the next `setImmediate`

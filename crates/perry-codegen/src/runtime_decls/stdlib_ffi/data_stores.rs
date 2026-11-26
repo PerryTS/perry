@@ -109,8 +109,6 @@ pub(crate) fn declare_data_stores(module: &mut LlModule) {
     // arg is the full NaN-boxed options value so validation can distinguish
     // objects, primitives, and undefined.
     module.declare_function("js_crypto_scrypt_bytes", I64, &[I64, I64, DOUBLE, DOUBLE]);
-    // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
-    module.declare_function("js_crypto_generate_key_pair_sync", DOUBLE, &[I64, I64]);
     module.declare_function(
         "js_crypto_scrypt_custom",
         I64,

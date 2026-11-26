@@ -148,6 +148,13 @@ impl<'a> Gen<'a> {
                     let n = self.tmp("iterout");
                     self.step_out.replace(n)
                 });
+                // An iterator record's source: the GetIterator among this
+                // payload's arguments is the record's payload.
+                if module == "__perry_runtime" && method == "arrayRecordPayload" {
+                    if let Some(Expr::LocalGet(s)) = args.first() {
+                        self.record_sources.insert((mi, *s));
+                    }
+                }
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
                 // R-HOSTREPORT: `process.on(event, listener)` lowers here (the

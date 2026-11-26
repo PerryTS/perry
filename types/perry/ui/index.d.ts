@@ -565,6 +565,14 @@ export function Picker(onChange: (index: number) => void): Widget;
  */
 export function WheelPicker(onChange: (index: number) => void): Widget;
 
+/**
+ * A group of radio buttons, one per item, for a short list where every choice
+ * should stay visible. Picker's API: add items with `radioGroupAddItem`; `onChange`
+ * receives the chosen index (tvOS never calls it). Radio buttons on the web; native
+ * backends show a Picker.
+ */
+export function RadioGroup(onChange: (index: number) => void): Widget;
+
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
@@ -1588,6 +1596,18 @@ export function wheelPickerGetSelected(picker: Widget): number;
 export function wheelPickerSetSelected(picker: Widget, index: number): void;
 
 // ---------------------------------------------------------------------------
+// RadioGroup
+// ---------------------------------------------------------------------------
+
+export function radioGroupAddItem(group: Widget, title: string): void;
+/**
+ * The chosen index. Until something is chosen it is -1 on the web and Windows; the
+ * other native targets report the first item, 0, once there is one.
+ */
+export function radioGroupGetSelected(group: Widget): number;
+export function radioGroupSetSelected(group: Widget, index: number): void;
+
+// ---------------------------------------------------------------------------
 // TabBar
 // ---------------------------------------------------------------------------
 
@@ -1960,6 +1980,13 @@ export function onAppKeyDown(
 export function onAppKeyUp(
     handler: (key: Key, modifiers: number) => void,
 ): void;
+
+/**
+ * System Back (Android's back button / gesture). Return `true` when the app
+ * handled it (e.g. popped its own navigation); `false` lets Android apply its
+ * default (leave the app). No-op on other platforms.
+ */
+export function onBackPressed(handler: () => boolean): void;
 
 /** Route subsequent keyboard events to this widget. Pair with `style: { focusable: true }`. */
 export function focus(widget: Widget): void;

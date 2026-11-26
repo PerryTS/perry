@@ -32,6 +32,8 @@ mod filehandle;
 pub use filehandle::*;
 mod dir_glob_watch;
 pub use dir_glob_watch::*;
+mod fd_entry;
+use fd_entry::FdEntry;
 mod fd_ops;
 pub use fd_ops::*;
 mod cp;
@@ -177,51 +179,6 @@ fn adopt_inherited_fds(map: &mut FdTable) {
     }
 }
 
-/// One registered descriptor. The entry itself says who owns the descriptor:
-/// a file the runtime opened (or a `dup` it made) closes on drop; a
-/// descriptor the process inherited is only adopted and never closes on
-/// drop, so thread teardown cannot close an fd the program still uses.
-pub(crate) enum FdEntry {
-    Owned(fs::File),
-    Adopted(std::mem::ManuallyDrop<fs::File>),
-}
-
-impl FdEntry {
-    /// The entry as an owning `File`: dropping the result closes the
-    /// descriptor. An explicit program close, or a socket taking the fd.
-    pub(crate) fn into_file(self) -> fs::File {
-        match self {
-            FdEntry::Owned(file) => file,
-            FdEntry::Adopted(file) => std::mem::ManuallyDrop::into_inner(file),
-        }
-    }
-}
-
-impl std::ops::Deref for FdEntry {
-    type Target = fs::File;
-    fn deref(&self) -> &fs::File {
-        match self {
-            FdEntry::Owned(file) => file,
-            FdEntry::Adopted(file) => file,
-        }
-    }
-}
-
-impl std::ops::DerefMut for FdEntry {
-    fn deref_mut(&mut self) -> &mut fs::File {
-        match self {
-            FdEntry::Owned(file) => file,
-            FdEntry::Adopted(file) => file,
-        }
-    }
-}
-
-impl From<fs::File> for FdEntry {
-    fn from(file: fs::File) -> Self {
-        FdEntry::Owned(file)
-    }
-}
-
 /// The fd registry's map: `HashMap<i32, FdEntry>` whose `insert` also takes a
 /// plain `File` (an owned entry).
 #[derive(Default)]
@@ -258,6 +215,8 @@ static NEXT_FD: AtomicI32 = AtomicI32::new(100);
 static INHERITED_FDS_CLAIMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(test)]
+mod embedded_fd_tests;
 #[cfg(all(test, unix))]
 #[path = "fd_adopt_tests.rs"]
 mod fd_adopt_tests;
@@ -285,6 +244,12 @@ pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
 }
 
+/// True if `fd` is an embedded asset. Its number names no OS descriptor, so it
+/// must never reach a syscall.
+pub(crate) fn fd_is_embedded(fd: i32) -> bool {
+    FD_REGISTRY.with(|r| r.borrow().get(&fd).is_some_and(FdEntry::is_embedded))
+}
+
 /// Move a program descriptor out of the registry to a new owner (a
 /// `net.Socket({ fd })`), which closes it. fs operations on `fd` then fail
 /// with EBADF, as under Node once the socket has closed it.
@@ -292,11 +257,16 @@ pub(crate) fn take_registered_fd(fd: i32) -> Option<fs::File> {
     let entry = FD_REGISTRY.with(|r| r.borrow_mut().remove(&fd))?;
     FD_PATHS.with(|paths| paths.borrow_mut().remove(&fd));
     FD_APPEND_MODE.with(|flags| flags.borrow_mut().remove(&fd));
-    Some(entry.into_file())
+    entry.into_file()
 }
 
 pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {
-    FD_REGISTRY.with(|r| r.borrow().get(&fd).and_then(|file| file.try_clone().ok()))
+    FD_REGISTRY.with(|r| {
+        r.borrow()
+            .get(&fd)
+            .and_then(FdEntry::os_file)
+            .and_then(|file| file.try_clone().ok())
+    })
 }
 
 pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {

@@ -13,12 +13,19 @@ crate-type = ["rlib", "staticlib"]
 
 [features]
 geisterhand = []
+# Legacy JNI fetch (see src/lib.rs); perry-stdlib's fetch is the default.
+jni-fetch = []
 
 [target.'cfg(target_os = "android")'.dependencies]
 perry-ffi.workspace = true
 perry-ui = { path = "../perry-ui" }
 perry-audio-miniaudio = { workspace = true }
-perry-runtime = { path = "../perry-runtime", default-features = false }
+# The UI archive bundles the runtime that Android apps link (the standalone
+# runtime archive isn't linked on Android), so it carries the engines that
+# compiled code installs on first use (`js_runtime_install_*`): without them an
+# app using a RegExp / URL / Temporal fails to load ("cannot locate symbol
+# js_regexp_literal").
+perry-runtime = { path = "../perry-runtime", default-features = false, features = ["regex-engine", "temporal", "url-engine"] }
 # Issue #552: native image processing (sharp). perry-stdlib doesn't cross-compile
 # to Android; perry-ext-sharp is the OpenSSL-free standalone with the same FFI
 # surface (`image` crate + perry-ffi only). Force-linked via `extern crate` in

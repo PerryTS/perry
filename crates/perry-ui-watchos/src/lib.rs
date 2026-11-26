@@ -330,6 +330,25 @@ pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
     perry_ui_picker_get_selected(handle)
 }
 
+/// RadioGroup shares Picker's API and index callback; the radio buttons exist on the
+/// web target only, so this backend shows a picker.
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_create(on_change: f64) -> i64 {
+    perry_ui_picker_create(on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_add_item(handle: i64, title_ptr: i64) {
+    perry_ui_picker_add_item(handle, title_ptr);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_set_selected(handle: i64, index: i64) {
+    perry_ui_picker_set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_get_selected(handle: i64) -> i64 {
+    perry_ui_picker_get_selected(handle)
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_progressview_set_value(handle: i64, value: f64) {
     tree::with_node_mut(handle, |node| {
@@ -802,6 +821,10 @@ pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f6
 pub extern "C" fn perry_ui_widget_set_on_key_down(_handle: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_key_up(_handle: i64, _cb: f64) {}
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(_cb: f64) {}
 #[no_mangle]

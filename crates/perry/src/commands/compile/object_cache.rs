@@ -254,16 +254,17 @@ fn stable_type_key(ty: &perry_hir::types::Type) -> String {
 /// more tools on PATH, still hashes PATH itself.
 ///
 /// NOT captured in the key: the host CPU. By default (`PERRY_TARGET_CPU`
-/// unset) `compile_ll_to_object` passes `-mcpu=native`/`-march=native` to
-/// clang for host builds, so the emitted `.o` bakes in whatever instruction
-/// set the build machine supports. The cache is consequently
-/// **machine-local** — the default `node_modules/.cache/perry`
-/// is inside the already-gitignored `node_modules/` for this reason.
-/// Sharing across machines with different CPUs (rsync,
-/// NFS, Docker bind-mount) can produce SIGILL at runtime. Pinning an
-/// explicit baseline (`--march x86-64-v2` / `[build] march`, #6125) removes
-/// the machine dependence — the chosen baseline IS keyed, via the
-/// `PERRY_TARGET_CPU` env field.
+/// unset) `compile_ll_to_object` passes the target triple's fixed baseline
+/// (`-march=x86-64-v3`, `-mcpu=apple-m1`, or nothing), so the emitted `.o`
+/// does not depend on the build machine, and an explicit baseline
+/// (`--march x86-64-v2` / `[build] march`, #6125) is keyed via the
+/// `PERRY_TARGET_CPU` env field. The one exception is the explicit opt-in
+/// `--march native` / `PERRY_TARGET_CPU=native`: its objects bake in the
+/// build machine's instruction set under the key `native`, so a cache
+/// written that way must not be shared across machines with different CPUs
+/// (rsync, NFS, Docker bind-mount), or the result can SIGILL. The default
+/// `node_modules/.cache/perry` is inside the already-gitignored
+/// `node_modules/`.
 ///
 /// Cross-platform non-determinism (Mach-O LC_UUID, PE TimeDateStamp,
 /// codesigning) affects the *linked binary*, not the object file — so

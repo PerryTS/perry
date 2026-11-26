@@ -26,7 +26,7 @@ pub extern "C" fn js_buffer_to_string_range(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    {
+    let decoded = {
         let source =
             super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
         let len = source.len() as i32;
@@ -34,19 +34,10 @@ pub extern "C" fn js_buffer_to_string_range(
         let e = end.max(s).min(len);
         let bytes = &source[s as usize..e as usize];
 
-        match encoding {
-            // v0.5.772 perf: encode directly into a fresh StringHeader without
-            // an intermediate Vec<u8>. Hex/base64 outputs are pure ASCII so the
-            // ASCII-only string allocator skips compute_utf16_len's byte-walk.
-            1 => hex_encode_into_string(bytes),
-            2 => base64_encode_into_string(bytes),
-            3 => base64url_encode_into_string(bytes),
-            4 => latin1_bytes_to_string(bytes),
-            5 => ascii_bytes_to_string(bytes),
-            6 => utf16le_bytes_to_string(bytes),
-            _ => buf_bytes_to_utf8_string(bytes),
-        }
-    }
+        decode_bytes_to_string(bytes, encoding)
+    };
+    // Thrown once the byte lease is released (a JS throw skips Rust drops).
+    decoded.unwrap_or_else(|StringTooLong| crate::string::throw_string_too_long())
 }
 
 /// Convert a buffer to a string
@@ -75,32 +66,58 @@ pub extern "C" fn js_buffer_to_string(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    {
+    let decoded = {
         let source =
             super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
         let bytes = &*source;
 
-        match encoding {
-            // v0.5.772 perf: hex/base64 outputs are pure ASCII — the in-place
-            // encoder writes directly into a fresh StringHeader allocated via
-            // `js_string_from_ascii_bytes` (no compute_utf16_len byte-walk).
-            1 => hex_encode_into_string(bytes),
-            2 => base64_encode_into_string(bytes),
-            3 => base64url_encode_into_string(bytes),
-            4 => latin1_bytes_to_string(bytes),
-            5 => ascii_bytes_to_string(bytes),
-            6 => utf16le_bytes_to_string(bytes),
-            _ => {
-                // UTF-8 (default) — Node spec: invalid UTF-8 sequences are
-                // replaced with U+FFFD. Pre-fix this path passed the raw
-                // bytes straight to `js_string_from_bytes`, whose downstream
-                // `compute_utf16_len` ran `str::from_utf8_unchecked`
-                // (UB on non-UTF-8) → SIGSEGV in the multi-byte counter on
-                // random binary buffers. Issue #609.
-                buf_bytes_to_utf8_string(bytes)
-            }
-        }
+        decode_bytes_to_string(bytes, encoding)
+    };
+    // Thrown once the byte lease is released (a JS throw skips Rust drops).
+    decoded.unwrap_or_else(|StringTooLong| crate::string::throw_string_too_long())
+}
+
+/// A decode whose result would exceed `MAX_STRING_LENGTH` UTF-16 units: the
+/// caller throws `ERR_STRING_TOO_LONG` once nothing Rust-owned is pending.
+pub(crate) struct StringTooLong;
+
+/// Decode `bytes` in `encoding` (0 = utf8, 1 = hex, 2 = base64,
+/// 3 = base64url, 4 = latin1, 5 = ascii, 6 = utf16le). The result length is
+/// known from the encoding before anything is built; UTF-8 is measured after
+/// decoding (see [`try_utf8_string`]).
+pub(crate) fn decode_bytes_to_string(
+    bytes: &[u8],
+    encoding: i32,
+) -> Result<*mut StringHeader, StringTooLong> {
+    let n = bytes.len();
+    let units = match encoding {
+        1 => n.saturating_mul(2),
+        2 => n.div_ceil(3).saturating_mul(4),
+        3 => n.saturating_mul(4).div_ceil(3),
+        4 | 5 => n,
+        6 => n / 2,
+        _ => 0,
+    };
+    if units > crate::string::MAX_STRING_LENGTH {
+        return Err(StringTooLong);
     }
+    Ok(match encoding {
+        // v0.5.772 perf: hex/base64 outputs are pure ASCII — the in-place
+        // encoder writes directly into a fresh StringHeader allocated via
+        // `js_string_from_ascii_bytes` (no compute_utf16_len byte-walk).
+        1 => hex_encode_into_string(bytes),
+        2 => base64_encode_into_string(bytes),
+        3 => base64url_encode_into_string(bytes),
+        4 => latin1_bytes_to_string(bytes),
+        5 => ascii_bytes_to_string(bytes),
+        6 => utf16le_bytes_to_string(bytes),
+        // UTF-8 (default) — Node spec: invalid UTF-8 sequences are replaced
+        // with U+FFFD. Pre-fix this path passed the raw bytes straight to
+        // `js_string_from_bytes`, whose downstream `compute_utf16_len` ran
+        // `str::from_utf8_unchecked` (UB on non-UTF-8) → SIGSEGV in the
+        // multi-byte counter on random binary buffers. Issue #609.
+        _ => return try_utf8_string(bytes),
+    })
 }
 
 /// Decode bytes as Node `latin1`/`binary`: each byte becomes U+00xx.
@@ -147,11 +164,35 @@ fn utf16le_bytes_to_string(bytes: &[u8]) -> *mut StringHeader {
 /// inputs we land on `js_string_from_ascii_bytes` directly — one byte scan
 /// total. Non-ASCII falls through to the spec-correct lossy path.
 pub(crate) fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
+    try_utf8_string(bytes).unwrap_or_else(|StringTooLong| crate::string::throw_string_too_long())
+}
+
+/// [`buf_bytes_to_utf8_string`] that reports an over-long result instead of
+/// throwing, with the decoded text already dropped.
+pub(crate) fn try_utf8_string(bytes: &[u8]) -> Result<*mut StringHeader, StringTooLong> {
     if bytes.is_ascii() {
-        return js_string_from_ascii_bytes(bytes.as_ptr(), bytes.len() as u32);
+        if bytes.len() > crate::string::MAX_STRING_LENGTH {
+            return Err(StringTooLong);
+        }
+        return Ok(js_string_from_ascii_bytes(
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        ));
     }
     let cow = String::from_utf8_lossy(bytes);
-    js_string_from_bytes(cow.as_ptr(), cow.len() as u32)
+    if crate::string::decoded_text_over_limit(&cow) {
+        return Err(StringTooLong);
+    }
+    Ok(js_string_from_bytes(cow.as_ptr(), cow.len() as u32))
+}
+
+/// UTF-8 (lossy) text of `bytes` for a reader that settles a promise
+/// (`Blob#text`, `Response#text`, `Request#text`, body `json()`): text
+/// longer than `MAX_STRING_LENGTH` gives node's `ERR_STRING_TOO_LONG` error
+/// value to reject with. Nothing is thrown, so the caller's byte buffer is
+/// released as usual.
+pub fn utf8_string_or_too_long_error(bytes: &[u8]) -> Result<*mut StringHeader, f64> {
+    try_utf8_string(bytes).map_err(|StringTooLong| crate::string::string_too_long_error().value())
 }
 
 /// Does `toString(encoding)` decode this byte view? Only `Buffer.prototype`

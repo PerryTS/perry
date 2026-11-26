@@ -115,6 +115,10 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
         "keyObjectFromCryptoKey" if args_len >= 1 => {
             js_webcrypto_key_object_from_crypto_key(arg(0))
         }
+        // Internal bridge for the runtime's `key.algorithm` read on an RSA CryptoKey.
+        "setRsaKeyAlgorithmFields" if args_len >= 2 => {
+            js_webcrypto_set_rsa_key_algorithm_fields(arg(0), arg(1))
+        }
         "supports" if args_len >= 2 => js_webcrypto_supports(arg(0), arg(1), arg(2)),
         "encapsulateBits" => promise_to_value(js_webcrypto_encapsulate_bits(args_ptr, args_len)),
         "decapsulateBits" => promise_to_value(js_webcrypto_decapsulate_bits(args_ptr, args_len)),

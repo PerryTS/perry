@@ -206,29 +206,78 @@ console.log(all.map((e) => e.name + ":" + e.message).join(" "));
     );
 }
 
-// `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
-// 0..1 scale, mapped onto CSS 100..900 and clamped.
+// `textSetFontWeight(widget, size, weight)` sets both; the weight is Apple's
+// `systemFont(ofSize:weight:)` scale, as on macOS: bold is 0.4, not 1.
 #[test]
 fn text_set_font_weight_applies_the_size_and_the_weight() {
     assert_eq!(
         run_web_ui_source_then(
             r#"
 import { Text, textSetFontWeight } from "perry/ui";
-const a = Text("A");
-textSetFontWeight(a, 28, 1.0);
-const b = Text("B");
-textSetFontWeight(b, 16, 0.5);
-const c = Text("C");
-textSetFontWeight(c, 12, 700);
+const weights = [-0.4, 0, 0.23, 0.3, 0.4, 0.56, 1.0];
+for (let i = 0; i < weights.length; i++) textSetFontWeight(Text("W" + i), 16 + i, weights[i]);
 "#,
             r#"
-for (const label of ["A", "B", "C"]) {
-  const el = [...uiHandles.values()].find(e => e.textContent === label);
-  console.log(label + " " + el.style.fontSize + " " + el.style.fontWeight);
+for (let i = 0; i < 7; i++) {
+  const el = [...uiHandles.values()].find(e => e.textContent === "W" + i);
+  console.log(el.style.fontSize + " " + el.style.fontWeight);
 }
 "#
         ),
-        "A 28px 900\nB 16px 500\nC 12px 900"
+        "16px 300\n17px 400\n18px 500\n19px 600\n20px 700\n21px 800\n22px 900"
+    );
+}
+
+// `widgetSetTooltip` gives the widget the browser's native tooltip: its `title`.
+#[test]
+fn widget_set_tooltip_sets_the_title() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Button, Text, widgetSetTooltip } from "perry/ui";
+const save = Button("Save", () => {});
+widgetSetTooltip(save, "Save the draft");
+const note = Text("Note");
+widgetSetTooltip(note, "Shown on hover");
+"#,
+            r#"
+for (const label of ["Save", "Note"]) {
+  const el = [...uiHandles.values()].find(e => e.textContent === label);
+  console.log(label + ": " + el.title);
+}
+"#
+        ),
+        "Save: Save the draft\nNote: Shown on hover"
+    );
+}
+
+// The `widget`-prefixed free functions reach the same web setters as their short names.
+#[test]
+fn widget_prefixed_setters_reach_the_web_setters() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Button, Toggle, widgetSetEnabled, widgetSetControlSize, widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick } from "perry/ui";
+const b = Button("B", () => {});
+const t = Toggle("T", (on: boolean) => {});
+widgetSetEnabled(t, 0);
+widgetSetOnClick(t, () => { console.log("toggle click"); });
+widgetSetEnabled(b, 0);
+widgetSetControlSize(b, 1);
+widgetSetOnClick(b, () => { console.log("click"); });
+widgetSetOnHover(b, (inside: boolean) => { console.log("hover " + (inside === true) + " " + (inside === false)); });
+widgetSetOnDoubleClick(b, () => { console.log("dblclick"); });
+"#,
+            r#"
+const el = [...uiHandles.values()].find(e => e.textContent === "B");
+console.log(el.disabled + " " + el.style.fontSize);
+for (const type of ["click", "mouseenter", "mouseleave", "dblclick"]) el.dispatch(type);
+const toggle = [...uiHandles.values()].find(e => e.textContent === "T");
+console.log(toggle._inp.disabled);
+toggle._inp.dispatch("click");
+"#
+        ),
+        "true 0.85em\nclick\nhover true false\nhover false true\ndblclick\ntrue\ntoggle click"
     );
 }
 
@@ -593,14 +642,14 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 // An expression the JS emitter has no arm for must reject, not run on with `undefined`:
-// a typed array has no arm in an async body, so iterating it throws.
+// `Buffer.alloc` has no arm in an async body, so iterating its result throws.
 #[test]
 fn async_body_rejects_iteration_it_cannot_emit() {
     let out = run_web_source(
         r#"
 async function each(): Promise<string> {
   let s = "";
-  for (const v of new Uint8Array([120, 121])) s = s + v;
+  for (const v of Buffer.alloc(2)) s = s + v;
   return s;
 }
 each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
@@ -732,6 +781,70 @@ toggle._inp.dispatch("change");
 "#
         ),
         "toggle true boolean"
+    );
+}
+
+// RadioGroup takes Picker's API: one radio per item, sharing a name, and onChange
+// receives the chosen index.
+#[test]
+fn radio_group_items_are_radios_and_report_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { RadioGroup, radioGroupAddItem, radioGroupGetSelected, radioGroupSetSelected } from "perry/ui";
+const group = RadioGroup((index: number) => { console.log("chose " + index + " " + radioGroupGetSelected(group)); });
+radioGroupAddItem(group, "Today");
+radioGroupAddItem(group, "This week");
+radioGroupAddItem(group, "Any time");
+console.log(radioGroupGetSelected(group));
+radioGroupSetSelected(group, 2);
+console.log(radioGroupGetSelected(group));
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+const radios = fieldset.children.map(label => label.children[0]);
+console.log(radios.map(r => r.type + ":" + (r.name === radios[0].name) + ":" + r.checked).join(" "));
+console.log(fieldset.children.map(label => label.textContent).join("|"));
+radios[2].checked = false;
+radios[1].checked = true;
+radios[1].dispatch("change");
+"#
+        ),
+        "-1\n2\nradio:true:false radio:true:false radio:true:true\nToday|This week|Any time\nchose 1 1"
+    );
+}
+
+// An index coerces as Picker's does, clearing the group leaves nothing selected and
+// restarts its indices, and the fieldset is a radiogroup a label can name.
+#[test]
+fn radio_group_coerces_indices_and_forgets_cleared_items() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { RadioGroup, radioGroupAddItem, radioGroupGetSelected, radioGroupSetSelected, widgetClearChildren, widgetSetAccessibilityLabel } from "perry/ui";
+const group = RadioGroup((index: number) => { console.log("chose " + index + " " + radioGroupGetSelected(group)); });
+widgetSetAccessibilityLabel(group, "Urgency");
+const selectAll = (...indices: any[]) => indices.map(i => { radioGroupSetSelected(group, i); return radioGroupGetSelected(group); }).join(" ");
+radioGroupAddItem(group, "A");
+radioGroupAddItem(group, "B");
+console.log(selectAll(1.5, "0", 9, 1, -1, 1));
+widgetClearChildren(group);
+console.log(radioGroupGetSelected(group));
+radioGroupAddItem(group, "C");
+radioGroupAddItem(group, "D");
+console.log(radioGroupGetSelected(group));
+console.log(selectAll(0, 1));
+radioGroupSetSelected(group, -1);
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+console.log(fieldset.role + " " + fieldset["aria-label"] + " " + fieldset.style.minWidth);
+const radio = fieldset.children[0].children[0];
+radio.checked = true;
+radio.dispatch("change");
+"#
+        ),
+        "1 0 -1 1 -1 1\n-1\n-1\n0 1\nradiogroup Urgency 0\nchose 0 0"
     );
 }
 
@@ -1370,6 +1483,9 @@ mod static_method;
 #[path = "date_setter_tests.rs"]
 mod date_setter;
 
+#[path = "tdz_cell_tests.rs"]
+mod tdz_cell;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
 
@@ -1427,17 +1543,32 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "evaluated_builtin_subclass_tests.rs"]
+mod evaluated_builtin_subclass;
+
 #[path = "array_from_tests.rs"]
 mod array_from;
 
+#[path = "array_last_index_of_tests.rs"]
+mod array_last_index_of;
+
+#[path = "typed_array_tests.rs"]
+mod typed_array;
+
 #[path = "rest_param_tests.rs"]
 mod rest_param;
+
+#[path = "module_namespace_tests.rs"]
+mod module_namespace;
 
 #[path = "thread_callback_tests.rs"]
 mod thread_callback;
 
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
+
+#[path = "web_semantics_tests.rs"]
+mod web_semantics;
 
 #[path = "parse_int_radix_tests.rs"]
 mod parse_int_radix;
@@ -1482,3 +1613,6 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
 
 #[path = "array_iterator_tests.rs"]
 mod array_iterator;
+
+#[path = "web_layout_tests.rs"]
+mod web_layout;

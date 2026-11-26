@@ -1909,6 +1909,7 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "NavigationStack"
             | "Picker"
             | "WheelPicker"
+            | "RadioGroup"
             | "Table"
             | "TabBar"
     )
