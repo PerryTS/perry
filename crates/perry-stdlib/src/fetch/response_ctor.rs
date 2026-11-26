@@ -79,7 +79,8 @@ pub(super) unsafe fn response_init(
 }
 
 /// new Response(body, statusOpt, statusTextPtrOpt, headersHandleOpt)
-/// - body_ptr: StringHeader for the body, or null for ""
+/// - body_ptr: StringHeader for the body, or null (no body, or the stream /
+///   bytes `js_response_body_init_ptr` handed over out of band)
 /// - status: f64 (200 default)
 /// - status_text_ptr: StringHeader for statusText, or null for ""
 /// - headers_handle: f64 numeric handle from js_headers_new, or 0
@@ -95,12 +96,14 @@ pub unsafe extern "C" fn js_response_new(
     // string argument still read afterwards.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let status_text = (!status_text_ptr.is_null()).then(|| scope.root_string_ptr(status_text_ptr));
+    let pending_bytes = take_pending_fetch_body_bytes();
     let body_stream_id = take_pending_fetch_body_stream_id();
     // Consume before validation so a throwing constructor cannot leak body
     // metadata into the next Response construction on this thread.
     let body_content_type = take_pending_fetch_body_content_type();
     // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
-    let body_opt = dispatch::body_bytes_from_header(body_ptr);
+    // A binary body arrives as bytes with a null pointer.
+    let body_opt = dispatch::body_bytes_from_header(body_ptr).or(pending_bytes);
     let body_present = body_opt.is_some() || body_stream_id.is_some();
     let body = body_opt.unwrap_or_default();
     let status_text_ptr = status_text.map_or(std::ptr::null(), |h| h.get_raw_const_ptr());
