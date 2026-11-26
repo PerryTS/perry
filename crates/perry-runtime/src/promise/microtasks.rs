@@ -407,13 +407,17 @@ pub(crate) fn empty_checkpoint_eligible_for_test() -> bool {
 fn finish_gc_boundary() {
     let outermost = MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1;
     let _burst_boundary = outermost.then(crate::gc::allocation_pacing::BurstBoundaryGuard::enter);
-    let precise_boundary = crate::gc::gc_moving_safepoint_enabled() && outermost;
+    if !(crate::gc::gc_moving_safepoint_enabled() && outermost) {
+        crate::gc::gc_runtime_safepoint_poll();
+        return;
+    }
     // Give an owed full the precise path before the ordinary poll can start
     // a nursery-only budgeted cycle that we would immediately have to drain.
-    if precise_boundary && crate::gc::allocation_pacing::burst_boundary() {
+    let owed = crate::gc::allocation_pacing::burst_boundary();
+    if owed {
         crate::gc::gc_safepoint_moving_minor();
     }
-    crate::gc::gc_runtime_safepoint_poll();
+    let nothing_due = crate::gc::gc_boundary_safepoint_poll();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
     // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so
@@ -421,11 +425,21 @@ fn finish_gc_boundary() {
     // with precise, rewritable roots — no forced conservative scan. Run it when
     // nursery pressure is due so programs that yield to the event loop get
     // compacting, O(survivors) young collection instead of the non-moving
-    // alloc-point fallback. Gated (default off); additive.
-    if precise_boundary {
-        crate::gc::allocation_pacing::burst_boundary();
-        crate::gc::gc_safepoint_moving_minor();
+    // alloc-point fallback.
+    //
+    // Each question is asked once per boundary. When no full was owed and the
+    // poll found nothing due without stepping a cycle, nothing has run since
+    // either answer was derived (no mutator code; the poll wrote no collector
+    // state), so both still hold: the burst question is not asked again and
+    // the moving minor takes the ladder's "nothing due" as given. Otherwise a
+    // full or a budgeted step may have moved the debt and the occupancy the
+    // two questions read, and both are asked afresh.
+    if !owed && nothing_due {
+        crate::gc::gc_safepoint_moving_minor_nothing_due();
+        return;
     }
+    crate::gc::allocation_pacing::burst_boundary();
+    crate::gc::gc_safepoint_moving_minor();
 }
 
 /// The microtask trap's protected region (#9305): the recovery for a
