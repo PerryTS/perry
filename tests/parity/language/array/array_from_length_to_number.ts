@@ -21,8 +21,9 @@ for (const [label, length] of [["bigint", 1n], ["symbol", Symbol("n")], ["number
   show(`concat proxy ${label}`, () => ([] as unknown[]).concat(spreadable(length)));
   show(`map.call ${label}`, () => proto.map.call(like(length, "m"), (v: unknown) => v));
   show(`indexOf.call ${label}`, () => proto.indexOf.call(like(length, "i"), "i"));
-  show(`fill.call ${label}`, () => Array.from(proto.fill.call(like(length, "f"), "F") as Loose));
-  show(`reverse.call ${label}`, () => Array.from(proto.reverse.call(like(length, "r")) as Loose));
+  // Object.keys reads no `length`, so only the mutation method can throw.
+  show(`fill.call ${label}`, () => Object.keys(proto.fill.call(like(length, "f"), "F") as Loose));
+  show(`reverse.call ${label}`, () => Object.keys(proto.reverse.call(like(length, "r")) as Loose));
 }
 
 show("string length", () => Array.from(like("2", "a", "b")));
