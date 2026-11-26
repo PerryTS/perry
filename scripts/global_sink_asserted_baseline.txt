@@ -29,7 +29,6 @@ crates/perry-runtime/src/native_handle.rs::NULL_FINALIZER_CALLS
 crates/perry-runtime/src/node_api_host/v10_tests.rs::ASYNC_THROWN
 crates/perry-runtime/src/node_api_host/v10_tests.rs::EXTERNAL_FINALIZED
 crates/perry-runtime/src/node_api_host/v10_tests.rs::THROWING_TSFN_CALLS
-crates/perry-runtime/src/object/arguments.rs::ARGUMENTS_OBJECTS_EVER_USED
 crates/perry-runtime/src/object/class_meta_registry.rs::GENERIC_ORIGIN_LATCH
 crates/perry-runtime/src/object/class_meta_registry.rs::PARENT_DENSE_INCOMPLETE
 crates/perry-runtime/src/object/delete_rest.rs::ON

@@ -884,6 +884,7 @@ mod tests {
                 is_static: false,
                 kind: perry_hir::ir::ClassComputedMemberKind::Method,
                 source_order: 0,
+                names_declaration: false,
             }],
             decorators: Vec::new(),
             is_exported: false,

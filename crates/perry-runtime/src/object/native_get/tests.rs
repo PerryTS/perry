@@ -217,7 +217,9 @@ fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata()
     ));
 }
 
-static GETTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    static GETTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+}
 
 extern "C" fn getter(
     _closure: *const crate::closure::ClosureHeader,

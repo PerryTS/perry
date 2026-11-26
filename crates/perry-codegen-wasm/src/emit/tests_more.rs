@@ -206,29 +206,25 @@ console.log(all.map((e) => e.name + ":" + e.message).join(" "));
     );
 }
 
-// `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
-// 0..1 scale, mapped onto CSS 100..900 and clamped.
+// `textSetFontWeight(widget, size, weight)` sets both; the weight is Apple's
+// `systemFont(ofSize:weight:)` scale, as on macOS: bold is 0.4, not 1.
 #[test]
 fn text_set_font_weight_applies_the_size_and_the_weight() {
     assert_eq!(
         run_web_ui_source_then(
             r#"
 import { Text, textSetFontWeight } from "perry/ui";
-const a = Text("A");
-textSetFontWeight(a, 28, 1.0);
-const b = Text("B");
-textSetFontWeight(b, 16, 0.5);
-const c = Text("C");
-textSetFontWeight(c, 12, 700);
+const weights = [-0.4, 0, 0.23, 0.3, 0.4, 0.56, 1.0];
+for (let i = 0; i < weights.length; i++) textSetFontWeight(Text("W" + i), 16 + i, weights[i]);
 "#,
             r#"
-for (const label of ["A", "B", "C"]) {
-  const el = [...uiHandles.values()].find(e => e.textContent === label);
-  console.log(label + " " + el.style.fontSize + " " + el.style.fontWeight);
+for (let i = 0; i < 7; i++) {
+  const el = [...uiHandles.values()].find(e => e.textContent === "W" + i);
+  console.log(el.style.fontSize + " " + el.style.fontWeight);
 }
 "#
         ),
-        "A 28px 900\nB 16px 500\nC 12px 900"
+        "16px 300\n17px 400\n18px 500\n19px 600\n20px 700\n21px 800\n22px 900"
     );
 }
 
@@ -1486,6 +1482,9 @@ mod evaluated_builtin_subclass;
 #[path = "array_from_tests.rs"]
 mod array_from;
 
+#[path = "array_last_index_of_tests.rs"]
+mod array_last_index_of;
+
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 
@@ -1494,6 +1493,9 @@ mod thread_callback;
 
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
+
+#[path = "web_semantics_tests.rs"]
+mod web_semantics;
 
 #[path = "parse_int_radix_tests.rs"]
 mod parse_int_radix;
@@ -1538,3 +1540,6 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
 
 #[path = "array_iterator_tests.rs"]
 mod array_iterator;
+
+#[path = "web_layout_tests.rs"]
+mod web_layout;

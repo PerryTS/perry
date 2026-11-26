@@ -37,6 +37,7 @@ pub(super) fn lower_noncomputed_class_member_registration(
         is_static: method.is_static,
         kind,
         source_order,
+        names_declaration: true,
     })
 }
 

@@ -208,13 +208,36 @@ pub(super) fn rsa_private_key_to_pem(private_key: &RsaPrivateKey) -> Option<Stri
 }
 
 pub(crate) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
-    use rsa::pkcs1::DecodeRsaPublicKey;
-    use rsa::pkcs8::DecodePublicKey;
+    let (label, der) = rsa::pkcs8::Document::from_pem(pem).ok()?;
+    match label {
+        "PUBLIC KEY" => rsa_public_key_from_spki_der(der.as_bytes()),
+        "RSA PUBLIC KEY" => rsa_public_key_from_pkcs1_der(der.as_bytes()),
+        _ => parse_rsa_private_key_pem(pem).map(RsaPublicKey::from),
+    }
+}
 
-    RsaPublicKey::from_public_key_pem(pem)
-        .or_else(|_| RsaPublicKey::from_pkcs1_pem(pem))
-        .ok()
-        .or_else(|| parse_rsa_private_key_pem(pem).map(RsaPublicKey::from))
+/// OpenSSL's limit on the modulus of a public key operation. The `rsa` crate's
+/// decoders stop at 4096 bits.
+const RSA_MAX_PUBLIC_MODULUS_BITS: usize = 16384;
+
+pub(crate) fn rsa_public_key(n: RsaBigUint, e: RsaBigUint) -> Option<RsaPublicKey> {
+    RsaPublicKey::new_with_max_size(n, e, RSA_MAX_PUBLIC_MODULUS_BITS).ok()
+}
+
+pub(crate) fn rsa_public_key_from_spki_der(der: &[u8]) -> Option<RsaPublicKey> {
+    let spki = rsa::pkcs8::SubjectPublicKeyInfoRef::try_from(der).ok()?;
+    if spki.algorithm != rsa::pkcs1::ALGORITHM_ID {
+        return None;
+    }
+    rsa_public_key_from_pkcs1_der(spki.subject_public_key.as_bytes()?)
+}
+
+fn rsa_public_key_from_pkcs1_der(der: &[u8]) -> Option<RsaPublicKey> {
+    let key = rsa::pkcs1::RsaPublicKey::try_from(der).ok()?;
+    rsa_public_key(
+        RsaBigUint::from_bytes_be(key.modulus.as_bytes()),
+        RsaBigUint::from_bytes_be(key.public_exponent.as_bytes()),
+    )
 }
 
 pub(super) fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String> {
@@ -703,7 +726,7 @@ pub(super) unsafe fn jwk_rsa_public_to_pem(jwk_bits: u64) -> Option<String> {
     }
     let n = jwk_uint_field(jwk_bits, b"n")?;
     let e = jwk_uint_field(jwk_bits, b"e")?;
-    let key = RsaPublicKey::new(n, e).ok()?;
+    let key = rsa_public_key(n, e)?;
     rsa_public_key_to_pem(&key)
 }
 

@@ -491,6 +491,19 @@ impl ReadableStreamData {
         self.chunk_sizes.clear();
         self.queue_total_size = 0.0;
     }
+
+    /// ReadableStreamDefaultControllerClearAlgorithms /
+    /// ReadableByteStreamControllerClearAlgorithms: drop the underlying
+    /// source's algorithms and the strategy size so the source (and whatever
+    /// its closures capture) can be collected while the stream itself stays
+    /// referenced. Runs when the stream closes after its queue drained, when
+    /// it errors, and after the cancel algorithm ran; no path calls them after.
+    fn clear_algorithms(&mut self) {
+        self.start_cb = 0;
+        self.pull_cb = 0;
+        self.cancel_cb = 0;
+        self.strategy_size_cb = 0;
+    }
 }
 
 #[allow(dead_code)]
@@ -521,6 +534,18 @@ struct WritableStreamData {
     close_started: bool,
 }
 
+impl WritableStreamData {
+    /// WritableStreamDefaultControllerClearAlgorithms: drop the underlying
+    /// sink's algorithms and the strategy size. Runs right after the close
+    /// algorithm or the abort algorithm was called; no path calls them after.
+    fn clear_algorithms(&mut self) {
+        self.write_cb = 0;
+        self.close_cb = 0;
+        self.abort_cb = 0;
+        self.strategy_size_cb = 0;
+    }
+}
+
 struct TransformStreamData {
     props: perry_ffi::NativePropertyBag,
     readable_handle: usize,
@@ -529,6 +554,34 @@ struct TransformStreamData {
     flush_cb: i64,
     native: Option<NativeTransformKind>,
     backpressure: bool,
+}
+
+/// ClearAlgorithms of `stream_id`'s readable controller.
+fn readable_clear_algorithms(stream_id: usize) {
+    if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+        s.clear_algorithms();
+    }
+}
+
+/// ClearAlgorithms of `stream_id`'s writable controller.
+pub(super) fn writable_clear_algorithms(stream_id: usize) {
+    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+        s.clear_algorithms();
+    }
+}
+
+/// TransformStreamDefaultControllerClearAlgorithms for the TransformStream
+/// whose writable side is `writable_id` (a no-op for a plain writable): runs
+/// with the sink close algorithm (after flush), the sink abort algorithm
+/// (abort, readable cancel, terminate) and TransformStreamError.
+pub(super) fn transform_clear_algorithms(writable_id: usize) {
+    let Some(transform_id) = TRANSFORM_PAIRS.lock().unwrap().get(&writable_id).copied() else {
+        return;
+    };
+    if let Some(t) = TRANSFORM_STREAMS.lock().unwrap().get_mut(&transform_id) {
+        t.transform_cb = 0;
+        t.flush_cb = 0;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1402,6 +1455,9 @@ unsafe fn close_pending(stream_id: usize) {
         js_promise_resolve(p.get_raw_mut_ptr(), f64::from_bits(result));
     }
     byob::close_pending_byob(stream_id);
+    // ReadableStreamClose with the queue drained (or after the cancel
+    // algorithm ran): the controller's ClearAlgorithms step.
+    readable_clear_algorithms(stream_id);
     // #5437: stream is done — drop any expando entries so the table doesn't
     // grow one row per stream over the server's lifetime.
     expando::stream_expando_clear(stream_id);
@@ -1428,6 +1484,13 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
         js_promise_reject(p.get_raw_mut_ptr(), f64::from_bits(reason.get_nanbox_u64()));
     }
     byob::error_pending_byob(stream_id, reason.get_nanbox_u64());
+    // ReadableStreamDefaultControllerError / ReadableByteStreamControllerError
+    // clear the source algorithms; on a TransformStream's readable side this
+    // is TransformStreamError, which clears the transformer's too.
+    readable_clear_algorithms(stream_id);
+    if let Some(writable_id) = transform_writable_for_readable(stream_id) {
+        transform_clear_algorithms(writable_id);
+    }
     // #5437: stream errored — drop any expando entries (see close_pending).
     expando::stream_expando_clear(stream_id);
     idalloc::retire_readable_terminal(stream_id);
@@ -1719,12 +1782,20 @@ unsafe fn js_readable_stream_cancel_inner(
     let promise = js_promise_new();
     let id = stream_id(stream_handle);
     let mut locked_reject = false;
+    let mut stored_error = None;
     let cb = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) => {
                 if !allow_locked && s.reader_handle.is_some() {
                     locked_reject = true;
+                    0
+                } else if s.state == ReadableState::Errored {
+                    // ReadableStreamCancel step 3: an errored stream answers
+                    // with its stored error; the source (whose algorithms the
+                    // error cleared) is not consulted.
+                    s.disturbed = true;
+                    stored_error = Some(s.error_value);
                     0
                 } else {
                     s.canceled = true;
@@ -1739,6 +1810,10 @@ unsafe fn js_readable_stream_cancel_inner(
     };
     if locked_reject {
         reject_type_error(promise, "ReadableStream is locked");
+        return promise;
+    }
+    if let Some(error) = stored_error {
+        js_promise_reject(promise, f64::from_bits(error));
         return promise;
     }
     native::cancel_native(id);
@@ -2451,6 +2526,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
                         if let Some(error) = s.pending_error_after_chunks.take() {
                             s.state = ReadableState::Errored;
                             s.error_value = error;
+                            s.clear_algorithms();
                             if let Some(reader_id) = s.reader_handle {
                                 closed_rejection = Some((reader_id, error));
                             }

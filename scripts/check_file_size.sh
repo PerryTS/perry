@@ -40,13 +40,13 @@ crates/perry-runtime/src/typed_feedback.rs	2450
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	4942
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	16605
+crates/perry-codegen/tests/native_proof_regressions.rs	16607
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
 crates/perry-transform/src/inline/call_inliner.rs	2145
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
-crates/perry-stdlib/src/streams.rs	2454
+crates/perry-stdlib/src/streams.rs	2502
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2892
 # Shape registry table and publication invariants require a coordinated split.
@@ -66,7 +66,7 @@ crates/perry-wpfacts/src/builtins.rs	3132
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/solve/apply.rs	2784
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/gen_expr.rs	2504
+crates/perry-wpfacts/src/gen_expr.rs	2508
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/diagnostics.rs	2102
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.

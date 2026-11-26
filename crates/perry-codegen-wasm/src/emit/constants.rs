@@ -6,6 +6,9 @@
 
 use super::*;
 
+/// The value of `__platform__` on the web target (docs/src/platforms/overview.md).
+pub(super) const WEB_PLATFORM_ID: f64 = 5.0;
+
 #[derive(Clone)]
 pub(super) enum EnumResolvedValue {
     Number(f64),

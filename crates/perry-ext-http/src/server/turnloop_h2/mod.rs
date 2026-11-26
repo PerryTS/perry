@@ -24,7 +24,7 @@ pub(crate) mod target;
 mod tests;
 
 pub(crate) use conn::{connect_client, ClientTls};
-pub(crate) use native_server::{close_listener, listen};
+pub(crate) use native_server::listen;
 pub(crate) use stream::{
     destroy_stream, h2_begin_stream, h2_finish_body, h2_send_body, h2_send_response,
 };

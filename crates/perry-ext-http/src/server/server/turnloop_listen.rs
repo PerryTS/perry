@@ -244,7 +244,7 @@ mod tests {
         }
         fn close(handle: i64, listener: Option<f64>) {
             if let Some(id) = listener {
-                crate::server::turnloop_serve::close_listener(id);
+                crate::server::turnloop_serve::close_listener(id, handle);
             }
             drop_handle(handle);
         }

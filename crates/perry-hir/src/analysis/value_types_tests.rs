@@ -656,6 +656,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             is_static: false,
             kind: crate::ClassComputedMemberKind::Method,
             source_order: 0,
+            names_declaration: false,
         }],
         decorators: Vec::new(),
         is_exported: false,

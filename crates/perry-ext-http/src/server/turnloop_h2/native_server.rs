@@ -341,6 +341,3 @@ pub(crate) fn listen(
     )?;
     Ok((listener.get(), bound.port, bound.address))
 }
-pub(crate) fn close_listener(listener: f64) {
-    net::close_server(listener);
-}

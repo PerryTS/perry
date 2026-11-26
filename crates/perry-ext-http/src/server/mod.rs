@@ -286,7 +286,7 @@ extern "C" fn retire_transport_edges(agent: u64) {
             server.pending.clear();
             server.in_flight.clear();
             server.response_class = undefined;
-            server.pending_client_errors.clear();
+            server.with_client_errors(|errors| errors.clear());
             server.bun_promises.clear();
         }
     };
@@ -541,7 +541,7 @@ mod tests {
         let mut http = http_server(http_handler, listener_map("request", http_listener));
         http.once_listeners = listener_map("connection", http_once_listener);
         server::register_listen_callback(&mut http, http_listen_callback);
-        server::queue_deferred_close_emit(&mut http, http_close_callback);
+        server::deferred_events::register_close_callback(&mut http, http_close_callback);
         let http_handle = register_handle(http);
 
         let https_handler = young_gc_root();

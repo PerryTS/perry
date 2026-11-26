@@ -33,13 +33,13 @@ pub(crate) use in_flight::{
     finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
     reap_in_flight_requests, response_writable_ended, retire_response,
 };
-mod deferred_events;
+pub(crate) mod deferred_events;
 pub use deferred_events::ListenError;
-use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for};
 pub(crate) use deferred_events::{
-    queue_deferred_close_emit, queue_deferred_listening_emit, queue_listen_error_parts,
-    register_listen_callback, withdraw_listen_callbacks,
+    close_server, queue_deferred_close_emit, queue_deferred_listening_emit,
+    queue_listen_error_parts, register_listen_callback, withdraw_listen_callbacks,
 };
+use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for};
 mod turnloop_listen;
 use turnloop_listen::try_listen_on_turnloop;
 pub(crate) use turnloop_listen::{
@@ -893,20 +893,14 @@ fn finish_listen(server_handle: i64) {
     }
 }
 
-/// `server.close(cb?)` — stop accepting, fire `'close'`.
+/// `server.close(cb?)` — stop accepting; `'close'` fires once every connection
+/// has closed.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback: i64) {
-    if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        s.set_listening(false);
-        s.connections_checking_interval_destroyed = true;
-        queue_deferred_close_emit(s, callback);
-    }
     // P5: stop accepting. In-flight connections finish, which is Node's
     // contract; the idle ones are destroyed by `signal_connections_close`
     // below.
-    if let Some(listener) = crate::server::turnloop_serve::listener_for_server(server_handle) {
-        crate::server::turnloop_serve::close_listener(listener);
-    }
+    close_server(server_handle, callback);
     // A SCHED_RR worker has no listener of its own: tell its descriptor
     // bridge to stop handing connections over.
     if let Some(closed) = RR_INJECT_CLOSED

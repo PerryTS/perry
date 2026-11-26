@@ -3,7 +3,7 @@ use jni::JValue;
 
 /// Create a flexible spacer (Space widget with weight=1 in LinearLayout).
 pub fn create() -> i64 {
-    jni_bridge::with_env(|env| {
+    let handle = jni_bridge::with_env(|env| {
         let _ = jni_bridge::push_local_frame(env, 32);
         let activity = super::get_activity(env);
 
@@ -37,5 +37,8 @@ pub fn create() -> i64 {
             let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
         handle
-    })
+    });
+    // Spacers expand along their stack's main axis.
+    super::layout_intent(handle, 2, 1.0);
+    handle
 }

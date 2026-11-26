@@ -341,6 +341,9 @@ pub struct Gen<'a> {
     /// The (module, local, value node, `Fx::guard`) of the last local
     /// write walked (`narrow::Gen::narrow_assigned`).
     pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
+    /// Rule CU: the `charCodeAt` call being generated reads a code unit
+    /// (`Gen::code_unit_read`), decided before its arguments are walked.
+    pub(crate) code_unit_arg: bool,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
     /// Rule DA collectors of the `if`/`switch` statements being walked
@@ -863,6 +866,7 @@ impl<'a> Gen<'a> {
             record_locals: Default::default(),
             record_sources: Default::default(),
             last_local_set: None,
+            code_unit_arg: false,
             narrow: Vec::new(),
             def_collect: Vec::new(),
             in_bounds: Default::default(),

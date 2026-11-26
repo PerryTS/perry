@@ -23,6 +23,7 @@ pub mod network;
 pub mod notifications;
 pub mod pointer;
 pub mod screenshot;
+pub mod share;
 pub mod state;
 pub mod websocket;
 pub mod widgets;

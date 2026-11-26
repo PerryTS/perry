@@ -9,8 +9,8 @@
 
 use super::{
     build_iter_result, byob, close_pending, error_pending, idalloc, js_promise_resolve,
-    next_stream_id, stream_id, stream_value, throw_type_error, ReadableState, ReadableStreamData,
-    READABLE_STREAMS,
+    next_stream_id, readable_clear_algorithms, stream_id, stream_value, throw_type_error,
+    ReadableState, ReadableStreamData, READABLE_STREAMS,
 };
 use perry_runtime::array::{js_array_alloc, js_array_push};
 use perry_runtime::closure::ClosureHeader;
@@ -179,6 +179,9 @@ fn tee_unlink(source: usize, a: usize, b: usize) {
     // #6602: the unlinked source is terminal (close flow: Closed and drained
     // by pull discovery; error flow: stamped Errored above) — retire its id.
     // Its `TEE_LOCK_SENTINEL` reader_handle matches no READERS entry.
+    // Terminal source (closed and drained, errored, or canceled through both
+    // branches): its controller's ClearAlgorithms step.
+    readable_clear_algorithms(source);
     idalloc::retire_readable_terminal(source);
 }
 

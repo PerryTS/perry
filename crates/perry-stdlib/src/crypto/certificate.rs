@@ -158,10 +158,9 @@ pub unsafe extern "C" fn js_crypto_certificate_verify_spkac(input: f64) -> f64 {
         return js_bool(false);
     };
 
-    use rsa::pkcs8::DecodePublicKey;
-    let public_key = match RsaPublicKey::from_public_key_der(parts.spki_der) {
-        Ok(key) => key,
-        Err(_) => return js_bool(false),
+    let public_key = match rsa_public_key_from_spki_der(parts.spki_der) {
+        Some(key) => key,
+        None => return js_bool(false),
     };
     js_bool(verify_md5_rsa_pkcs1v15(
         &public_key,

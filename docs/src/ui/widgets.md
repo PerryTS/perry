@@ -146,7 +146,9 @@ for (let hour = 0; hour < 24; hour++) {
 Two distinct constructors:
 
 - `ImageFile(path)` — image from a file path
-- `ImageSymbol(name)` — SF Symbol glyph name (macOS/iOS only)
+- `ImageSymbol(name)` — SF Symbol glyph name on macOS and iOS. On the web target it draws
+  `symbols/<name>.svg` from beside the page, tinted by `imageSetTint`; the app ships those files
+  (see [WebAssembly / Web](../platforms/wasm.md#symbols)).
 
 ```typescript,no-test
 {{#include ../../examples/ui/widgets/image_symbol.ts}}
