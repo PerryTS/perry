@@ -105,7 +105,7 @@ fn array_from_family_not_pristine(value: f64) -> bool {
 /// small integers, #6454). #13486: `Array.from` must GetMethod these through
 /// the wrapper's prototype chain instead of reinterpreting the primitive's
 /// raw bits as a heap address.
-fn boxed_primitive_source(value: f64, bits: u64) -> bool {
+pub(crate) fn boxed_primitive_source(value: f64, bits: u64) -> bool {
     let jsv = JSValue::from_bits(bits);
     if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
         return true;
