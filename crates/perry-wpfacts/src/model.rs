@@ -3011,6 +3011,18 @@ pub struct Model {
     /// native module's values, interpreted code); key `None`: every key.
     /// Ordered by target, so the writes on one token are one range.
     pub native_writes: std::collections::BTreeMap<(Tok, Option<Atom>), NativeWrite>,
+    /// GUARDS1: the `ObjectProto` writes of [`Model::native_writes`] that may
+    /// land on `%Object.prototype%` itself, per key (`None`: every key), with
+    /// the first reason. A store, definition or delete whose receiver set
+    /// holds a builtin prototype taken as a value and no `ObjectProto`
+    /// (`solve::native_proto_alias`) is recorded under `ObjectProto` for the
+    /// collapsed model, but [[Set]] (no setter met), [[DefineOwnProperty]]
+    /// and [[Delete]] change the receiver alone (ECMA-262 10.1.9.2 step 2.c-e,
+    /// 10.1.6, 10.1.10): it lands on that prototype, whose own entry records
+    /// it, never on `%Object.prototype%`.
+    pub objproto_direct: std::collections::BTreeMap<Option<Atom>, u32>,
+    /// Set while such a receiver-only operation runs through the alias.
+    pub objproto_alias: bool,
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,

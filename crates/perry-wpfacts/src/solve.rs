@@ -1787,10 +1787,28 @@ impl Model {
             }
             return self.apply_tokens(n, c, Tokens::Slice(&rest), prim);
         }
+        // GUARDS1: a receiver-only operation (a store, a definition, a
+        // delete) through the alias changes the builtin prototype it holds,
+        // not `%Object.prototype%` (`Model::objproto_direct`); every other
+        // operation keeps counting as one on `%Object.prototype%`.
+        let saved = self.objproto_alias;
         if let Some(v) = self.native_proto_alias(c, toks) {
-            return self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
+            self.objproto_alias = matches!(
+                c,
+                Cons::Store { .. }
+                    | Cons::DeleteKey { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::DefineKey { .. }
+                    | Cons::DefineAll { .. }
+                    | Cons::DefineDesc { .. }
+            );
+            self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
+            self.objproto_alias = saved;
+            return;
         }
+        self.objproto_alias = false;
         self.apply_tokens_on(n, c, toks, prim);
+        self.objproto_alias = saved;
     }
     fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if crate::hold_ledger::blast()

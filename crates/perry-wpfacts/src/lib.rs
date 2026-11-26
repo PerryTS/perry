@@ -406,6 +406,13 @@ pub struct ProgramFacts {
     /// (`Model::array_iteration_writes`); `None`: compiled code never
     /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
     pub array_iteration_written: Option<String>,
+    /// GUARDS1: compiled code may write a typed view's metadata accessors
+    /// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array or
+    /// Buffer prototype or change such a prototype's [[Prototype]], and why
+    /// (`builtins::typed_metadata_writes`); `None`: it never does, and the
+    /// runtime's `PERRY_TYPED_NAMED_PROPS_INVALIDATED` stays clear for compiled
+    /// code. Interpreted code is [`ProgramFacts::interp_guard`]'s.
+    pub typed_metadata_written: Option<String>,
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
@@ -1393,6 +1400,11 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
+    let typed_metadata_written = if stats.aborted {
+        Some("solve aborted".to_string())
+    } else {
+        builtins::typed_metadata_writes(&g.m)
+    };
     let (array_iteration_written, array_iterator_close_written) = if stats.aborted {
         (
             Some("solve aborted".to_string()),
@@ -1554,6 +1566,7 @@ fn compute_act<'a>(
         native_extern_sites,
         array_iteration_written,
         array_iterator_close_written,
+        typed_metadata_written,
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,

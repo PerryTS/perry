@@ -326,12 +326,7 @@ pub(super) fn lower(
     // `P.length` reads the native length only while no typed array has a
     // named `length` property; nothing in the fast copy can define one, so
     // testing the flag once here keeps that arm dead for the whole loop.
-    let invalidated = ctx.block().load_atomic_acquire(
-        crate::types::I8,
-        "@PERRY_TYPED_NAMED_PROPS_INVALIDATED",
-        1,
-    );
-    let pristine = ctx.block().icmp_eq(crate::types::I8, &invalidated, "0");
+    let pristine = crate::expr::property_get::typed_named::emit_named_props_pristine(ctx);
     admitted = ctx.block().and(I1, &admitted, &pristine);
     let mut input_values = Vec::with_capacity(plan.inputs.len());
     for id in &plan.inputs {

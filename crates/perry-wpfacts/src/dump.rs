@@ -508,6 +508,7 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
             fnv(&mut h, &global);
             fnv(&mut h, &format!("{:?}", pf.dynamic_code_reach));
             fnv(&mut h, &sab);
+            fnv(&mut h, &format!("{:?}", pf.typed_metadata_written));
             for i in ids {
                 fnv(&mut h, &format!("{:016x}", per_tmpl[i]));
             }

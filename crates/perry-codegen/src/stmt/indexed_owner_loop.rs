@@ -1669,10 +1669,7 @@ pub(super) fn lower(
         let link_ptr = ctx.block().inttoptr(I64, &link_addr);
         let link = ctx.block().load(I64, &link_ptr);
         let no_bag = ctx.block().icmp_eq(I64, &link, "0");
-        let withdrawn =
-            ctx.block()
-                .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-        let builtin = ctx.block().icmp_eq(I8, &withdrawn, "0");
+        let builtin = crate::expr::property_get::typed_named::emit_named_props_pristine(ctx);
         let metadata_ok = ctx.block().and(I1, &no_bag, &builtin);
         branch_guard(ctx, &metadata_ok, &slow_l);
     }

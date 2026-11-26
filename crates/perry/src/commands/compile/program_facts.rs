@@ -414,6 +414,12 @@ pub(crate) fn run(
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
         eprintln!(
+            "perry: wpfacts: typed-array metadata {}",
+            pf.typed_metadata_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
+        eprintln!(
             "perry: wpfacts: array @@iterator {}; array iterator next/return {}",
             pf.array_iteration_written
                 .as_deref()
@@ -733,6 +739,13 @@ fn elision_for(
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
     out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
+    // GUARDS1 class 3. `PERRY_FACTS_SABOTAGE=typed-metadata-unwritten`:
+    // claim it for every program (the gap tests that redefine a typed-array
+    // prototype's `length` must fail).
+    out.typed_metadata_unwritten = pf.sabotage.as_deref() == Some("typed-metadata-unwritten")
+        || (!pf.stats.aborted
+            && pf.interp_guard.is_none()
+            && pf.typed_metadata_written.is_none());
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
