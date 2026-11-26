@@ -46,6 +46,9 @@ pub const NET_CLOSED: i32 = 7;
 pub const NET_ERROR: i32 = 8;
 /// Completion kind: a subsystem-owned deadline expired (P5); `id` names it.
 pub const NET_TIMER: i32 = 9;
+/// Completion kind: a link connect resolved its hostname; `data` holds the
+/// addresses as text, one per line.
+pub const NET_LOOKUP: i32 = 10;
 /// `NetCompletion::flags`: a link route's completion (`id` is an owner link).
 pub const NET_FLAG_LINK: i32 = 1;
 /// A link `Closed` for an earlier handle of a reopened, OPEN cell. Emit only

@@ -110,6 +110,9 @@ pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
+/// A link connect resolved its hostname, before the first attempt: `data`/`len`
+/// borrow the addresses as text, one per line.
+pub const NET_LOOKUP: i32 = 10;
 
 /// One completion, in the shape a separately linked binding can read.
 ///
@@ -204,6 +207,12 @@ impl NetCompletion {
         } else {
             bytes.as_ptr()
         };
+        c
+    }
+
+    pub(super) fn lookup(id: i64, addresses: &str) -> Self {
+        let mut c = Self::data(id, addresses.as_bytes());
+        c.kind = NET_LOOKUP;
         c
     }
 

@@ -38,6 +38,8 @@ pub(crate) struct SocketFields {
     pub peer: Option<SocketAddr>,
     pub host: String,
     pub port: u16,
+    /// The addresses a hostname connect reports through `'lookup'`.
+    pub wanted: super::payload_lookup::Wanted,
     pub encoding: Option<String>,
     pub timeout_ms: u64,
     pub tcp_async_id: u64,

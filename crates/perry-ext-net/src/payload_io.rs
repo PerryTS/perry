@@ -276,12 +276,18 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     unsafe { event.code() }.unwrap_or("EIO"),
                     target.as_ref(),
                 ));
+                // SAFETY: as above.
+                if unsafe { event.syscall() } == Some("getaddrinfo") {
+                    super::payload_lookup::failed(owner.get(), error.get());
+                }
                 socket::destroy(owner.get(), error.get());
             }
         }
         tl::NET_TIMER => {
             events::emit(owner.get(), "timeout", &[]);
         }
+        // SAFETY: The runtime keeps the completion and its spans valid until this sink returns.
+        tl::NET_LOOKUP => super::payload_lookup::resolved(owner.get(), unsafe { event.bytes() }),
         _ => {}
     }
 }
