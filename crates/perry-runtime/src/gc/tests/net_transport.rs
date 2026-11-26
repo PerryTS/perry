@@ -8,7 +8,7 @@ use super::support::*;
 use crate::native_payload::{self as np, CloseOutcome, NativePayloadFamily, OwnerLink};
 use crate::turnloop_net::transport::{self, TransportCore, TransportPayload};
 use crate::turnloop_net::{
-    NetCompletion, NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_FLAG_LINK,
+    NetCompletion, NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_ERROR, NET_FLAG_LINK,
 };
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -475,7 +475,10 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
     let cell = link.0;
     let stale_op = unsafe { transport::pending_resolve_for_test(cell) }
         .expect("the resolving socket still owes one pending resolve op");
-    assert!(!destroy(link), "resolving socket has no handle yet");
+    assert!(
+        destroy(link),
+        "a resolving socket owes its Closed like a handle"
+    );
     np::attach(
         socket.get_nanbox_f64(),
         &FAMILY,
@@ -501,6 +504,12 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
         transport::tcp_connect(c, link, "localhost", port, true).unwrap();
         transport::write(c, link, b"pre-connect".to_vec(), 1).unwrap();
     }
+    crate::turnloop_net::close_phase();
+    assert_eq!(
+        count(NET_CLOSED, link),
+        1,
+        "the destroyed incarnation's close"
+    );
     assert!(
         pump_until(|| count(NET_CONNECT, link) == 1),
         "new resolver must connect despite the old terminal completion"
@@ -521,6 +530,34 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
     assert_eq!(&bytes, b"pre-connect");
     assert!(destroy(link));
     assert!(pump_until(|| refs(link) == 0));
+}
+
+/// A socket closed while its name resolves owes a `Closed`, as Node's handle
+/// does: the close-callbacks phase delivers it, never a driver turn, and it
+/// pins the cell until then.
+#[test]
+fn a_socket_closed_while_resolving_gets_its_closed_from_the_close_phase() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "localhost", 1, true).unwrap();
+    }
+    assert!(destroy(link), "the resolving socket's Closed is owed");
+    assert!(crate::turnloop_net::close_queued());
+    assert!(
+        pump_until(|| refs(link) == 1),
+        "the cancelled resolve's ref goes"
+    );
+    assert_eq!(count(NET_CLOSED, link), 0, "no driver turn delivers it");
+    crate::turnloop_net::close_phase();
+    assert_eq!(count(NET_CLOSED, link), 1);
+    assert_eq!(count(NET_ERROR, link) + count(NET_CONNECT, link), 0);
+    assert!(!crate::turnloop_net::close_queued());
+    assert_eq!(refs(link), 0, "delivery released the queued ref");
 }
 
 /// N11: the pipe server path. `close()`, a synchronous unlink (the binding's
