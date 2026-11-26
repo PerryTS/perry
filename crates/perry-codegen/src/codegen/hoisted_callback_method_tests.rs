@@ -233,6 +233,7 @@ fn nested_closure_calls_are_not_assigned_the_outer_methods_ssa_target() {
         ..param(701, "value", Type::Any)
     };
     let nested = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 700,
         params: vec![nested_param],

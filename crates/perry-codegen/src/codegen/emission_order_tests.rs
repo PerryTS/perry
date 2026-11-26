@@ -234,6 +234,7 @@ fn closure_display_module() -> Module {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id,
                 params: Vec::new(),

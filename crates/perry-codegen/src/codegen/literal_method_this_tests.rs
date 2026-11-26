@@ -117,6 +117,7 @@ fn this_a() -> Expr {
 /// closure clones, so the public symbol is the ordinary body.
 fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

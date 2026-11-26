@@ -2333,6 +2333,7 @@ mod tests {
         let mut expr = Expr::Integer(1);
         for func_id in 0..depth as u32 {
             expr = Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id,
                 params: Vec::new(),

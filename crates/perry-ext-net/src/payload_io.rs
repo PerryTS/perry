@@ -760,13 +760,13 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
     // immediately, before allocation.
     let parent = scope.root_nanbox(unsafe { np::link_event_owner(link) }.unwrap_or(owner.get()));
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let mut record = scope.root_nanbox(
+    // A socket closed while resolving had no handle; destroy filed it as [0; 4].
+    let mut record = scope.root_nanbox(closed::take(
+        state.get(),
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
-        unsafe { event.closed_handle_parts() }
-            .map(|parts| closed::take(state.get(), parts))
-            .unwrap_or_else(p::undefined),
-    );
+        unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
+    ));
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     if event.flags & tl::NET_FLAG_STALE == 0 && unsafe { p::socket_ptr(link) }.is_ok() {

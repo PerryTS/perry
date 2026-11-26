@@ -144,6 +144,7 @@ fn private_frame_lifetime_cannot_cross_its_consumer_scope() {
 fn private_frame_capture_even_without_body_read_is_an_escape() {
     let mut m = fixture(Type::Any);
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![],
@@ -240,6 +241,7 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
         (Expr::Number(1.0), true),
         (
             Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 9,
                 params: vec![],

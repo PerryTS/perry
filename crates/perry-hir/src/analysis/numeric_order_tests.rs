@@ -49,6 +49,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 }
 fn callback(body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: [17, 23]
@@ -156,6 +157,7 @@ fn sign_proof_accepts_control_flow_coercions_aliases_and_both_directions() {
 fn sign_proof_closes_helpers_and_projection_bodies_transitively() {
     let helper = callback(branches());
     let project = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 100,
         params: vec![Param {

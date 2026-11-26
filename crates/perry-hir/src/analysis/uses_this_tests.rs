@@ -174,6 +174,7 @@ fn nested_closures_propagate_only_captured_bindings() {
     for captures_this in [false, true] {
         for captures_new_target in [false, true] {
             let nested = Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 99,
                 params: vec![],

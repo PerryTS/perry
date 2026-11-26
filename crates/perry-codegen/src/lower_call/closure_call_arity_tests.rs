@@ -59,6 +59,7 @@ fn closure_value_call_ir(file: &str, argc: usize) -> String {
         ty: function_type(argc),
         mutable: false,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 7,
             params: params(100, argc),

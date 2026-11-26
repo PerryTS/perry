@@ -124,23 +124,25 @@ console.log(typeof q.addSubnet, typeof q.check);
         "aliased BlockList still carries the local alias name; HIR:\n{aliased}"
     );
     // And it must match the un-aliased HIR for the relevant lines, modulo
-    // `byte_offset` (the alias source text is longer, so offsets legitimately
-    // shift — only the class identity must be identical).
+    // source positions (the alias source text has a different length, so
+    // offsets legitimately shift — only the class identity must be identical).
+    let strip_digits_after = |line: &str, key: &str| -> String {
+        let mut out = String::new();
+        let mut rest = line;
+        while let Some(idx) = rest.find(key) {
+            out.push_str(&rest[..idx]);
+            rest = &rest[idx + key.len()..];
+            rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        out.push_str(rest);
+        out
+    };
     let pick = |hir: &str| -> Vec<String> {
         hir.lines()
             .filter(|l| l.contains("BlockList") || l.contains("addSubnet"))
             .map(|l| {
-                // Drop every `byte_offset: <n>` so position-only differences
-                // don't fail the identity check.
-                let mut out = String::new();
-                let mut rest = l.trim();
-                while let Some(idx) = rest.find("byte_offset: ") {
-                    out.push_str(&rest[..idx]);
-                    rest = &rest[idx + "byte_offset: ".len()..];
-                    rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
-                }
-                out.push_str(rest);
-                out
+                let l = strip_digits_after(l.trim(), "byte_offset: ");
+                strip_digits_after(&l, "byte_end: ")
             })
             .collect()
     };
