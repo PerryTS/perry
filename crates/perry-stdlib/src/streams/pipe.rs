@@ -1,8 +1,8 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::state::{
-    insert_reader, insert_writer, rs_rec, transform_of_writable, with_reader, with_writer, ws_rec,
-    ReaderData, ReaderRef, RsRef, WriterData, WriterRef, WsRef,
+    insert_reader, insert_writer, remove_reader, remove_writer, rs_rec, transform_of_writable,
+    ws_rec, ReaderData, ReaderRef, RsRef, WriterData, WriterRef, WsRef,
 };
 use super::{
     box_promise, idalloc, internal_promise, js_writable_stream_close, maybe_pull, next_stream_id,
@@ -32,7 +32,7 @@ struct PipeState {
 
 /// pipeTo's AcquireReadableStreamDefaultReader + AcquireWritableStreamDefault-
 /// Writer: a real reader and writer record lock the pair for the pipe's life
-/// (`release_pipe_locks` releases and retires them like `releaseLock()`).
+/// (`release_pipe_locks` releases them, drops the records and retires the ids).
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
     let reader_id = next_stream_id();
     let writer_id = next_stream_id();
@@ -106,9 +106,10 @@ fn try_acquire_pipe_locks(
 }
 
 /// Release the pipe's reader and writer (ReadableStreamDefaultReaderRelease /
-/// WritableStreamDefaultWriterRelease) and retire their ids. A duplicate
-/// release (close-fulfilled then a late rejection) finds them released and
-/// does nothing.
+/// WritableStreamDefaultWriterRelease). Their records are removed at once and
+/// only the ids are retired: no wrapper of a pipe lock exists, so the
+/// quarantine has nothing to keep for them. A duplicate release
+/// (close-fulfilled then a late rejection) finds no record and does nothing.
 fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {
     if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
         if s.reader_handle == Some(locks.reader_id) {
@@ -120,27 +121,11 @@ fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds
             s.writer_handle = None;
         }
     }
-    let reader_released = with_reader(ReaderRef(locks.reader_id), |r| {
-        let release = r.locked && r.stream_handle == readable_id;
-        if release {
-            r.locked = false;
-        }
-        release
-    })
-    .unwrap_or(false);
-    if reader_released {
-        idalloc::retire_reader_if_released(locks.reader_id);
+    if remove_reader(ReaderRef(locks.reader_id)).is_some() {
+        idalloc::retire_unused_id(locks.reader_id);
     }
-    let writer_released = with_writer(WriterRef(locks.writer_id), |w| {
-        let release = w.locked && w.stream_handle == writable_id;
-        if release {
-            w.locked = false;
-        }
-        release
-    })
-    .unwrap_or(false);
-    if writer_released {
-        idalloc::retire_writer_if_released(locks.writer_id);
+    if remove_writer(WriterRef(locks.writer_id)).is_some() {
+        idalloc::retire_unused_id(locks.writer_id);
     }
 }
 
@@ -934,6 +919,7 @@ mod tests {
 
     #[test]
     fn pipe_locks_are_real_reader_and_writer_records_released_once() {
+        use crate::streams::state::{reader_exists, with_reader, with_writer, writer_exists};
         let _serial = crate::streams::tests::serial_guard();
         idalloc::test_reset_pools();
         let readable = alloc_readable(0, 0, 0, 1.0);
@@ -957,10 +943,10 @@ mod tests {
         release_pipe_locks(readable, writable, locks);
         assert_eq!(idalloc::test_pool_occurrences(locks.reader_id), 1);
         assert_eq!(idalloc::test_pool_occurrences(locks.writer_id), 1);
-        assert_eq!(
-            with_reader(ReaderRef(locks.reader_id), |r| r.locked),
-            Some(false)
-        );
+        // No wrapper of a pipe lock exists: release drops the records, only
+        // the bare ids sit in the quarantine.
+        assert!(!reader_exists(ReaderRef(locks.reader_id)));
+        assert!(!writer_exists(WriterRef(locks.writer_id)));
         assert!(rs_rec(RsRef(readable)).unwrap().reader_handle.is_none());
         assert!(ws_rec(WsRef(writable)).unwrap().writer_handle.is_none());
         // The live streams themselves stay out of the pools.
