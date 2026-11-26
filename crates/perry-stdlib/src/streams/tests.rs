@@ -16,9 +16,7 @@ pub(crate) fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
 
 fn alloc_closed_readable() -> usize {
     let id = alloc_readable(0, 0, 0, 1.0);
-    let mut g = READABLE_STREAMS.lock().unwrap();
-    g.get_mut(&id).unwrap().state = ReadableState::Closed;
-    drop(g);
+    with_rs(RsRef(id), |s| s.state = ReadableState::Closed).unwrap();
     id
 }
 
@@ -56,11 +54,11 @@ fn terminal_stream_ids_recycle_after_quarantine_eviction() {
     // The third retire overflowed the quarantine of 2: the oldest id lost its
     // registry entry (eviction really cleans up)…
     assert!(
-        !READABLE_STREAMS.lock().unwrap().contains_key(&ids[0]),
+        !rs_exists(RsRef(ids[0])),
         "evicted id must leave the registry"
     );
     assert!(
-        READABLE_STREAMS.lock().unwrap().contains_key(&ids[2]),
+        rs_exists(RsRef(ids[2])),
         "quarantined id keeps its registry entry"
     );
     // …and the allocator hands it back, oldest first, before any fresh id.
@@ -80,8 +78,6 @@ fn retire_is_idempotent_per_id() {
     let id = alloc_closed_readable();
     idalloc::retire_readable_terminal(id);
     idalloc::retire_readable_terminal(id);
-    // The pipe-lock path must also skip it: it carries no ownership mark.
-    idalloc::retire_pipe_lock_id(id);
     assert_eq!(
         idalloc::test_pool_occurrences(id),
         1,
@@ -95,32 +91,15 @@ fn live_stream_ids_never_enter_the_pool() {
     idalloc::test_reset_pools();
     let id = alloc_readable(0, 0, 0, 1.0);
     idalloc::retire_readable_terminal(id); // Readable → not terminal
-    idalloc::retire_pipe_lock_id(id); // no ownership mark → guarded
     assert_eq!(idalloc::test_pool_occurrences(id), 0);
-    {
-        // Closed but undrained (slow consumer with queued chunks) stays live.
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        let s = g.get_mut(&id).unwrap();
+    // Closed but undrained (slow consumer with queued chunks) stays live.
+    with_rs(RsRef(id), |s| {
         s.state = ReadableState::Closed;
         s.push_chunk(TAG_UNDEFINED, 1.0);
-    }
+    })
+    .unwrap();
     idalloc::retire_readable_terminal(id);
     assert_eq!(idalloc::test_pool_occurrences(id), 0);
-}
-
-#[test]
-fn pipe_lock_ids_retire_once_via_ownership_mark() {
-    let _serial = serial_guard();
-    idalloc::test_reset_pools();
-    let id = idalloc::next_pipe_lock_id();
-    idalloc::retire_pipe_lock_id(id);
-    idalloc::retire_pipe_lock_id(id); // stale duplicate release: mark gone
-    assert_eq!(idalloc::test_pool_occurrences(id), 1);
-    // A live registered id is untouchable through the pipe path even though
-    // it, too, has no ownership mark.
-    let live = alloc_readable(0, 0, 0, 1.0);
-    idalloc::retire_pipe_lock_id(live);
-    assert_eq!(idalloc::test_pool_occurrences(live), 0);
 }
 
 /// #12862: a keep-alive fetch whose small body is fully queued and closed
@@ -140,13 +119,13 @@ fn whole_body_collected_after_close_retires_its_stream_id() {
         let body = js_promise_new();
         unsafe {
             native_enqueue(id, b"0123456789abcdef");
-            js_readable_stream_controller_close(controller_value(id));
+            js_readable_stream_controller_close(id.controller_value());
             collect_body(id, body, String::new(), byte_count);
         }
         assert_eq!(js_promise_state(body), 1, "the body promise resolves");
         assert_eq!(js_promise_value(body), 16.0, "with the whole queued body");
-        if idalloc::test_pool_occurrences(id) == 0 {
-            live.push(id);
+        if idalloc::test_pool_occurrences(id.0) == 0 {
+            live.push(id.0);
         }
     }
     assert!(
@@ -162,22 +141,15 @@ fn attached_reader_dies_with_terminal_stream_but_not_before() {
     idalloc::test_reset_pools();
     let stream = alloc_readable(0, 0, 0, 1.0);
     let reader = next_stream_id();
-    READERS.lock().unwrap().insert(
-        reader,
-        ReaderData {
-            props: Default::default(),
-            stream_handle: stream,
-            locked: true,
-            closed_promise: 0x2345_6780 as *mut Promise,
-            is_byob: false,
-        },
+    insert_reader(
+        ReaderRef(reader),
+        ReaderData::new(stream, 0x2345_6780 as *mut Promise, false),
     );
-    {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        let s = g.get_mut(&stream).unwrap();
+    with_rs(RsRef(stream), |s| {
         s.reader_handle = Some(reader);
         s.state = ReadableState::Closed;
-    }
+    })
+    .unwrap();
     // A still-locked reader does not retire on its own…
     idalloc::retire_reader_if_released(reader);
     assert_eq!(idalloc::test_pool_occurrences(reader), 0);
@@ -189,41 +161,17 @@ fn attached_reader_dies_with_terminal_stream_but_not_before() {
 
 #[test]
 fn root_scanner_emits_callbacks_chunks_and_promises() {
-    // Clears READABLE_STREAMS wholesale — serialize against the allocator
-    // tests, whose assertions read that registry.
+    // Clears the readable registry wholesale — serialize against the
+    // allocator tests, whose assertions read it.
     let _serial = serial_guard();
-    {
-        let mut readable = READABLE_STREAMS.lock().unwrap();
-        readable.clear();
-        readable.insert(
-            1,
-            ReadableStreamData {
-                props: Default::default(),
-                native_source: None,
-                tee_cancel_promise: None,
-                body_consumer: None,
-                state: ReadableState::Errored,
-                chunks: VecDeque::from([0x7FFD_0000_0000_1234, 0x7FFA_0000_0000_2345]),
-                chunk_sizes: VecDeque::from([1.0, 1.0]),
-                queue_total_size: 2.0,
-                pending_reads: VecDeque::from([0x2345_6780 as *mut Promise]),
-                start_cb: 0x3456_7890,
-                pull_cb: 0,
-                cancel_cb: 0,
-                high_water_mark: 1.0,
-                strategy_size_cb: 0,
-                is_byte_stream: false,
-                pull_returns_byte_chunk: false,
-                pulling: false,
-                started: false,
-                reader_handle: None,
-                error_value: 0x7FFF_0000_0000_4567,
-                pending_error_after_chunks: None,
-                canceled: false,
-                disturbed: false,
-            },
-        );
-    }
+    state::test_clear_readables();
+    let mut record = ReadableStreamData::new(0x3456_7890, 0, 0, 0, 1.0, false);
+    record.state = ReadableState::Errored;
+    record.push_chunk(0x7FFD_0000_0000_1234, 1.0);
+    record.push_chunk(0x7FFA_0000_0000_2345, 1.0);
+    record.pending_reads.push_back(0x2345_6780 as *mut Promise);
+    record.error_value = 0x7FFF_0000_0000_4567;
+    insert_rs(RsRef(1), record);
 
     let mut emitted = Vec::new();
     scan_stream_roots(&mut |value| emitted.push(value.to_bits()));
@@ -233,7 +181,7 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
     assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
     assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
     assert!(emitted.contains(&0x7FFF_0000_0000_4567));
-    READABLE_STREAMS.lock().unwrap().clear();
+    state::test_clear_readables();
 }
 
 #[test]
@@ -254,47 +202,34 @@ fn transform_root_scanner_writes_relocated_pointers_back() {
         }
     }
 
-    let _serial = serial_guard();
-    transform::TRANSFORM_WRITE_RELEASES
-        .lock()
-        .unwrap()
-        .insert(0xA001, vec![0x2100]);
-    transform::TRANSFORM_PENDING_CLOSE
-        .lock()
-        .unwrap()
-        .insert(0xA002, 0x3100);
-    transform::TRANSFORM_BACKPRESSURED_JOBS
-        .lock()
-        .unwrap()
-        .insert(0xA003, vec![0x4100]);
-
-    super::gc::scan_transform_deferred_roots(&mut RelocatingVisitor);
-
+    // The transform bookkeeping of a readable (parked writes, deferred jobs)
+    // and of a writable (deferred close) is traced with its record, and a
+    // moving visitor's rewrite lands in the record.
+    let mut readable = ReadableStreamData::new(0, 0, 0, 0, 1.0, false);
+    readable
+        .transform_parked_writes
+        .push(0x2100 as *mut Promise);
+    readable
+        .transform_backpressured_jobs
+        .push(0x4100 as *mut ClosureHeader);
+    readable.trace(&mut RelocatingVisitor);
     assert_eq!(
-        transform::TRANSFORM_WRITE_RELEASES.lock().unwrap()[&0xA001],
-        vec![0x3100]
+        readable.transform_parked_writes,
+        vec![0x3100 as *mut Promise]
     );
     assert_eq!(
-        transform::TRANSFORM_PENDING_CLOSE.lock().unwrap()[&0xA002],
-        0x4100
-    );
-    assert_eq!(
-        transform::TRANSFORM_BACKPRESSURED_JOBS.lock().unwrap()[&0xA003],
-        vec![0x5100]
+        readable.transform_backpressured_jobs,
+        vec![0x5100 as *mut ClosureHeader]
     );
 
-    transform::TRANSFORM_WRITE_RELEASES
-        .lock()
-        .unwrap()
-        .remove(&0xA001);
-    transform::TRANSFORM_PENDING_CLOSE
-        .lock()
-        .unwrap()
-        .remove(&0xA002);
-    transform::TRANSFORM_BACKPRESSURED_JOBS
-        .lock()
-        .unwrap()
-        .remove(&0xA003);
+    let mut writable =
+        WritableStreamData::new(0, 0, 0, 0, 1.0, std::ptr::null_mut(), std::ptr::null_mut());
+    writable.transform_pending_close = Some(0x3100 as *mut Promise);
+    writable.trace(&mut RelocatingVisitor);
+    assert_eq!(
+        writable.transform_pending_close,
+        Some(0x4100 as *mut Promise)
+    );
 }
 
 #[test]
@@ -335,21 +270,11 @@ fn transform_terminate_closes_readable_and_errors_writable() {
     let controller = controller_value(stream_id(readable));
     assert!(unsafe { dispatch_stream_method(controller, "terminate", &[]) }.is_some());
     assert!(matches!(
-        READABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&stream_id(readable))
-            .unwrap()
-            .state,
+        rs_rec(RsRef(stream_id(readable))).as_deref().unwrap().state,
         ReadableState::Closed
     ));
     assert!(matches!(
-        WRITABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&stream_id(writable))
-            .unwrap()
-            .state,
+        ws_rec(WsRef(stream_id(writable))).as_deref().unwrap().state,
         WritableState::Errored
     ));
 }
@@ -372,27 +297,15 @@ fn pipe_through_rejects_locked_endpoints_before_starting() {
     let output = alloc_readable(0, 0, 0, 1.0);
     let destination = alloc_writable(0, 0, 0, 1.0);
 
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&source)
-        .unwrap()
-        .reader_handle = Some(1);
+    rs_rec(RsRef(source)).as_deref_mut().unwrap().reader_handle = Some(1);
     assert_eq!(
         pipe_through_validation_error(source, destination, output),
         Some("ReadableStream is locked")
     );
 
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&source)
-        .unwrap()
-        .reader_handle = None;
-    WRITABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&destination)
+    rs_rec(RsRef(source)).as_deref_mut().unwrap().reader_handle = None;
+    ws_rec(WsRef(destination))
+        .as_deref_mut()
         .unwrap()
         .writer_handle = Some(2);
     assert_eq!(
@@ -417,10 +330,8 @@ fn buffered_tee_demand_skips_only_the_cold_source_hop() {
     perry_runtime::promise::js_promise_run_microtasks();
 
     let buffered = alloc_readable(0, 0, 0, 1.0);
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&buffered)
+    rs_rec(RsRef(buffered))
+        .as_deref_mut()
         .unwrap()
         .push_chunk(TAG_UNDEFINED, 1.0);
     unsafe {
@@ -443,9 +354,7 @@ fn buffered_tee_demand_skips_only_the_cold_source_hop() {
         "an empty cold source must retain the Flight-calibrated demand hop"
     );
 
-    let mut streams = READABLE_STREAMS.lock().unwrap();
-    streams.remove(&buffered);
-    streams.remove(&empty);
+    state::test_remove(&[buffered, empty]);
 }
 
 /// Not a NaN-boxed value any call passes: "`next()` never ran".
@@ -687,12 +596,7 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
         assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
         assert!(dispatch_stream_method(controller, "terminate", &[]).is_some());
         assert!(matches!(
-            READABLE_STREAMS
-                .lock()
-                .unwrap()
-                .get(&stream_id(readable))
-                .unwrap()
-                .state,
+            rs_rec(RsRef(stream_id(readable))).as_deref().unwrap().state,
             ReadableState::Closed
         ));
     }
@@ -745,8 +649,8 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
     // Each string is handed to the stream before the next allocation, so no
     // raw pointer is held across a collection point.
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        let s = g.get_mut(&id).unwrap();
+        let mut rec = rs_rec(RsRef(id)).unwrap();
+        let s = &mut *rec;
         let chunk = js_string_from_bytes(b"partial".as_ptr(), 7);
         s.push_chunk(JSValue::string_ptr(chunk).bits(), 1.0);
         s.started = true;
@@ -757,7 +661,7 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
         s.pending_error_after_chunks = Some(JSValue::string_ptr(reason).bits());
     }
     let before = perry_runtime::promise::rejection::unhandled_rejection_count();
-    let bytes = drain_readable_into_bytes(id);
+    let bytes = drain_readable_into_bytes(RsRef(id));
     assert_eq!(
         bytes, b"partial",
         "the chunk yielded before the error is still delivered"
@@ -847,15 +751,17 @@ fn algorithm_calls() -> usize {
 }
 
 fn readable_algorithms(id: usize) -> [i64; 4] {
-    let g = READABLE_STREAMS.lock().unwrap();
-    let s = g.get(&id).unwrap();
-    [s.start_cb, s.pull_cb, s.cancel_cb, s.strategy_size_cb]
+    with_rs(RsRef(id), |s| {
+        [s.start_cb, s.pull_cb, s.cancel_cb, s.strategy_size_cb]
+    })
+    .unwrap()
 }
 
 fn writable_algorithms(id: usize) -> [i64; 4] {
-    let g = WRITABLE_STREAMS.lock().unwrap();
-    let s = g.get(&id).unwrap();
-    [s.write_cb, s.close_cb, s.abort_cb, s.strategy_size_cb]
+    with_ws(WsRef(id), |s| {
+        [s.write_cb, s.close_cb, s.abort_cb, s.strategy_size_cb]
+    })
+    .unwrap()
 }
 
 #[test]
@@ -870,8 +776,8 @@ fn readable_keeps_algorithms_while_close_requested_and_clears_them_once_drained(
         counting_closure1(),
     );
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        let s = g.get_mut(&id).unwrap();
+        let mut rec = rs_rec(RsRef(id)).unwrap();
+        let s = &mut *rec;
         s.started = true;
         s.push_chunk(1.0f64.to_bits(), 1.0);
     }
@@ -913,7 +819,7 @@ fn readable_error_clears_algorithms_and_cancel_answers_the_stored_error() {
     assert_eq!(perry_runtime::promise::js_promise_reason(cancel), 5.0);
     assert_eq!(algorithm_calls(), calls);
     assert!(matches!(
-        READABLE_STREAMS.lock().unwrap().get(&id).unwrap().state,
+        rs_rec(RsRef(id)).as_deref().unwrap().state,
         ReadableState::Errored
     ));
 }
@@ -960,7 +866,7 @@ fn writable_close_clears_after_the_close_algorithm_and_abort_keeps_closed() {
         "a closed stream never calls abort"
     );
     assert!(matches!(
-        WRITABLE_STREAMS.lock().unwrap().get(&id).unwrap().state,
+        ws_rec(WsRef(id)).as_deref().unwrap().state,
         WritableState::Closed
     ));
 }
@@ -984,12 +890,7 @@ fn writable_abort_runs_the_abort_algorithm_once_and_keeps_the_stored_error() {
     assert_eq!(perry_runtime::promise::js_promise_state(second), 1);
     assert_eq!(algorithm_calls(), calls + 1);
     assert_eq!(
-        WRITABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&id)
-            .unwrap()
-            .error_value,
+        ws_rec(WsRef(id)).as_deref().unwrap().error_value,
         4.0f64.to_bits()
     );
 }
@@ -1016,9 +917,8 @@ fn transform_flush_clears_the_transformer() {
     js_promise_run_microtasks();
     assert_eq!(algorithm_calls(), calls + 1, "flush runs once");
     assert_eq!(perry_runtime::promise::js_promise_state(close), 1);
-    let g = TRANSFORM_STREAMS.lock().unwrap();
-    let t = g.get(&transform_id).unwrap();
-    assert_eq!((t.transform_cb, t.flush_cb), (0, 0));
+    let algorithms = with_ts(TsRef(transform_id), |t| (t.transform_cb, t.flush_cb)).unwrap();
+    assert_eq!(algorithms, (0, 0));
 }
 
 #[test]
@@ -1037,7 +937,6 @@ fn transform_readable_error_clears_the_transformer() {
     let transform_id = stream_id(stream);
     let readable = stream_id(unsafe { js_transform_stream_readable(stream) });
     unsafe { js_readable_stream_controller_error(controller_value(readable), 9.0) };
-    let g = TRANSFORM_STREAMS.lock().unwrap();
-    let t = g.get(&transform_id).unwrap();
-    assert_eq!((t.transform_cb, t.flush_cb), (0, 0));
+    let algorithms = with_ts(TsRef(transform_id), |t| (t.transform_cb, t.flush_cb)).unwrap();
+    assert_eq!(algorithms, (0, 0));
 }

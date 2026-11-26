@@ -66,13 +66,11 @@ unsafe fn alloc_transform_stream_with_strategies(
     (r_hwm, r_size_cb): (f64, i64),
 ) -> f64 {
     ensure_gc_registered();
-    ensure_streams_thread_exit_hook();
 
     // Allocate the readable side empty (controller is its own handle).
     let readable_id = alloc_readable_with_strategy(0, 0, 0, r_hwm, false, r_size_cb);
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&readable_id) {
+        if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
             s.started = true;
             s.high_water_mark = if r_hwm.is_nan() { 0.0 } else { r_hwm.max(0.0) };
         }
@@ -84,38 +82,28 @@ unsafe fn alloc_transform_stream_with_strategies(
     let ready = internal_promise();
     let closed = internal_promise();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
-    WRITABLE_STREAMS.lock().unwrap().insert(
-        writable_id,
-        WritableStreamData {
-            props: Default::default(),
-            state: WritableState::Writable,
-            // Sentinel: write_cb=0, close_cb=0 — the dispatcher checks
-            // TRANSFORM_PAIRS first and routes through the user transform_cb /
-            // flush_cb instead.
-            write_cb: 0,
-            close_cb: 0,
-            abort_cb: 0,
-            strategy_size_cb: w_size_cb,
-            write_queue: VecDeque::new(),
-            in_flight_size: 0.0,
-            in_flight: false,
-            high_water_mark: if w_hwm.is_nan() || w_hwm <= 0.0 {
-                1.0
-            } else {
-                w_hwm
-            },
-            writer_handle: None,
-            error_value: 0,
-            ready_promise: ready,
-            closed_promise: closed,
-            close_request_promise: std::ptr::null_mut(),
-            close_started: false,
+    // Sentinel: write_cb=0, close_cb=0 — the dispatcher checks the writable's
+    // `owner_transform` first and routes through the user transform_cb /
+    // flush_cb instead.
+    let mut writable = WritableStreamData::new(
+        0,
+        0,
+        0,
+        w_size_cb,
+        if w_hwm.is_nan() || w_hwm <= 0.0 {
+            1.0
+        } else {
+            w_hwm
         },
+        ready,
+        closed,
     );
 
     let id = next_stream_id();
-    TRANSFORM_STREAMS.lock().unwrap().insert(
-        id,
+    writable.owner_transform = Some(id);
+    insert_ws(WsRef(writable_id), writable);
+    insert_ts(
+        TsRef(id),
         TransformStreamData {
             props: Default::default(),
             readable_handle: readable_id,
@@ -124,9 +112,10 @@ unsafe fn alloc_transform_stream_with_strategies(
             flush_cb,
             native,
             backpressure: r_hwm <= 0.0,
+            expando: Vec::new(),
         },
     );
-    TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
+    with_rs(RsRef(readable_id), |s| s.owner_transform = Some(id));
 
     // #1644: TransformStream `start(controller)` fires synchronously at
     // construction. The controller is the readable-side handle (same value the
@@ -161,10 +150,8 @@ pub unsafe extern "C" fn js_transform_stream_new_from_transformer_object(
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_readable(handle: f64) -> f64 {
     let id = stream_id(handle);
-    TRANSFORM_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+    ts_rec(TsRef(id))
+        .as_deref()
         .map(|t| stream_value(t.readable_handle))
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
@@ -172,23 +159,15 @@ pub unsafe extern "C" fn js_transform_stream_readable(handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_writable(handle: f64) -> f64 {
     let id = stream_id(handle);
-    TRANSFORM_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+    ts_rec(TsRef(id))
+        .as_deref()
         .map(|t| stream_value(t.writable_handle))
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
-pub(super) static TRANSFORM_PAIRS: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
 pub(super) fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
-    TRANSFORM_STREAMS
-        .lock()
-        .unwrap()
-        .values()
-        .find_map(|t| (t.readable_handle == readable_id).then_some(t.writable_handle))
+    let transform = transform_of_readable(RsRef(readable_id))?;
+    with_ts(transform, |t| t.writable_handle)
 }
 
 /// Replacement `writer.write` for the writable side of a TransformStream
@@ -198,8 +177,7 @@ pub(super) fn transform_writable_for_readable(readable_id: usize) -> Option<usiz
 pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     let promise = js_promise_new();
     {
-        let g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get(&writable_id) {
+        match ws_rec(WsRef(writable_id)).as_deref() {
             Some(s) if s.state == WritableState::Writable => {}
             Some(s) if s.state == WritableState::Errored => {
                 js_promise_reject(promise, f64::from_bits(s.error_value));
@@ -215,25 +193,21 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
     let mut handled_native = false;
     let mut native_error = None;
     let (transform_cb, readable_id) = {
-        let pairs = TRANSFORM_PAIRS.lock().unwrap();
-        match pairs.get(&writable_id) {
-            Some(t_id) => {
-                let mut g = TRANSFORM_STREAMS.lock().unwrap();
-                match g.get_mut(t_id) {
-                    Some(t) => {
-                        if let Some(native) = t.native.as_mut() {
-                            handled_native = true;
-                            if let Err(error_bits) =
-                                native_transform_write(native, t.readable_handle, chunk)
-                            {
-                                native_error = Some(error_bits);
-                            }
+        match transform_of_writable(WsRef(writable_id)) {
+            Some(t_id) => match ts_rec(t_id).as_deref_mut() {
+                Some(t) => {
+                    if let Some(native) = t.native.as_mut() {
+                        handled_native = true;
+                        if let Err(error_bits) =
+                            native_transform_write(native, t.readable_handle, chunk)
+                        {
+                            native_error = Some(error_bits);
                         }
-                        (t.transform_cb, t.readable_handle)
                     }
-                    None => (0, 0),
+                    (t.transform_cb, t.readable_handle)
                 }
-            }
+                None => (0, 0),
+            },
             None => (0, 0),
         }
     };
@@ -269,18 +243,11 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
     perry_runtime::closure::closure_set_capture_word(job, 4, writable_id as i64);
     // #6607: a `writer.close()` in the same synchronous run must not close the
     // readable ahead of this queued job — count it so transform_close defers.
-    *TRANSFORM_PENDING_WRITES
-        .lock()
-        .unwrap()
-        .entry(writable_id)
-        .or_insert(0) += 1;
+    with_ws(WsRef(writable_id), |s| s.transform_pending_writes += 1);
     if transform_initial_backpressure(readable_id) {
-        TRANSFORM_BACKPRESSURED_JOBS
-            .lock()
-            .unwrap()
-            .entry(readable_id)
-            .or_default()
-            .push(job as usize);
+        with_rs(RsRef(readable_id), |s| {
+            s.transform_backpressured_jobs.push(job)
+        });
     } else {
         perry_runtime::builtins::js_queue_microtask(job as i64);
     }
@@ -387,8 +354,7 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
     }
     let initial_backpressure = transform_initial_backpressure(readable_id);
     let settle = {
-        let g = super::READABLE_STREAMS.lock().unwrap();
-        match g.get(&readable_id) {
+        match rs_rec(RsRef(readable_id)).as_deref() {
             Some(s) if s.state == ReadableState::Errored => Settle::Errored(s.error_value),
             Some(s) if transform_has_backpressure(s, initial_backpressure) => Settle::Park,
             _ => Settle::Resolve,
@@ -397,141 +363,36 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
     match settle {
         Settle::Errored(reason) => js_promise_reject(promise, f64::from_bits(reason)),
         Settle::Park => {
-            TRANSFORM_WRITE_RELEASES
-                .lock()
-                .unwrap()
-                .entry(readable_id)
-                .or_default()
-                .push(promise as usize);
+            with_rs(RsRef(readable_id), |s| {
+                s.transform_parked_writes.push(promise)
+            });
         }
         Settle::Resolve => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
     }
-}
-
-/// Transform readable id -> write promises parked on backpressure, released
-/// when the consumer drains the readable (see `transform_release_writes`).
-pub(super) static TRANSFORM_WRITE_RELEASES: std::sync::LazyLock<Mutex<HashMap<usize, Vec<usize>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-/// #6607: transform writable id -> count of write jobs queued by
-/// `transform_write` whose transformer hasn't finished delivering yet
-/// (async transformers count until their returned promise settles).
-static TRANSFORM_PENDING_WRITES: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-pub(super) static TRANSFORM_BACKPRESSURED_JOBS: std::sync::LazyLock<
-    Mutex<HashMap<usize, Vec<usize>>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-/// #6607: transform writable id -> close-request promise (as address)
-/// deferred until the pending write jobs above drain.
-pub(super) static TRANSFORM_PENDING_CLOSE: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// #11471: the transform side tables' part of
-/// `release_web_streams_in_freed_ranges` (streams.rs). A readable id whose
-/// parked write promises or deferred write jobs, or a writable id whose
-/// deferred close promise, lie in the exiting thread's freed blocks is dead;
-/// `TRANSFORM_PAIRS` contributes its writable <-> transform links so deadness
-/// reaches the whole transform.
-pub(super) fn dead_ids_in_freed_ranges(
-    freed: &perry_runtime::arena::thread_exit::FreedRanges,
-    dead: &mut std::collections::HashSet<usize>,
-    links: &mut Vec<(usize, usize)>,
-) {
-    use std::sync::PoisonError;
-    links.extend(
-        TRANSFORM_PAIRS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .map(|(&writable, &transform)| (writable, transform)),
-    );
-    for table in [&TRANSFORM_WRITE_RELEASES, &TRANSFORM_BACKPRESSURED_JOBS] {
-        let g = table.lock().unwrap_or_else(PoisonError::into_inner);
-        for (&readable_id, addrs) in g.iter() {
-            if addrs.iter().any(|&addr| freed.contains(addr)) {
-                dead.insert(readable_id);
-            }
-        }
-    }
-    let g = TRANSFORM_PENDING_CLOSE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    for (&writable_id, &addr) in g.iter() {
-        if freed.contains(addr) {
-            dead.insert(writable_id);
-        }
-    }
-}
-
-/// #11471: drop every transform side-table entry keyed by (or, for
-/// `TRANSFORM_PAIRS`, naming) a dead id. Unlike quarantine eviction this also
-/// clears `TRANSFORM_PENDING_CLOSE` / `TRANSFORM_PENDING_WRITES`: the jobs that
-/// would have drained them lived on the dead thread's microtask queue.
-pub(super) fn evict_dead_ids(dead: &std::collections::HashSet<usize>) {
-    use std::sync::PoisonError;
-    TRANSFORM_PAIRS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .retain(|writable, transform| !dead.contains(writable) && !dead.contains(transform));
-    for table in [&TRANSFORM_WRITE_RELEASES, &TRANSFORM_BACKPRESSURED_JOBS] {
-        table
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|id, _| !dead.contains(id));
-    }
-    for table in [&TRANSFORM_PENDING_CLOSE, &TRANSFORM_PENDING_WRITES] {
-        table
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|id, _| !dead.contains(id));
-    }
-}
-
-/// #11471 test probe: does any transform side table hold an entry for `id`?
-#[cfg(test)]
-pub(crate) fn transform_side_tables_hold_for_test(id: usize) -> bool {
-    TRANSFORM_PAIRS.lock().unwrap().contains_key(&id)
-        || TRANSFORM_PAIRS.lock().unwrap().values().any(|&t| t == id)
-        || TRANSFORM_WRITE_RELEASES.lock().unwrap().contains_key(&id)
-        || TRANSFORM_BACKPRESSURED_JOBS
-            .lock()
-            .unwrap()
-            .contains_key(&id)
-        || TRANSFORM_PENDING_CLOSE.lock().unwrap().contains_key(&id)
-        || TRANSFORM_PENDING_WRITES.lock().unwrap().contains_key(&id)
 }
 
 /// #6607: a queued transform write job finished delivering its chunk. When the
 /// last pending job for the writable drains, run any close request that
 /// arrived while the jobs were still queued (see `transform_close`).
 unsafe fn transform_write_job_done(writable_id: usize) {
-    let drained = {
-        let mut g = TRANSFORM_PENDING_WRITES.lock().unwrap();
-        match g.get_mut(&writable_id) {
-            Some(count) => {
-                *count -= 1;
-                if *count == 0 {
-                    g.remove(&writable_id);
-                    true
-                } else {
-                    false
-                }
-            }
-            None => true,
+    let drained = with_ws(WsRef(writable_id), |s| match s.transform_pending_writes {
+        0 => true,
+        n => {
+            s.transform_pending_writes = n - 1;
+            n == 1
         }
-    };
+    })
+    .unwrap_or(true);
     if !drained {
         return;
     }
-    let deferred = TRANSFORM_PENDING_CLOSE.lock().unwrap().remove(&writable_id);
-    if let Some(promise_addr) = deferred {
-        let promise = promise_addr as *mut Promise;
+    let deferred = with_ws(WsRef(writable_id), |s| s.transform_pending_close.take()).flatten();
+    if let Some(promise) = deferred {
         // The stream may have errored (writer.abort(), controller.error(...))
         // while the close waited on the jobs — settle the close request with
         // that error instead of running flush on an errored stream.
-        let errored = WRITABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&writable_id)
+        let errored = ws_rec(WsRef(writable_id))
+            .as_deref()
             .and_then(|s| (s.state == WritableState::Errored).then_some(s.error_value));
         match errored {
             Some(reason) => js_promise_reject(promise, f64::from_bits(reason)),
@@ -583,18 +444,15 @@ extern "C" fn transform_write_settle_rejected(
 /// backpressure = false). Called from the reader-read paths in `streams.rs`.
 pub(super) unsafe fn transform_release_writes(readable_id: usize) {
     set_transform_initial_backpressure(readable_id, false);
-    if let Some(jobs) = TRANSFORM_BACKPRESSURED_JOBS
-        .lock()
-        .unwrap()
-        .remove(&readable_id)
-    {
-        for job in jobs {
-            perry_runtime::builtins::js_queue_microtask(job as i64);
-        }
+    let jobs = with_rs(RsRef(readable_id), |s| {
+        std::mem::take(&mut s.transform_backpressured_jobs)
+    })
+    .unwrap_or_default();
+    for job in jobs {
+        perry_runtime::builtins::js_queue_microtask(job as i64);
     }
     let (backpressured, errored) = {
-        let g = super::READABLE_STREAMS.lock().unwrap();
-        match g.get(&readable_id) {
+        match rs_rec(RsRef(readable_id)).as_deref() {
             Some(s) => (
                 transform_has_backpressure(s, false),
                 (s.state == ReadableState::Errored).then_some(s.error_value),
@@ -605,46 +463,32 @@ pub(super) unsafe fn transform_release_writes(readable_id: usize) {
     if backpressured && errored.is_none() {
         return;
     }
-    let parked = TRANSFORM_WRITE_RELEASES
-        .lock()
-        .unwrap()
-        .remove(&readable_id);
-    if let Some(promises) = parked {
-        for p in promises {
-            match errored {
-                Some(reason) => js_promise_reject(p as *mut Promise, f64::from_bits(reason)),
-                None => js_promise_resolve(p as *mut Promise, f64::from_bits(TAG_UNDEFINED)),
-            }
+    let parked = with_rs(RsRef(readable_id), |s| {
+        std::mem::take(&mut s.transform_parked_writes)
+    })
+    .unwrap_or_default();
+    for p in parked {
+        match errored {
+            Some(reason) => js_promise_reject(p, f64::from_bits(reason)),
+            None => js_promise_resolve(p, f64::from_bits(TAG_UNDEFINED)),
         }
     }
 }
 
 pub(super) unsafe fn transform_abort_pending_writes(writable_id: usize, reason: f64) {
-    let readable_id = TRANSFORM_PAIRS
-        .lock()
-        .unwrap()
-        .get(&writable_id)
-        .and_then(|transform_id| {
-            TRANSFORM_STREAMS
-                .lock()
-                .unwrap()
-                .get(transform_id)
-                .map(|stream| stream.readable_handle)
-        });
+    let readable_id = transform_of_writable(WsRef(writable_id))
+        .and_then(|transform| with_ts(transform, |stream| stream.readable_handle));
     let Some(readable_id) = readable_id else {
         return;
     };
-    if let Some(jobs) = TRANSFORM_BACKPRESSURED_JOBS
-        .lock()
-        .unwrap()
-        .remove(&readable_id)
-    {
-        for job in jobs {
-            let closure = job as *const ClosureHeader;
-            let promise = perry_runtime::closure::closure_capture_ref(closure, 3) as *mut Promise;
-            js_promise_reject(promise, reason);
-            transform_write_job_done(writable_id);
-        }
+    let jobs = with_rs(RsRef(readable_id), |s| {
+        std::mem::take(&mut s.transform_backpressured_jobs)
+    })
+    .unwrap_or_default();
+    for job in jobs {
+        let promise = perry_runtime::closure::closure_capture_ref(job, 3) as *mut Promise;
+        js_promise_reject(promise, reason);
+        transform_write_job_done(writable_id);
     }
 }
 
@@ -653,22 +497,14 @@ fn transform_has_backpressure(stream: &ReadableStreamData, initial: bool) -> boo
 }
 
 fn transform_initial_backpressure(readable_id: usize) -> bool {
-    TRANSFORM_STREAMS
-        .lock()
-        .unwrap()
-        .values()
-        .find_map(|stream| (stream.readable_handle == readable_id).then_some(stream.backpressure))
+    transform_of_readable(RsRef(readable_id))
+        .and_then(|transform| with_ts(transform, |stream| stream.backpressure))
         .unwrap_or(false)
 }
 
 fn set_transform_initial_backpressure(readable_id: usize, value: bool) {
-    if let Some(stream) = TRANSFORM_STREAMS
-        .lock()
-        .unwrap()
-        .values_mut()
-        .find(|stream| stream.readable_handle == readable_id)
-    {
-        stream.backpressure = value;
+    if let Some(transform) = transform_of_readable(RsRef(readable_id)) {
+        with_ts(transform, |stream| stream.backpressure = value);
     }
 }
 
@@ -764,25 +600,18 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     // jobs deliver their chunks — controller_enqueue would then silently drop
     // them on a Closed readable. Defer the whole close (flush included)
     // behind the pending jobs; `transform_write_job_done` resumes it.
-    if let Some(&pending) = TRANSFORM_PENDING_CLOSE.lock().unwrap().get(&writable_id) {
-        return pending as *mut Promise;
+    if let Some(pending) = with_ws(WsRef(writable_id), |s| s.transform_pending_close).flatten() {
+        return pending;
     }
     let promise = js_promise_new();
-    let jobs_pending = TRANSFORM_PENDING_WRITES
-        .lock()
-        .unwrap()
-        .get(&writable_id)
-        .copied()
-        .unwrap_or(0)
-        > 0;
+    let jobs_pending = with_ws(WsRef(writable_id), |s| s.transform_pending_writes).unwrap_or(0) > 0;
     if jobs_pending {
-        TRANSFORM_PENDING_CLOSE
-            .lock()
-            .unwrap()
-            .insert(writable_id, promise as usize);
+        with_ws(WsRef(writable_id), |s| {
+            s.transform_pending_close = Some(promise)
+        });
         // Close is requested: writes arriving during the wait must reject
         // ("Stream is closed or closing"), same as the plain-writable path.
-        if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+        if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
             if s.state == WritableState::Writable {
                 s.state = WritableState::Closing;
             }
@@ -797,25 +626,19 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     let mut handled_native = false;
     let mut native_error = None;
     let (flush_cb, readable_id) = {
-        let pairs = TRANSFORM_PAIRS.lock().unwrap();
-        match pairs.get(&writable_id) {
-            Some(t_id) => {
-                let mut g = TRANSFORM_STREAMS.lock().unwrap();
-                match g.get_mut(t_id) {
-                    Some(t) => {
-                        if let Some(native) = t.native.as_mut() {
-                            handled_native = true;
-                            if let Err(error_bits) =
-                                native_transform_close(native, t.readable_handle)
-                            {
-                                native_error = Some(error_bits);
-                            }
+        match transform_of_writable(WsRef(writable_id)) {
+            Some(t_id) => match ts_rec(t_id).as_deref_mut() {
+                Some(t) => {
+                    if let Some(native) = t.native.as_mut() {
+                        handled_native = true;
+                        if let Err(error_bits) = native_transform_close(native, t.readable_handle) {
+                            native_error = Some(error_bits);
                         }
-                        (t.flush_cb, t.readable_handle)
                     }
-                    None => (0, 0),
+                    (t.flush_cb, t.readable_handle)
                 }
-            }
+                None => (0, 0),
+            },
             None => (0, 0),
         }
     };
@@ -834,7 +657,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
                 f64::from_bits(error_bits),
             );
         }
-        if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+        if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
             s.state = WritableState::Errored;
             s.error_value = error_bits;
             let cp = s.closed_promise;
@@ -934,7 +757,7 @@ unsafe fn finish_transform_close(
     if readable_id != 0 {
         js_readable_stream_controller_close(controller_value(readable_id));
     }
-    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+    if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
         s.state = WritableState::Closed;
         let cp = s.closed_promise;
         js_promise_resolve(cp, f64::from_bits(TAG_UNDEFINED));
@@ -958,7 +781,7 @@ unsafe fn error_transform_close(
             f64::from_bits(reason_bits),
         );
     }
-    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+    if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
         s.state = WritableState::Errored;
         s.error_value = reason_bits;
         let cp = s.closed_promise;

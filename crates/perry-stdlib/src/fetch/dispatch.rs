@@ -84,7 +84,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         // requested the body-init conversion: Request drains it to bytes, while
         // Response preserves it lazily because transformed SSR streams often
         // produce data only when the downstream consumer pulls.
-        if crate::streams::js_stream_handle_kind(id) == 1 {
+        if crate::streams::is_readable_stream(crate::streams::RsRef(id)) {
             PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(id));
             return 0;
         }

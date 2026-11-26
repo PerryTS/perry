@@ -210,7 +210,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             let outer_content_type = take_pending_fetch_body_content_type();
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
             let pending_bytes = take_pending_fetch_body_bytes();
-            let stream = take_pending_fetch_body_stream_id();
+            let stream = take_pending_fetch_body_stream();
             if stream.is_some() {
                 if request.keepalive {
                     throw_fetch_type_error("keepalive");
