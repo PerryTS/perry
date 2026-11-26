@@ -238,8 +238,9 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 // A listener may reopen either object during the first emit.
                 let wrapper_record = scope.root_nanbox(prepare_socket_closed(owner.get(), &closed));
                 let parent_record = scope.root_nanbox(prepare_socket_closed(original.get(), event));
-                emit_socket_closed(owner.get(), wrapper_record.get());
+                // Node's TLSSocket emits its 'close' from the parent's.
                 emit_socket_closed(original.get(), parent_record.get());
+                emit_socket_closed(owner.get(), wrapper_record.get());
             } else {
                 socket_closed(owner.get(), event);
             }

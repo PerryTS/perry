@@ -579,13 +579,18 @@ pub(crate) fn component_turn_and_take(
 
 /// One nonblocking turn that hands back the net `Closed` completions `select`
 /// picks, without dispatching anything. Every other completion stays in
-/// STAGED, in its original order, for the next dispatch. A `Closed` behind a
-/// completion `link_of` names the same cell for stays too: the `Closed`
-/// releases the cell's ref, so it must be dispatched after that completion.
+/// STAGED, in its original order, for the next dispatch.
+///
+/// A `Closed` releases its cell's refs, so it is dispatched after every earlier
+/// completion that `link_of` names the same cell for. Earlier terminal
+/// acknowledgements of that cell (`Closed`, `Cancelled`, `Stopped`: the
+/// retired reads, deadline and lookup of the closing socket) come back with it,
+/// in order; behind any other completion of its cell it stays staged.
 pub(crate) fn take_closed_completions(
     select: impl Fn(&turnloop::Completion) -> bool,
     link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
 ) -> Vec<turnloop::Completion> {
+    use turnloop::OpResult;
     if STATE.with(Cell::get) != LoopState::Owner {
         return Vec::new();
     }
@@ -601,25 +606,61 @@ pub(crate) fn take_closed_completions(
             agent.record(&info);
         }
     });
-    let mut behind = Vec::new();
+    let net_cell = |c: &turnloop::Completion| {
+        let net = !is_component_io(c)
+            && c.token != TIMER_TOKEN
+            && !crate::turnloop_proc::owns(c.token)
+            && !crate::turnloop_pool::owns(c.token)
+            && !crate::turnloop_post::owns(c.token);
+        if net {
+            link_of(c)
+        } else {
+            None
+        }
+    };
+    let acknowledges = |c: &turnloop::Completion| {
+        matches!(
+            c.result,
+            OpResult::Closed | OpResult::Cancelled | OpResult::Stopped
+        )
+    };
     STAGED.with(|staged| {
-        staged
-            .borrow_mut()
-            .extract_if(.., |c| {
-                let net = !is_component_io(c)
-                    && c.token != TIMER_TOKEN
-                    && !crate::turnloop_proc::owns(c.token)
-                    && !crate::turnloop_pool::owns(c.token)
-                    && !crate::turnloop_post::owns(c.token);
-                let cell = if net { link_of(c) } else { None };
-                if net && select(c) && cell.is_none_or(|cell| !behind.contains(&cell)) {
-                    return true;
-                }
-                behind.extend(cell);
-                false
-            })
-            .collect()
+        take_after_acknowledgements(&mut staged.borrow_mut(), net_cell, select, acknowledges)
     })
+}
+
+/// Take out of `staged` each item `select` picks, with the earlier items of
+/// its cell, unless an earlier item of its cell is not an acknowledgement;
+/// everything else keeps its order. See [`take_closed_completions`].
+pub(super) fn take_after_acknowledgements<T>(
+    staged: &mut Vec<T>,
+    cell_of: impl Fn(&T) -> Option<usize>,
+    select: impl Fn(&T) -> bool,
+    acknowledges: impl Fn(&T) -> bool,
+) -> Vec<T> {
+    let mut kept = Vec::with_capacity(staged.len());
+    let mut taken = Vec::new();
+    let mut blocked = Vec::new();
+    for item in staged.drain(..) {
+        match cell_of(&item) {
+            Some(cell) if select(&item) && !blocked.contains(&cell) => {
+                let (earlier, rest): (Vec<_>, Vec<_>) =
+                    kept.into_iter().partition(|k| cell_of(k) == Some(cell));
+                kept = rest;
+                taken.extend(earlier);
+                taken.push(item);
+            }
+            Some(cell) => {
+                if !acknowledges(&item) {
+                    blocked.push(cell);
+                }
+                kept.push(item);
+            }
+            None => kept.push(item),
+        }
+    }
+    *staged = kept;
+    taken
 }
 
 /// Whether this thread may take the precise park path. One TLS read once the

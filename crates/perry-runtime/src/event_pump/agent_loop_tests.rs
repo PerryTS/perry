@@ -1106,3 +1106,31 @@ fn component_wait_preserves_foreign_completions_and_other_component_operations()
     assert_eq!(stats().timer_expiries, 1, "foreign timer dispatched twice");
     reset_for_test();
 }
+
+/// A close-phase `Closed` comes back with the earlier acknowledgements of its
+/// cell, and stays staged behind any other completion of its cell; every
+/// other completion keeps its place.
+#[test]
+fn a_closed_is_taken_with_its_cells_acknowledgements_only() {
+    // (cell, kind): 'c' is a queued Closed, 'a' an acknowledgement, 'd' data.
+    let mut staged = vec![
+        (Some(1), 'a'),
+        (Some(2), 'd'),
+        (None, 'd'),
+        (Some(1), 'c'),
+        (Some(2), 'a'),
+        (Some(2), 'c'),
+        (Some(3), 'c'),
+    ];
+    let taken = take_after_acknowledgements(
+        &mut staged,
+        |item| item.0,
+        |item| item.1 == 'c',
+        |item| item.1 != 'd',
+    );
+    assert_eq!(taken, [(Some(1), 'a'), (Some(1), 'c'), (Some(3), 'c')]);
+    assert_eq!(
+        staged,
+        [(Some(2), 'd'), (None, 'd'), (Some(2), 'a'), (Some(2), 'c')]
+    );
+}
