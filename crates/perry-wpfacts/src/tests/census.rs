@@ -83,3 +83,39 @@ fn census_lists_two_roots_and_one_downstream_seed() {
     assert_eq!(reach(&desc, "total"), reach(&desc, "nodes"), "{b}");
     assert!(b.contains("CENSUS-END why=solve end "), "{b}");
 }
+
+/// A program callback handed to the host (`process.on`): the host may call it
+/// with values no model describes. No input of that escape holds ⊤, so the
+/// escape is a root of its own (`CENSUS-ROOT`), keyed by its reason, the
+/// solver line and the site, and what it makes is booked to it, not lost.
+const CALLBACK_TO_HOST: &str = "process.on(\"exit\", (v: any) => { console.log(v.k); });\n";
+
+#[test]
+fn census_books_an_escape_with_no_top_input_as_a_root() {
+    let b = census(CALLBACK_TO_HOST);
+    let roots: Vec<&str> = b
+        .lines()
+        .filter(|l| l.starts_with("CENSUS-ROOT "))
+        .collect();
+    let root = roots
+        .iter()
+        .find(|l| l.contains("| reason: argument of native module process.on |"))
+        .unwrap_or_else(|| panic!("no process.on root:\n{b}"));
+    assert!(root.contains(" escape solver=") && root.contains(" site="), "{b}");
+    let id = root.split_whitespace().nth(1).unwrap();
+    let reach = b
+        .lines()
+        .find(|l| l.starts_with(&format!("CENSUS-REACH {id} ")))
+        .unwrap_or_else(|| panic!("no reach {id}:\n{b}"));
+    assert!(reach.ends_with(" kind=escape"), "{b}");
+    let nodes: u64 = reach
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("nodes="))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(nodes > 0, "{b}");
+    let end = b.lines().find(|l| l.starts_with("CENSUS-END ")).unwrap();
+    assert!(end.contains(" lost-nodes=0"), "{b}");
+    assert!(end.contains(&format!(" roots={} ", roots.len())), "{b}");
+}

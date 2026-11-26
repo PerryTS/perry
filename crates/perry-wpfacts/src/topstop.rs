@@ -200,6 +200,8 @@ pub fn census_capture_on(seeds: u64, work: u64) {
 const C_NONE: u32 = u32::MAX;
 const C_LATER: u32 = u32::MAX - 1;
 const C_LOST: u32 = u32::MAX - 2;
+/// Booked to an escape root past the listed ones.
+const C_ELATER: u32 = u32::MAX - 3;
 
 /// The seed census (`PERRY_FACTS_STOP_ON_TOP_LIST`).
 #[derive(Default)]
@@ -213,7 +215,14 @@ pub(crate) struct Census {
     start: Option<std::time::Instant>,
     ticks: std::cell::Cell<u32>,
     seeds: Vec<CensusSeed>,
-    by_key: FxHashMap<(&'static str, u32, (u32, u32)), u32>,
+    /// By (solver file, line, program position, escape reason; `u32::MAX`
+    /// for an S seed): its id.
+    by_key: FxHashMap<(&'static str, u32, (u32, u32), u32), u32>,
+    /// S keys and escape roots listed (each at most `max`).
+    s_keys: u64,
+    e_keys: u64,
+    /// Arrivals booked to an escape root (an escape with no ⊤ input).
+    e_creations: u64,
     /// By node: the seed its first ⊤ arrival is booked to (`C_*` else).
     root: Vec<u32>,
     /// S creations in all, and those of keys past `max`.
@@ -236,6 +245,8 @@ struct CensusSeed {
     creations: u64,
     /// Creations whose rule input held no ⊤.
     indep: u64,
+    /// An escape root: the escape's reason (`None`: an S seed).
+    esc: Option<u32>,
 }
 
 pub(crate) type RuleSaved =(Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
@@ -931,6 +942,13 @@ impl Model {
                     .rev()
                     .find_map(|&(_, _, k)| c.sink_root.get(&k).map(|&r| (r, k)))
             });
+        // An escape with no ⊤ input whose sink no ⊤ rule attached: a root
+        // of its own.
+        if class == 2 && up.is_none() {
+            if let Some((t, r, sink)) = st.esc.last().copied() {
+                return self.census_escape_root(n, t, r, sink, at, what);
+            }
+        }
         // The first arrivals booked to no seed: their ⊤ input and its label.
         if let Some((C_LOST, x)) = up {
             if c.lost_seen < 8 {
@@ -996,9 +1014,9 @@ impl Model {
             Some(&(_, _, p)) => p,
             None => st.cur_pos(),
         };
-        let key = (at.file(), at.line(), op_pos);
+        let key = (at.file(), at.line(), op_pos, u32::MAX);
         let work = self.work.get();
-        let line = if c.by_key.contains_key(&key) || c.seeds.len() as u64 >= c.max {
+        let line = if c.by_key.contains_key(&key) || c.s_keys >= c.max {
             None
         } else {
             let one = |t: String| t.replace(char::is_control, " ");
@@ -1037,7 +1055,9 @@ impl Model {
                 down: up.unwrap_or(C_NONE),
                 creations: 1,
                 indep: up.is_none() as u64,
+                esc: None,
             });
+            c.s_keys += 1;
             if !capture {
                 eprintln!("{l}");
             }
@@ -1049,9 +1069,82 @@ impl Model {
         };
         let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
         book(c, r);
-        if c.work == 0 && c.secs == 0 && c.seeds.len() as u64 >= c.max {
+        if c.work == 0 && c.secs == 0 && c.s_keys >= c.max {
             self.census_finish("seed count");
         }
+    }
+
+    /// The census: ⊤ arrives in `n` while `t` escapes into unknown code
+    /// (reason `r`, the rule ran on `sink`), no input holds ⊤ and no rule on
+    /// a ⊤ node attached the sink. The escape is a root of its own, keyed by
+    /// its reason, the solver line and the program site; it is listed once
+    /// (`CENSUS-ROOT`) and what it makes is booked to it.
+    fn census_escape_root(
+        &mut self,
+        n: NodeId,
+        t: Tok,
+        r: u32,
+        sink: NodeId,
+        at: &'static Location<'static>,
+        what: impl FnOnce() -> String,
+    ) {
+        let st = self.stop_top.as_ref().unwrap();
+        let c = st.census.as_ref().unwrap();
+        let pos = match st.cur_pos() {
+            p if p == NOPOS => st.pos_of(sink),
+            p => p,
+        };
+        let key = (at.file(), at.line(), pos, r);
+        let work = self.work.get();
+        let line = (!c.by_key.contains_key(&key) && c.e_keys < c.max).then(|| {
+            let one = |t: String| t.replace(char::is_control, " ");
+            let v: String = self.node_words_short(n).chars().take(200).collect();
+            format!(
+                "CENSUS-ROOT #{} seq={} work={work} escape solver={}:{} site={} | reason: {} | token: {} | rule: {} | src: {} | value: {}",
+                c.seeds.len(),
+                c.e_creations + 1,
+                at.file(),
+                at.line(),
+                self.pos_text(pos),
+                one(self.reason_text(r)),
+                one(self.tok_name(t)),
+                one(what()),
+                one(self.source_line(pos).unwrap_or_default()),
+                one(v)
+            )
+        });
+        let capture = st.capture;
+        let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+        c.e_creations += 1;
+        let id = if let Some(&id) = c.by_key.get(&key) {
+            let sd = &mut c.seeds[id as usize];
+            sd.creations += 1;
+            sd.indep += 1;
+            id
+        } else if let Some(l) = line {
+            let id = c.seeds.len() as u32;
+            c.by_key.insert(key, id);
+            c.seeds.push(CensusSeed {
+                work,
+                seq: c.e_creations,
+                down: C_NONE,
+                creations: 1,
+                indep: 1,
+                esc: Some(r),
+            });
+            c.e_keys += 1;
+            if !capture {
+                eprintln!("{l}");
+            }
+            c.lines.push(l);
+            id
+        } else {
+            C_ELATER
+        };
+        if c.root.len() <= n as usize {
+            c.root.resize(n as usize + 1, C_NONE);
+        }
+        c.root[n as usize] = id;
     }
 
     /// The census report (`CENSUS-REACH` per seed, by reach), then exit 86
@@ -1073,6 +1166,7 @@ impl Model {
         let slot = |r: u32| match r {
             C_LATER => k,
             C_LOST => k + 1,
+            C_ELATER => k + 2,
             r => r as usize,
         };
         for (n, &r) in c.root.iter().enumerate() {
@@ -1105,12 +1199,16 @@ impl Model {
             b.push('\n');
         }
         b.push_str(&format!(
-            "CENSUS-END why={why} work={} seeds={k} creations={} later-creations={} booked={} later-nodes={} lost-nodes={}\n",
+            "CENSUS-END why={why} work={} seeds={} creations={} later-creations={} roots={} root-creations={} booked={} later-nodes={} root-later-nodes={} lost-nodes={}\n",
             self.work.get(),
+            c.s_keys,
             c.creations,
             c.later,
+            c.e_keys,
+            c.e_creations,
             own.iter().sum::<u64>(),
             own[k],
+            own[k + 2],
             own[k + 1]
         ));
         for i in order {
@@ -1123,8 +1221,16 @@ impl Model {
                 "down=?".to_string()
             };
             b.push_str(&format!(
-                "CENSUS-REACH #{i} {down} nodes={} ops={} total={} total-ops={} creations={} indep-creations={} work={} seq={}\n",
-                own[i], ops[i], total[i], total_ops[i], sd.creations, sd.indep, sd.work, sd.seq
+                "CENSUS-REACH #{i} {down} nodes={} ops={} total={} total-ops={} creations={} indep-creations={} work={} seq={} kind={}\n",
+                own[i],
+                ops[i],
+                total[i],
+                total_ops[i],
+                sd.creations,
+                sd.indep,
+                sd.work,
+                sd.seq,
+                if sd.esc.is_some() { "escape" } else { "S" }
             ));
         }
         if capture {
