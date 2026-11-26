@@ -37,8 +37,7 @@ mod receiver_root_tests {
             perry_runtime::gc::gc_init();
             crate::common::dispatch::install_streams();
             let stream = crate::streams::alloc_readable_from_bytes(vec![1, 2, 3]);
-            let reader =
-                crate::streams::js_readable_stream_get_reader(crate::streams::stream_value(stream));
+            let reader = crate::streams::js_readable_stream_get_reader(stream.value());
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
             let receiver = scope.root_nanbox_f64(super::receiver_root_value(
                 crate::streams::stream_id(reader) as i64,
@@ -50,8 +49,7 @@ mod receiver_root_tests {
                 crate::streams::stream_id(reader)
             ));
             assert_eq!(
-                crate::streams::js_readable_stream_locked(crate::streams::stream_value(stream))
-                    .to_bits(),
+                crate::streams::js_readable_stream_locked(stream.value()).to_bits(),
                 perry_runtime::value::JSValue::bool(true).bits()
             );
             crate::streams::js_reader_release_lock(reader);

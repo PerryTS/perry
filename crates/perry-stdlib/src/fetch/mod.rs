@@ -355,12 +355,12 @@ struct FetchResponse {
     /// requires a stable `ReadableStream`; getting a fresh unlocked stream
     /// each time would silently un-lock a reader). None for an empty body —
     /// `Response.body` is `ReadableStream | null` (#1650).
-    cached_body_stream_id: Option<usize>,
+    cached_body_stream: Option<crate::streams::RsRef>,
     /// Original ReadableStream body passed to `new Response(stream, init)`.
     /// Unlike buffered bodies, this must stay lazy: constructing a Response
     /// must not synchronously drain a producer whose chunks appear only after
     /// downstream pulls (TanStack Start / React SSR relies on that).
-    body_stream_id: Option<usize>,
+    body_stream: Option<crate::streams::RsRef>,
 }
 
 /// Return the one `Headers` registry handle that backs `response.headers`.
@@ -418,7 +418,7 @@ thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
     // An async-iterable BodyInit (NaN-boxed bits, 0 = none). The classifier
     // only stashes it: converting it runs the iterator's JS, so that happens
-    // in `take_pending_fetch_body_stream_id`, whose callers must not hold
+    // in `take_pending_fetch_body_stream`, whose callers must not hold
     // unrooted heap pointers across the call. Visited by the fetch GC scanner.
     static PENDING_FETCH_BODY_ITERABLE: Cell<u64> = const { Cell::new(0) };
     // Codegen coerces BodyInit to a StringHeader before js_response_new, so
@@ -475,20 +475,15 @@ fn take_pending_fetch_body_content_type() -> Option<&'static str> {
     PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.replace(None))
 }
 
-fn take_pending_fetch_body_stream_id() -> Option<usize> {
+fn take_pending_fetch_body_stream() -> Option<crate::streams::RsRef> {
     let stream = PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
-        let id = pending.get();
-        pending.set(0);
-        if id != 0 && crate::streams::js_stream_handle_kind(id) == 1 {
-            Some(id)
-        } else {
-            None
-        }
+        let stream = crate::streams::RsRef(pending.replace(0));
+        (stream.0 != 0 && crate::streams::is_readable_stream(stream)).then_some(stream)
     });
     let iterable = PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.replace(0));
     stream.or_else(|| {
         (iterable != 0).then(|| unsafe {
-            crate::streams::stream_id(crate::streams::js_readable_stream_from_iterable(
+            crate::streams::RsRef::from_value(crate::streams::js_readable_stream_from_iterable(
                 f64::from_bits(iterable),
             ))
         })
@@ -497,9 +492,9 @@ fn take_pending_fetch_body_stream_id() -> Option<usize> {
 
 /// Drain a body stream, returning the error it ended with (if any) alongside
 /// the bytes it produced before that.
-fn drain_body_stream(stream_id: usize) -> (Vec<u8>, Option<f64>) {
-    let bytes = crate::streams::drain_readable_into_bytes(stream_id);
-    (bytes, crate::streams::readable_stream_error(stream_id))
+fn drain_body_stream(stream: crate::streams::RsRef) -> (Vec<u8>, Option<f64>) {
+    let bytes = crate::streams::drain_readable_into_bytes(stream);
+    (bytes, crate::streams::readable_stream_error(stream))
 }
 
 /// Strict decode of a Web Fetch HANDLE_TAG value; numbers and heap addresses
@@ -780,7 +775,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
         .or_else(|| fetch_request_body_bytes(body_ptr))
         .or(pending_bytes);
     // Last: may run an async-iterable body's JS (the strings above are owned).
-    let body_bytes = take_pending_fetch_body_stream_id()
+    let body_bytes = take_pending_fetch_body_stream()
         .map(crate::streams::drain_readable_into_bytes)
         .or(body_bytes);
     let mut inputs = match request_handle::resolve_fetch_inputs(
@@ -888,7 +883,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
         .lock()
         .unwrap()
         .get(&response_id)
-        .and_then(|r| r.body_stream_id);
+        .and_then(|r| r.body_stream);
     let stream_unusable = stream_id.is_some_and(|id| {
         let (locked, disturbed) = crate::streams::readable_body_state(id);
         locked || disturbed
@@ -905,7 +900,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
             return Err(BODY_ALREADY_USED_MESSAGE);
         }
         resp.body_used = true;
-        (std::mem::take(&mut resp.body), resp.body_stream_id)
+        (std::mem::take(&mut resp.body), resp.body_stream)
     };
     if let Some(stream_id) = stream_id {
         return Ok(crate::streams::drain_readable_into_bytes(stream_id));

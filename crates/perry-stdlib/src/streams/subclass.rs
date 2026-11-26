@@ -138,14 +138,14 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     }
     let requested = byob_request_id_stream(id);
     if requested != 0 {
-        return match READABLE_STREAMS.lock().unwrap().get(&requested) {
+        return match rs_rec(RsRef(requested)).as_deref() {
             Some(s) if s.is_byte_stream => 10,
             _ => 0,
         };
     }
     let controlled = controller_id_stream(id);
     if controlled != 0 {
-        let is_byte_stream = match READABLE_STREAMS.lock().unwrap().get(&controlled) {
+        let is_byte_stream = match rs_rec(RsRef(controlled)).as_deref() {
             Some(s) => s.is_byte_stream,
             None => return 0,
         };
@@ -157,37 +157,21 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
             6
         };
     }
-    if READABLE_STREAMS
-        .lock()
-        .map(|m| m.contains_key(&id))
-        .unwrap_or(false)
-    {
+    if rs_exists(RsRef(id)) {
         return 1;
     }
-    if WRITABLE_STREAMS
-        .lock()
-        .map(|m| m.contains_key(&id))
-        .unwrap_or(false)
-    {
+    if ws_exists(WsRef(id)) {
         return 2;
     }
-    match READERS
-        .lock()
-        .ok()
-        .and_then(|m| m.get(&id).map(|r| r.is_byob))
-    {
+    match with_reader(ReaderRef(id), |r| r.is_byob) {
         Some(true) => return 9,
         Some(false) => return 3,
         None => {}
     }
-    if WRITERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
+    if writer_exists(WriterRef(id)) {
         return 4;
     }
-    if TRANSFORM_STREAMS
-        .lock()
-        .map(|m| m.contains_key(&id))
-        .unwrap_or(false)
-    {
+    if ts_exists(TsRef(id)) {
         return 5;
     }
     0
@@ -242,8 +226,8 @@ pub(crate) unsafe fn dispatch_stream_method(
     // IDs have one registry owner; eviction clears every registry before reuse.
     // Skip registries that cannot handle this method, dropping each guard
     // before the FFI call re-locks it. Controllers alias only readable IDs.
-    let is_reader = matches!(method, "read" | "releaseLock" | "cancel")
-        && READERS.lock().unwrap().contains_key(&id);
+    let is_reader =
+        matches!(method, "read" | "releaseLock" | "cancel") && reader_exists(ReaderRef(id));
     if is_reader {
         match method {
             // BYOB readers fill the caller-supplied view (#4915); default
@@ -260,7 +244,7 @@ pub(crate) unsafe fn dispatch_stream_method(
         }
     }
     let is_writer = matches!(method, "write" | "close" | "abort" | "releaseLock")
-        && WRITERS.lock().unwrap().contains_key(&id);
+        && writer_exists(WriterRef(id));
     if is_writer {
         match method {
             "write" => return Some(box_promise(js_writer_write(handle, arg0))),
@@ -273,7 +257,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     let is_readable = matches!(
         method,
         "getReader" | "values" | "@@asyncIterator" | "cancel" | "tee" | "pipeTo" | "pipeThrough"
-    ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
+    ) && rs_exists(RsRef(id));
     if is_readable {
         match method {
             "getReader" => return Some(js_readable_stream_get_reader_with_options(handle, arg0)),
@@ -326,8 +310,7 @@ pub(crate) unsafe fn dispatch_stream_method(
             _ => return None,
         }
     }
-    let is_writable = matches!(method, "getWriter" | "abort" | "close")
-        && WRITABLE_STREAMS.lock().unwrap().contains_key(&id);
+    let is_writable = matches!(method, "getWriter" | "abort" | "close") && ws_exists(WsRef(id));
     if is_writable {
         match method {
             "getWriter" => return Some(js_writable_stream_get_writer(handle)),
@@ -463,7 +446,7 @@ pub unsafe extern "C" fn js_writable_stream_subclass_init(
 
 /// `super({ transform, flush })` dispatch for `class X extends TransformStream`.
 /// Allocates the transform-stream pair (readable + writable + the
-/// dispatcher row in `TRANSFORM_PAIRS`) — same shape as
+/// writable's `owner_transform`) — same shape as
 /// `js_transform_stream_new` — and stashes the transform handle id on
 /// `this`. `pipeThrough(subclass)` then calls `js_transform_stream_writable`
 /// / `_readable` after `js_stream_unwrap_handle`, finding the same
@@ -506,7 +489,8 @@ pub(super) unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
 /// required for tee branches and transforms to produce their next chunk.
 /// Each delivered chunk loses its stream-queue owner before the next pull.
 #[doc(hidden)]
-pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
+pub(crate) fn drain_readable_into_bytes(stream: RsRef) -> Vec<u8> {
+    let stream_id = stream.0;
     unsafe {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let reader = js_readable_stream_get_reader(stream_value(stream_id));
@@ -557,11 +541,11 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
     }
 }
 
-pub(crate) fn readable_body_state(stream_id: usize) -> (bool, bool) {
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&stream_id)
-        .map(|s| (s.reader_handle.is_some(), s.disturbed))
-        .unwrap_or((false, false))
+pub(crate) fn readable_body_state(stream: RsRef) -> (bool, bool) {
+    with_rs(stream, |s| (s.reader_handle.is_some(), s.disturbed)).unwrap_or((false, false))
+}
+
+/// True while `stream` names a ReadableStream (a body handed to fetch).
+pub(crate) fn is_readable_stream(stream: RsRef) -> bool {
+    js_stream_handle_kind(stream.0) == 1
 }

@@ -18,7 +18,7 @@ pub(super) unsafe fn read(handle: f64, kind: Kind) -> *mut perry_runtime::Promis
         .lock()
         .unwrap()
         .get(&id)
-        .map(|r| (r.body_present, r.body_used, r.body_stream_id));
+        .map(|r| (r.body_present, r.body_used, r.body_stream));
     let Some((present, used, stream)) = state else {
         reject_fetch_type_error(promise, "Invalid response handle");
         return promise;
