@@ -271,6 +271,47 @@ const NURSERY_CAP_SCALE_MIN: u8 = 1;
 const NURSERY_CAP_SCALE_MAX: u8 = 16;
 const _: () = assert!(NURSERY_CAP_SCALE_MAX == 4 * NURSERY_CAP_SCALE_UNIT);
 
+/// The fixed-cost floor of the ladder grows while one minor's fixed cost is
+/// above this share, in percent, of the mutator time that filled its Eden.
+///
+/// The floor's premise above, "a minor there copies almost nothing, so its
+/// cost is its fixed cost, ~100k instructions", is a number the influx ladder
+/// never checks. On nextjs-hello a minor that copies 200 KB costs ~32M
+/// instructions of root scanning, remembered-set and pruning work (NXGC1), so
+/// the lower survival that keeps the influx ladder at 8 MB bought 2.8x the
+/// minors at that price. This dial prices the fixed part from the minor
+/// itself and holds Eden where it is a small share of the program's own time.
+/// See [`retune_fixed_cost_scale`].
+const FIXED_COST_GROW_PERCENT: u128 = 2;
+
+/// The fixed-cost floor shrinks only to a size at which the reading predicts
+/// a fixed share at or below this. Half the grow edge: a growth lands above
+/// 1% (the step below was above 2%), a shrink at or below 1%, so a steady
+/// reading cannot oscillate, and a reading must halve or double before the
+/// floor moves again.
+const FIXED_COST_SHRINK_PERCENT: u128 = 1;
+
+/// Thread CPU clock marks of the minor collections, for the fixed-cost floor
+/// ([`retune_fixed_cost_scale`]). Policy state of the same kind as the
+/// streaks, one value per thread.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostClock {
+    /// When the last copying minor on this thread finished.
+    last_end_ns: Option<u64>,
+    /// When the minor in progress began.
+    begin_ns: Option<u64>,
+    /// The minor in progress's survivor work: its worklist drains.
+    drain_ns: u64,
+}
+
+impl FixedCostClock {
+    const START: Self = FixedCostClock {
+        last_end_ns: None,
+        begin_ns: None,
+        drain_ns: 0,
+    };
+}
+
 crate::perry_thread_local! {
     /// Power-on threshold. This is `OCCUPANCY_MIN_SURVIVALS`, not the ceiling:
     /// see `SURVIVOR_ROUND_MEASURED`. Starting at the ceiling is a claim that
@@ -298,6 +339,15 @@ crate::perry_thread_local! {
         const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// The fixed-cost floor of the ladder, in the same quarters as
+    /// `NURSERY_CAP_SCALE`: the Eden runs at the larger of the two. Starts at
+    /// the floor; see [`retune_fixed_cost_scale`].
+    static FIXED_COST_SCALE: super::TriggerInput<u8> =
+        const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
+    /// The previous fixed-cost reading's grow and shrink destinations, the
+    /// debounce of [`retune_fixed_cost_scale`]; `None` before the first.
+    static FIXED_COST_PREV: Cell<Option<(u8, u8)>> = const { Cell::new(None) };
+    static FIXED_COST_CLOCK: Cell<FixedCostClock> = const { Cell::new(FixedCostClock::START) };
     /// The influx readings of the ladder's current phase: their sum and their
     /// count. A phase starts at a move, or at a reading on the far side of
     /// the band from the phase's mean; see [`retune_nursery_cap_scale`].
@@ -569,22 +619,27 @@ pub(super) fn set_env_pin_for_test(pin: u8) -> TenuringSurvivalsTestGuard {
 /// old bytes do not inflate Eden.
 pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
     scavenge_nursery_cap_from(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         old_gen_reclaimable_pressure_bytes(),
     )
 }
 
-/// The influx-driven half of the cap on its own: the configured base times
-/// the debounced `NURSERY_CAP_SCALE`, **re-denominated in objects** by
-/// [`nursery_cap_object_scale_permille`]. Named so the composition below reads
-/// as the two-term policy it is.
-pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
-    influx_driven_nursery_cap_bytes_at(NURSERY_CAP_SCALE.with(TriggerInput::get))
+/// The ladder half of the cap on its own: the configured base times the
+/// larger of the debounced `NURSERY_CAP_SCALE` (survivor influx) and
+/// `FIXED_COST_SCALE` (the minor's fixed cost), **re-denominated in objects**
+/// by [`nursery_cap_object_scale_permille`]. Named so the composition below
+/// reads as the two-term policy it is.
+pub(super) fn ladder_nursery_cap_bytes() -> usize {
+    ladder_nursery_cap_bytes_at(
+        NURSERY_CAP_SCALE
+            .with(TriggerInput::get)
+            .max(FIXED_COST_SCALE.with(TriggerInput::get)),
+    )
 }
 
-/// [`influx_driven_nursery_cap_bytes`] at a given ladder scale, so the retune
+/// [`ladder_nursery_cap_bytes`] at a given ladder scale, so the retune
 /// can price a candidate step before taking it.
-fn influx_driven_nursery_cap_bytes_at(scale: u8) -> usize {
+fn ladder_nursery_cap_bytes_at(scale: u8) -> usize {
     let constant_band = gc_scavenge_nursery_cap_bytes().saturating_mul(scale as usize)
         / NURSERY_CAP_SCALE_UNIT as usize;
     // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
@@ -682,7 +737,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
             previous,
             mean,
             nursery_cap_object_scale_permille(mean),
-            influx_driven_nursery_cap_bytes()
+            ladder_nursery_cap_bytes()
         );
     }
 }
@@ -762,7 +817,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
             objects,
             bytes,
             nursery_cap_object_scale_permille(mean),
-            influx_driven_nursery_cap_bytes()
+            ladder_nursery_cap_bytes()
         );
     }
 }
@@ -1081,9 +1136,8 @@ pub(super) fn retune_after_scavenge(
 fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usize) {
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
-    let cap_at = |scale: u8| {
-        scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes_at(scale), old_reclaimable)
-    };
+    let cap_at =
+        |scale: u8| scavenge_nursery_cap_from(ladder_nursery_cap_bytes_at(scale), old_reclaimable);
     let cap = cap_at(scale);
     // Called before `retune_after_scavenge` replaces it, so this is still the
     // cohort `first_round_live_bytes` follows.
@@ -1257,6 +1311,163 @@ fn start_cap_phase() {
     CAP_PHASE_CYCLES.with(|c| c.set(CapPhaseCycles::START));
 }
 
+/// This thread's CPU clock in nanoseconds: the time the thread ran, not the
+/// time that passed, so a server's idle wait and a preemption by another
+/// process count as neither mutator nor collector time. `None` where no
+/// per-thread CPU clock exists, which leaves the fixed-cost floor at its
+/// start (the influx ladder alone sizes Eden there, as before), and under the
+/// unit tests, whose collections must not depend on timing; they drive
+/// [`retune_fixed_cost_scale`] with explicit readings.
+pub(super) fn thread_cpu_ns() -> Option<u64> {
+    #[cfg(all(
+        not(test),
+        any(target_os = "linux", target_os = "android", target_vendor = "apple")
+    ))]
+    {
+        let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+        // SAFETY: `ts` is a valid out-pointer for the call's duration.
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0 {
+            return Some(
+                (ts.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(ts.tv_nsec as u64),
+            );
+        }
+    }
+    None
+}
+
+/// A minor collection begins on this thread (copying or not; only a copying
+/// minor completes the reading).
+pub(super) fn fixed_cost_minor_begin() {
+    let begin_ns = thread_cpu_ns();
+    FIXED_COST_CLOCK.with(|c| {
+        c.set(FixedCostClock {
+            begin_ns,
+            drain_ns: 0,
+            ..c.get()
+        })
+    });
+}
+
+/// The copying minor's worklist drain ran from `started` (a [`thread_cpu_ns`]
+/// reading) until now: survivor work, not fixed cost.
+pub(super) fn note_fixed_cost_drain(started: Option<u64>) {
+    if let (Some(started), Some(now)) = (started, thread_cpu_ns()) {
+        FIXED_COST_CLOCK.with(|c| {
+            let mut clock = c.get();
+            clock.drain_ns = clock.drain_ns.saturating_add(now.saturating_sub(started));
+            c.set(clock);
+        });
+    }
+}
+
+/// A copying minor finished. Its fixed cost is its CPU time minus its drains;
+/// the mutator time is the thread's CPU time since the previous copying minor
+/// finished. Only a minor that collected a whole Eden allocation window
+/// (`full_eden_window`) is a reading: an early minor (a forced or explicit
+/// collection) did not wait for an Eden to fill, so its interval says nothing
+/// about how often an Eden of `entry_cap` bytes fills.
+pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
+    let now = thread_cpu_ns();
+    let clock = FIXED_COST_CLOCK.with(|c| {
+        c.replace(FixedCostClock {
+            last_end_ns: now,
+            ..FixedCostClock::START
+        })
+    });
+    let (Some(now), Some(begin)) = (now, clock.begin_ns) else {
+        return;
+    };
+    if !full_eden_window {
+        return;
+    }
+    let fixed_ns = now.saturating_sub(begin).saturating_sub(clock.drain_ns);
+    let mutator_ns = begin.saturating_sub(clock.last_end_ns.unwrap_or(0));
+    retune_fixed_cost_scale(fixed_ns, mutator_ns, entry_cap);
+}
+
+/// Retune the ladder's fixed-cost floor from one copying minor: `fixed_ns` of
+/// work that does not scale with survivors (root scanning, the remembered
+/// set, pruning, finalization; everything but the worklist drain) against
+/// `mutator_ns` of program time that filled an Eden of `cap_now` bytes.
+///
+/// The fixed cost of a minor is paid once per Eden, so at an Eden of `C`
+/// bytes its share of the program's time is `fixed / mutator * cap_now / C`.
+/// The floor grows while that share is above [`FIXED_COST_GROW_PERCENT`] at
+/// the current size, straight to the smallest size at which this reading
+/// predicts it at or below the edge; it shrinks, to the smallest size at
+/// which the reading predicts at most [`FIXED_COST_SHRINK_PERCENT`], only
+/// when that is below the floor. Both need the previous reading to agree
+/// (the same [`RAISE_DEBOUNCE_CYCLES`] of two as the influx ladder), and move
+/// to the nearer of the two readings' destinations, so one slow minor (a page
+/// fault storm, a first-touch rebuild) moves nothing.
+///
+/// The floor is bounded by the ladder's ceiling (`NURSERY_CAP_SCALE_MAX`,
+/// 64 MB) and never takes a step that cannot enlarge the cap: where the
+/// tenured-proportional term or the influx scale already sets a larger Eden
+/// the floor stays put. The effective cap is the larger of the influx and
+/// fixed-cost scales ([`ladder_nursery_cap_bytes`]), and each dial keeps its
+/// own hysteresis, so a program whose fixed cost falls gives the memory back
+/// to whatever the influx ladder holds on its own, instead of the influx
+/// ladder's dead band keeping a size neither rule would choose.
+///
+/// The fixed cost is assumed not to grow with Eden. Where part of it does (a
+/// walk over Eden's pages), a growth lands short of the prediction and the
+/// next readings move again; it costs minors and never overshoots.
+///
+/// # Noise
+///
+/// The readings are thread CPU time, so they vary from run to run by the
+/// cache and frequency noise of a few milliseconds of work, a few percent.
+/// A move needs two readings beyond an edge, and the edges are a factor 2
+/// apart with every landing inside them (a growth lands above 1%, a shrink
+/// at or below 1% and only from a reading at or below 0.5%), so the floor of
+/// a program whose share is not within that noise of 2% is the same on every
+/// run.
+pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: usize) {
+    if mutator_ns == 0 || cap_now == 0 {
+        return;
+    }
+    let floor = FIXED_COST_SCALE.with(TriggerInput::get);
+    let influx = NURSERY_CAP_SCALE.with(TriggerInput::get);
+    let old_reclaimable = old_gen_reclaimable_pressure_bytes();
+    let cap_at = |scale: u8| {
+        scavenge_nursery_cap_from(
+            ladder_nursery_cap_bytes_at(scale.max(influx)),
+            old_reclaimable,
+        )
+    };
+    let ceiling = cap_at(NURSERY_CAP_SCALE_MAX);
+    // The smallest floor at which this reading predicts a fixed share of at
+    // most `percent`, or the first floor beyond which no step enlarges the cap.
+    let destination = |percent: u128| {
+        let mut scale = NURSERY_CAP_SCALE_MIN;
+        while scale < NURSERY_CAP_SCALE_MAX
+            && cap_at(scale) < ceiling
+            && u128::from(fixed_ns) * 100 * cap_now as u128
+                > percent * u128::from(mutator_ns) * cap_at(scale) as u128
+        {
+            scale *= 2;
+        }
+        scale
+    };
+    let grow_to = destination(FIXED_COST_GROW_PERCENT);
+    let shrink_to = destination(FIXED_COST_SHRINK_PERCENT);
+    let prev = FIXED_COST_PREV.with(|p| p.replace(Some((grow_to, shrink_to))));
+    let next = match prev {
+        Some((prev_grow, _)) if grow_to > floor && prev_grow > floor => grow_to.min(prev_grow),
+        Some((_, prev_shrink)) if shrink_to < floor && prev_shrink < floor => {
+            shrink_to.max(prev_shrink)
+        }
+        _ => floor,
+    };
+    if next != floor {
+        FIXED_COST_SCALE.with(|s| s.set(next));
+        diag_fixed_cost_scale(floor, next, fixed_ns, mutator_ns, cap_now);
+    }
+}
+
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
 /// promote-on-first-copy lock: ≥90% of the Eden bytes the sweep classified
 /// must have been live. That is the "the aging round would filter nothing"
@@ -1341,7 +1552,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
 /// diagnostic check or state reads on the disabled path.
 pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
     eprintln!(
-        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={}",
+        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={} fixed_cost_scale={}",
         NURSERY_CAP_SCALE.with(TriggerInput::get),
         scavenge_nursery_cap_effective_bytes(),
         MEAN_SURVIVING_OBJECT_BYTES.with(TriggerInput::get),
@@ -1349,7 +1560,18 @@ pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
         CAP_SHRINK_STREAK.with(Cell::get),
         PROMOTE_LOCK.with(Cell::get),
         TENURING_SURVIVALS.with(Cell::get),
+        FIXED_COST_SCALE.with(TriggerInput::get),
     );
+}
+
+fn diag_fixed_cost_scale(from: u8, to: u8, fixed_ns: u64, mutator_ns: u64, cap_now: usize) {
+    if crate::gc::diagnostic_hooks::enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery fixed-cost scale {from}/{unit} -> {to}/{unit} of base \
+             (fixed_ns={fixed_ns} mutator_ns={mutator_ns} cap={cap_now})",
+            unit = NURSERY_CAP_SCALE_UNIT
+        );
+    }
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
@@ -1357,7 +1579,7 @@ fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}/{unit} -> {to}/{unit} of base \
              (band {} B, eden_live_bytes={eden_live_bytes})",
-            influx_driven_nursery_cap_bytes_at(to),
+            ladder_nursery_cap_bytes_at(to),
             unit = NURSERY_CAP_SCALE_UNIT
         );
     }
@@ -1405,6 +1627,9 @@ pub(super) fn reset_for_test() {
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
     start_cap_phase();
+    FIXED_COST_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
+    FIXED_COST_PREV.with(|p| p.set(None));
+    FIXED_COST_CLOCK.with(|c| c.set(FixedCostClock::START));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
 }

@@ -148,24 +148,24 @@ fn census_carries_forward_across_a_cycle_that_moved_nothing() {
     // base, and the object denomination scales that.
     let base = nursery_cap_floor_bytes();
     assert_eq!(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         base,
         "unmeasured process must pace exactly as the pre-#7929 collector did"
     );
 
     note_surviving_object_census(56 * 1000, 1000);
-    let after_measurement = influx_driven_nursery_cap_bytes();
+    let after_measurement = ladder_nursery_cap_bytes();
     assert_eq!(after_measurement, base * 777 / 1000);
 
     note_surviving_object_census(0, 0);
     note_surviving_object_census(4096, 0);
     assert_eq!(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         after_measurement,
         "a cycle with no moved objects is a missing measurement, not a zero one"
     );
     reset_for_test();
-    assert_eq!(influx_driven_nursery_cap_bytes(), base);
+    assert_eq!(ladder_nursery_cap_bytes(), base);
 }
 
 /// #8122: the allocation census seeds the mean ONCE, only past half the
@@ -220,7 +220,7 @@ fn only_the_constant_band_is_re_denominated() {
     note_surviving_object_census(56 * 1000, 1000);
     let tenured = 512 * MB;
     assert_eq!(
-        scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes(), tenured),
+        scavenge_nursery_cap_from(ladder_nursery_cap_bytes(), tenured),
         tenured / TENURED_EDEN_DIVISOR,
         "the proportional arm must reach the max() unscaled"
     );
@@ -1247,10 +1247,117 @@ fn effective_nursery_cap_is_the_two_term_policy() {
     // that the #7377 floor survives whatever old-gen happens to be.
     reset_for_test();
     let expected = scavenge_nursery_cap_from(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         old_gen_reclaimable_pressure_bytes(),
     );
     assert_eq!(scavenge_nursery_cap_effective_bytes(), expected);
     assert!(scavenge_nursery_cap_effective_bytes() >= nursery_cap_floor_bytes() / 2);
+    reset_for_test();
+}
+
+fn fixed_cost_scale() -> u8 {
+    FIXED_COST_SCALE.with(TriggerInput::get)
+}
+
+/// One fixed-cost reading at the current effective cap: `fixed_permille` of
+/// the mutator time that filled it.
+fn fixed_cost_reading(fixed_permille: u64) {
+    retune_fixed_cost_scale(fixed_permille, 1000, scavenge_nursery_cap_effective_bytes());
+}
+
+/// F4: a minor whose fixed cost is 4% of the mutator time that filled its
+/// Eden doubles Eden, where the same reading predicts 2%; one reading alone
+/// moves nothing.
+#[test]
+fn a_fixed_cost_above_two_percent_grows_the_floor_after_two_readings() {
+    reset_for_test();
+    let floor_cap = scavenge_nursery_cap_effective_bytes();
+    fixed_cost_reading(40);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN,
+        "one reading moves nothing"
+    );
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), floor_cap * 2);
+    // At the new size the same minor is 2% of the mutator time: inside the
+    // band, it holds.
+    fixed_cost_reading(20);
+    fixed_cost_reading(20);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    reset_for_test();
+}
+
+/// One slow minor between ordinary ones is not a level.
+#[test]
+fn one_heavy_fixed_cost_reading_moves_nothing() {
+    reset_for_test();
+    for _ in 0..4 {
+        fixed_cost_reading(5);
+        fixed_cost_reading(300);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    reset_for_test();
+}
+
+/// A move takes every step the readings justify at once, to the nearer of
+/// the two readings' destinations, and stops at the ladder's ceiling.
+#[test]
+fn the_fixed_cost_floor_jumps_to_its_destination_and_stops_at_the_ceiling() {
+    reset_for_test();
+    // 16% at the floor predicts 2% three doublings up; 20% would need four.
+    fixed_cost_reading(200);
+    fixed_cost_reading(160);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 8);
+    // At 8x the cap, 100% predicts 50% at the ceiling: the floor stops there.
+    fixed_cost_reading(1000);
+    fixed_cost_reading(1000);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MAX);
+    reset_for_test();
+}
+
+/// The floor gives the memory back once the fixed cost is small: a reading
+/// at or below 1% at the smaller size, twice.
+#[test]
+fn a_small_fixed_cost_shrinks_the_floor_back() {
+    reset_for_test();
+    fixed_cost_reading(80);
+    fixed_cost_reading(80);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    // 0.8% at 4x is 1.6% at 2x and 3.2% at 1x: it only shrinks to where 1%
+    // still holds, which is 4x itself. No move.
+    fixed_cost_reading(8);
+    fixed_cost_reading(8);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    // 0.1% at 4x is 0.4% at the floor.
+    fixed_cost_reading(1);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 4,
+        "one reading moves nothing"
+    );
+    fixed_cost_reading(1);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    reset_for_test();
+}
+
+/// The effective cap is the larger of the two dials, and the fixed-cost
+/// floor is priced against the Eden the reading was measured at.
+#[test]
+fn the_fixed_cost_floor_composes_with_the_influx_scale() {
+    reset_for_test();
+    NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN * 8));
+    let cap8 = scavenge_nursery_cap_effective_bytes();
+    // 1.5% at 8x: inside the band, nothing to do.
+    fixed_cost_reading(15);
+    fixed_cost_reading(15);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap8);
+    // 4% at 8x: one step above the influx scale.
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 16);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap8 * 2);
     reset_for_test();
 }

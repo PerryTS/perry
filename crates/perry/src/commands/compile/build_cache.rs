@@ -10,7 +10,8 @@ use super::compile_env::{compile_env_value, COMPILE_ENV_VARS};
 
 use super::{
     optimized_libs::{
-        gc_diagnostics_requested, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
+        gc_collector_diagnostics_requested, gc_diagnostics_requested, gc_instruments_requested,
+        gc_trace_requested, hot_diag_requested,
     },
     BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats,
 };
@@ -888,6 +889,7 @@ fn current_env() -> Vec<EnvFingerprint> {
         hot_diag_requested(),
         gc_trace_requested(),
         gc_diagnostics_requested(),
+        gc_collector_diagnostics_requested(),
     ));
     env
 }
@@ -897,12 +899,17 @@ fn runtime_feature_fingerprint(
     hot_diag: bool,
     gc_trace: bool,
     gc_diagnostics: bool,
-) -> [EnvFingerprint; 4] {
+    gc_collector_diagnostics: bool,
+) -> [EnvFingerprint; 5] {
     [
         ("runtime-feature:gc-instruments", gc_instruments),
         ("runtime-feature:hot-diag", hot_diag),
         ("runtime-feature:gc-trace", gc_trace),
         ("runtime-feature:gc-diagnostics", gc_diagnostics),
+        (
+            "runtime-feature:gc-collector-diagnostics",
+            gc_collector_diagnostics,
+        ),
     ]
     .map(|(name, enabled)| EnvFingerprint {
         name: name.to_string(),
