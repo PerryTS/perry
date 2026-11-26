@@ -146,6 +146,7 @@ mod forin_key_string;
 mod fresh_static_blocks;
 mod assign_source_kinds;
 mod shaped_key_accessors;
+mod spread_builtin_own;
 mod function_call_value;
 mod guards1;
 mod guards3;

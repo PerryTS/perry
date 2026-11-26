@@ -429,7 +429,7 @@ impl Model {
         if !opaque && self.may_wrap_string(s) {
             self.add_prim(fa_d, prim::STR);
         }
-        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d, self.thrown));
+        self.builtin_own_copy(s, fa_d);
         // A typed array's integer indices are own enumerable keys whose
         // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
         // stores them under index keys of the target (7.3.25).
