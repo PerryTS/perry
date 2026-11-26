@@ -1,0 +1,1 @@
+On `--target web`, `Reflect.get`, `Reflect.set`, `Reflect.deleteProperty`, `Reflect.isExtensible`, `Reflect.preventExtensions` and `Reflect.setPrototypeOf` answer as in Node, with a receiver, symbol keys and a TypeError for a primitive target (#15381).

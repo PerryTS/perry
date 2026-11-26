@@ -2497,6 +2497,30 @@ const __memDispatch = {
     return false;
   },
   reflect_own_keys: (obj) => Reflect.ownKeys(obj).filter(k => !__isInternalKey(obj, k)),
+  // An omitted receiver arrives as `undefined` and means the target.
+  reflect_get: (obj, key, receiver) => {
+    if (!__holdsProperties(obj)) return Reflect.get(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    let holder = obj;
+    if (k === 'funcIdx' || k === 'captures') {
+      while (holder !== null && !__memDispatch.object_has_own(holder, k)) holder = Reflect.getPrototypeOf(holder);
+      if (holder === null) return undefined;
+    }
+    return Reflect.get(holder, k, receiver === undefined ? obj : receiver);
+  },
+  reflect_set: (obj, key, value, receiver) => {
+    if (!__holdsProperties(obj)) return Reflect.set(obj, key, value);
+    const k = __memDispatch.to_property_key(key);
+    return Reflect.set(obj, k, value, receiver === undefined ? obj : receiver);
+  },
+  reflect_delete_property: (obj, key) => {
+    if (!__holdsProperties(obj)) return Reflect.deleteProperty(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    return __isInternalKey(obj, k) || Reflect.deleteProperty(obj, k);
+  },
+  reflect_is_extensible: (obj) => Reflect.isExtensible(obj),
+  reflect_prevent_extensions: (obj) => Reflect.preventExtensions(obj),
+  reflect_set_prototype_of: (obj, proto) => Reflect.setPrototypeOf(obj, proto),
   reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
     ? __memDispatch.object_get_own_property_descriptor(obj, key)
     : Reflect.getOwnPropertyDescriptor(obj, key),

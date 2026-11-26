@@ -28,6 +28,23 @@ pub(in crate::emit) fn reflection_bridge(expr: &Expr) -> Option<(&'static str, V
             key,
             descriptor,
         } => ("reflect_define_property", vec![target, key, descriptor]),
+        Expr::ReflectGet {
+            target,
+            key,
+            receiver,
+        } => ("reflect_get", vec![target, key, receiver]),
+        Expr::ReflectSet {
+            target,
+            key,
+            value,
+            receiver,
+        } => ("reflect_set", vec![target, key, value, receiver]),
+        Expr::ReflectDelete { target, key } => ("reflect_delete_property", vec![target, key]),
+        Expr::ReflectIsExtensible(target) => ("reflect_is_extensible", vec![target]),
+        Expr::ReflectPreventExtensions(target) => ("reflect_prevent_extensions", vec![target]),
+        Expr::ReflectSetPrototypeOf { target, proto } => {
+            ("reflect_set_prototype_of", vec![target, proto])
+        }
         _ => return None,
     })
 }
