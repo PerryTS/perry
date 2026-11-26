@@ -1504,8 +1504,26 @@ impl Model {
                 // the class's [[Prototype]] runs as itself.
                 let native = crate::builtins::native_parent_value(self, class);
                 for &parent in toks {
+                    // The value is the realm constructor of a summarized
+                    // native parent (`builtins::native_parent_of`) reached
+                    // without a name link: a member heritage (`extends
+                    // globalThis.Error`) evaluates the same value a bare name
+                    // does (ECMA-262 9.1.1.2.6 GetBindingValue of the global
+                    // object record is [[Get]] on the global object), so
+                    // `super()` runs the same native summary. A name-linked
+                    // class ran it already (`Cons::SuperCtor`).
+                    let summarized = match native {
+                        None => crate::builtins::native_parent_of(self, parent),
+                        Some(_) => None,
+                    };
                     match self.toks[parent as usize] {
                         _ if Some(parent) == native => {}
+                        _ if summarized.is_some() => {
+                            let name = summarized.expect("guarded");
+                            self.with_native(call, |m, call| {
+                                crate::builtins::native_parent_ctor_named(m, name, call, origin)
+                            });
+                        }
                         TokKind::ClassObj(tm) => {
                             // Record the link before the parent's stores
                             // reach the instance (§17.2 item 2).

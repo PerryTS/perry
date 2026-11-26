@@ -1550,6 +1550,7 @@ mod keycall1;
 mod method_this_escape;
 mod native_parent;
 mod e11_null_parent;
+mod tokid_parent;
 mod native_parent_program_class;
 mod native_proto_member;
 mod native_push;
