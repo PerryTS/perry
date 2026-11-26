@@ -29,7 +29,7 @@ mod payload_transport;
 mod test_async_shims;
 use crate::tls::TlsClientConfigData;
 pub(crate) use jsvalue::{
-    build_error_object, get_object_bool_field, get_object_number_field, get_object_string_field,
+    get_object_bool_field, get_object_number_field, get_object_string_field,
     get_object_value_field, is_nanboxed_pointer, jsvalue_to_owned_string, jsvalue_to_socket_bytes,
     string_from_header_i64, unbox_pointer,
 };
