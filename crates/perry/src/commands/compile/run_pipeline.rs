@@ -775,11 +775,9 @@ pub fn run_with_parse_cache(
     // #6125: resolve the CPU-baseline knob (`--march` / env / perry.toml
     // `[build] march` / `[build] native_tuning`) into the canonical
     // PERRY_TARGET_CPU env var, exactly like `--debug-symbols` above.
-    // Codegen's clang invocation, the object/build cache keys, and the
-    // auto-optimize runtime rebuild all read that one var, so a build meant
-    // to run on other machines (publish workers, CI) can pin a portable
-    // baseline (e.g. x86-64-v2) instead of baking the build box's full ISA
-    // (AVX-512) into the shipped binary.
+    // Codegen's clang invocation and the object/build cache keys read that
+    // one var. Unset means the target triple's fixed baseline (x86-64-v3 on
+    // x86-64), never the build box's CPU; `native` is an explicit opt-in.
     bootstrap::promote_cpu_baseline_env(&args);
 
     // `--trace <stages>` consolidates the scattered debug-dump knobs into one

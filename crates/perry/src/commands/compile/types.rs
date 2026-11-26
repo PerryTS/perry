@@ -160,17 +160,19 @@ pub struct CompileArgs {
     #[arg(long)]
     pub libc: Option<String>,
 
-    /// CPU baseline for the generated machine code (#6125). Accepts an LLVM
-    /// CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native`
-    /// (tune to this machine's full instruction set — the default for host
-    /// builds), or `generic`/`off` (the target architecture's portable
-    /// baseline — the default for cross builds). Pin this when the binary
-    /// will run on other machines: a build box with AVX-512 otherwise bakes
-    /// AVX-512 into a host-native build, which SIGILLs on older x86-64 CPUs.
-    /// Also settable via the `PERRY_TARGET_CPU` env var or perry.toml
-    /// `[build] march`; `[build] native_tuning = false` is shorthand for
-    /// `generic`. Applies to app code, and to the auto-optimized
-    /// runtime/stdlib rebuild via `-C target-cpu`.
+    /// CPU baseline for the generated machine code (#6125). Unset, every
+    /// build gets its target's fixed baseline, whatever machine it is built
+    /// on: `x86-64-v3` on x86-64 Linux/macOS/Windows, `apple-m1` on Apple
+    /// silicon macOS, the architecture's LLVM baseline elsewhere (armv8-a on
+    /// aarch64 Linux). Accepts an LLVM CPU name (`x86-64-v2`, `x86-64-v4`,
+    /// `znver4`, `apple-m2`, …), `native` (opt in to this machine's full
+    /// instruction set: the binary then only runs on CPUs with every
+    /// extension the build machine has, e.g. AVX-512), or `generic`/`off`
+    /// (the architecture's LLVM baseline, x86-64 v1 on x86-64). Also settable
+    /// via the `PERRY_TARGET_CPU` env var or perry.toml `[build] march`;
+    /// `[build] native_tuning` `true`/`false` is shorthand for
+    /// `native`/`generic`. Applies to app code; the runtime and stdlib
+    /// archives are built at the target's default baseline.
     #[arg(long)]
     pub march: Option<String>,
 

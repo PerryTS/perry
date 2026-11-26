@@ -448,7 +448,7 @@ silently regressing to zero.
 | Flag | Description |
 |------|-------------|
 | `--minify` | Minify and obfuscate output (auto-enabled for `--target web`) |
-| `--march <CPU>` | CPU baseline for the generated machine code: an LLVM CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native` (tune to the build machine — the default for host builds), or `generic` (the target architecture's portable baseline — the default for cross builds). Pin this when the binary runs on other machines: a host-native build on an AVX-512 box otherwise SIGILLs on older x86-64 CPUs. Also settable via `PERRY_TARGET_CPU` or perry.toml `[build] march`; `[build] native_tuning = false` is shorthand for `generic`. Applies to app code and the auto-optimized runtime/stdlib rebuild. |
+| `--march <CPU>` | CPU baseline for the generated machine code. Unset, every build targets its triple's fixed baseline, whatever machine builds it: `x86-64-v3` (AVX2) on x86-64 Linux, macOS and Windows, `apple-m1` on Apple silicon macOS, the architecture's LLVM baseline elsewhere (armv8-a on aarch64 Linux). Accepts an LLVM CPU name (`x86-64-v2`, `x86-64-v4`, `znver4`, `apple-m2`, …), `native` (opt in to the build machine's full instruction set; the binary then only runs on CPUs with every extension that machine has, e.g. AVX-512), or `generic` (the architecture's LLVM baseline, x86-64 v1 on x86-64). Also settable via `PERRY_TARGET_CPU` or perry.toml `[build] march`; `[build] native_tuning` `true`/`false` is shorthand for `native`/`generic`. Applies to app code; the runtime and stdlib archives are built at the target's default baseline. |
 | `--features <LIST>` | Define comma-separated compile-time `__feature_NAME__` constants for dead-code elimination. |
 | `--no-auto-optimize` | Use the prebuilt full runtime/stdlib instead of rebuilding the smallest reachable feature set. |
 | `--fast-math` | Permit floating-point reassociation; see [Fast-math](fast-math.md). |
@@ -505,7 +505,7 @@ shrink less, proportionally.
 |----------|-------------|
 | `PERRY_LICENSE_KEY` | Perry Hub license key for `perry publish` |
 | `PERRY_APPLE_CERTIFICATE_PASSWORD` | Password for .p12 certificate |
-| `PERRY_TARGET_CPU` | CPU baseline for generated machine code (same values as `--march`; the flag and perry.toml `[build] march` win over the env var) |
+| `PERRY_TARGET_CPU` | CPU baseline for generated machine code (same values as `--march`; `--march` wins over the env var, which wins over perry.toml `[build] march`; unset = the target's fixed baseline) |
 | `PERRY_NO_UPDATE_CHECK=1` | Disable automatic update checks |
 | `NO_UPDATE_NOTIFIER` | The same, using the ecosystem-wide spelling |
 | `PERRY_UPDATE_MODE` | `off`/`notify`/`prompt`/`auto` for one run — see [Updates](updates.md) |
