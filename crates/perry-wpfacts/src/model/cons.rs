@@ -537,7 +537,9 @@ pub enum Cons {
     ProtoMethods { origin: Tok, key: Key, call: CallId },
     /// The node is the prototype closure of `origin`: accessors of every
     /// holder on it run for a computed-key lookup with `origin` as `this`.
-    AnyAccessors { origin: Tok, act: ChainAct },
+    /// `key` is the lookup's key: of known shape, a holder whose members
+    /// it splits (`Model::shape_splits`) runs only the accessors it names.
+    AnyAccessors { origin: Tok, key: Key, act: ChainAct },
     /// The node is a copy source's unnamed-key field (`field_any`): once it
     /// holds a value the source has an own key the model does not name, a
     /// [[Set]] of some key on `target` (Object.assign, `spread_into`) at

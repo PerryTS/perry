@@ -257,9 +257,10 @@ impl Model {
                 self.packet_key(key),
                 call
             ),
-            Cons::AnyAccessors { origin, act } => format!(
-                "AnyAccessors origin={:?} act={:?}",
+            Cons::AnyAccessors { origin, key, act } => format!(
+                "AnyAccessors origin={:?} key={:?} act={:?}",
                 self.packet_token(origin, packet),
+                key,
                 act
             ),
             Cons::UnnamedSet { target, .. } => {

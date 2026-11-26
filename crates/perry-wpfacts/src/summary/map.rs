@@ -238,8 +238,9 @@ pub fn map_cons(
             key,
             call: k(call),
         },
-        AnyAccessors { origin, act } => AnyAccessors {
+        AnyAccessors { origin, key, act } => AnyAccessors {
             origin,
+            key,
             act: act_map(act, &mut n, &mut k),
         },
         UnnamedSet { target, site } => UnnamedSet { target, site },

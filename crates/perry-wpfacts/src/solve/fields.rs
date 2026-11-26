@@ -521,7 +521,7 @@ impl Model {
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
         let act = ChainAct::Load(fa_d, self.thrown);
-        self.any_walk_holders.entry(s).or_default().push((s, act));
+        self.any_walk_holders.entry(s).or_default().push((s, Key::any(), act));
         self.accessor_hit(s, s, Key::any(), act);
     }
 
@@ -846,7 +846,7 @@ impl Model {
         let act = ChainAct::Load(dst, self.thrown);
         // Any-key lookups subscribe through the holder relation;
         // named-key replay in `visits` does not cover them.
-        self.any_walk_holders.entry(t).or_default().push((t, act));
+        self.any_walk_holders.entry(t).or_default().push((t, Key::any(), act));
         self.accessor_hit(t, t, Key::any(), act);
     }
 
