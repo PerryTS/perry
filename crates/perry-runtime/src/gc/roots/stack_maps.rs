@@ -1116,9 +1116,9 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
                 // frame's DWARF CFI and does not need VG for an fp-based
                 // frame.
                 //
-                // This is not hypothetical and it is not rare. Perry tunes a
-                // host build with `-mcpu=native`; on any Neoverse-class core
-                // that turns SVE on, and LLVM then emits the module body's
+                // This is not hypothetical and it is not rare. A build with
+                // `--march native` (or `-mcpu=neoverse-n2`) on any
+                // Neoverse-class core turns SVE on, and LLVM then emits the module body's
                 // prologue as (measured on `01_nursery_churn`, aarch64 Linux,
                 // `-mcpu=neoverse-n2`):
                 //
