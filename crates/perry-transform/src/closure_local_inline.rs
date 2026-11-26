@@ -24,8 +24,9 @@
 //!    nowhere else — the inliner's default-parameter expansion after a
 //!    supplied argument;
 //! 2. finds `let f = <arrow literal>` where the arrow is synchronous, has
-//!    only plain parameters, none of which the body writes, no mutable
-//!    captures, no `new.target` capture, and a single `return <expr>` body,
+//!    only plain parameters, none of which the body writes, declares no type
+//!    parameters, has no mutable captures and no `new.target` capture, and a
+//!    single `return <expr>` body,
 //!    and where every use of `f` in the rest of the list is a direct call
 //!    with exactly the declared number of stable arguments;
 //! 3. replaces each such call with the arrow's return expression, parameters
@@ -240,6 +241,7 @@ fn arrow_candidate(
 ) -> Option<(LocalId, Vec<LocalId>, Expr)> {
     let Expr::Closure {
         params,
+        type_params,
         body,
         captures,
         mutable_captures,
@@ -253,6 +255,9 @@ fn arrow_candidate(
         return None;
     };
     if !*is_arrow
+        // The inlined body would name the arrow's own `T` where only the
+        // enclosing function's type parameters are in scope.
+        || !type_params.is_empty()
         || *is_async
         || *is_generator
         || *captures_new_target
@@ -1040,6 +1045,41 @@ mod tests {
                 byte_offset: 0,
             }),
             Stmt::Expr(call_local(F, vec![Expr::Integer(1)])),
+        ];
+        let before = stmts.clone();
+        let mut next = 100;
+        reduce(&mut stmts, &mut next);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    /// Inlining would leave the arrow's own `T` unbound in the caller, where
+    /// the enclosing function's specialization substitutes its own `T`.
+    #[test]
+    fn a_generic_arrow_keeps_its_type_parameters() {
+        let mut generic = arrow(1, vec![param(P, "x")], Expr::LocalGet(P), false);
+        if let Expr::Closure { type_params, .. } = &mut generic {
+            type_params.push(perry_hir::types::TypeParam {
+                name: "T".into(),
+                constraint: None,
+                default: None,
+            });
+        }
+        let mut stmts = vec![
+            Stmt::Let {
+                byte_offset: 0,
+                id: F,
+                name: "f".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(generic),
+            },
+            Stmt::Expr(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::LocalGet(F)),
+                args: vec![Expr::Integer(1)],
+                type_args: vec![Type::Number],
+                byte_offset: 0,
+            }),
         ];
         let before = stmts.clone();
         let mut next = 100;
