@@ -172,6 +172,28 @@ pub(super) fn transform_writable_for_readable(readable_id: usize) -> Option<usiz
     with_ts(transform, |t| t.writable_handle)
 }
 
+/// The transform behind `writable_id`: its callback `cb`, its readable side,
+/// and its native codec taken out of the record. The codec runs outside the
+/// registry guard (its enqueue resolves the readable through the transform's
+/// controller, which reads this registry, and it allocates); the caller puts
+/// it back after the step.
+fn transform_parts(
+    writable_id: usize,
+    cb: impl FnOnce(&TransformStreamData) -> i64,
+) -> (i64, usize, Option<(TsRef, NativeTransformKind)>) {
+    let Some(t_id) = transform_of_writable(WsRef(writable_id)) else {
+        return (0, 0, None);
+    };
+    match ts_rec(t_id).as_deref_mut() {
+        Some(t) => (
+            cb(t),
+            t.readable_handle(),
+            t.native.take().map(|native| (t_id, native)),
+        ),
+        None => (0, 0, None),
+    }
+}
+
 /// Replacement `writer.write` for the writable side of a TransformStream
 /// — invokes the user transform with (chunk, transformController) where
 /// the transformController is the readable-side stream handle (so
@@ -192,26 +214,14 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
             }
         }
     }
+    let (transform_cb, readable_id, native) = transform_parts(writable_id, |t| t.transform_cb);
     let mut handled_native = false;
     let mut native_error = None;
-    let (transform_cb, readable_id) = {
-        match transform_of_writable(WsRef(writable_id)) {
-            Some(t_id) => match ts_rec(t_id).as_deref_mut() {
-                Some(t) => {
-                    let readable = t.readable_handle();
-                    if let Some(native) = t.native.as_mut() {
-                        handled_native = true;
-                        if let Err(error_bits) = native_transform_write(native, readable, chunk) {
-                            native_error = Some(error_bits);
-                        }
-                    }
-                    (t.transform_cb, t.readable_handle())
-                }
-                None => (0, 0),
-            },
-            None => (0, 0),
-        }
-    };
+    if let Some((t_id, mut native)) = native {
+        handled_native = true;
+        native_error = native_transform_write(&mut native, readable_id, chunk).err();
+        with_ts(t_id, |t| t.native = Some(native));
+    }
     if let Some(error_bits) = native_error {
         if readable_id != 0 {
             js_readable_stream_controller_error(
@@ -630,26 +640,14 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
 }
 
 unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
+    let (flush_cb, readable_id, native) = transform_parts(writable_id, |t| t.flush_cb);
     let mut handled_native = false;
     let mut native_error = None;
-    let (flush_cb, readable_id) = {
-        match transform_of_writable(WsRef(writable_id)) {
-            Some(t_id) => match ts_rec(t_id).as_deref_mut() {
-                Some(t) => {
-                    let readable = t.readable_handle();
-                    if let Some(native) = t.native.as_mut() {
-                        handled_native = true;
-                        if let Err(error_bits) = native_transform_close(native, readable) {
-                            native_error = Some(error_bits);
-                        }
-                    }
-                    (t.flush_cb, t.readable_handle())
-                }
-                None => (0, 0),
-            },
-            None => (0, 0),
-        }
-    };
+    if let Some((t_id, mut native)) = native {
+        handled_native = true;
+        native_error = native_transform_close(&mut native, readable_id).err();
+        with_ts(t_id, |t| t.native = Some(native));
+    }
     // Writable ProcessClose: the close algorithm (TransformStreamDefaultSink-
     // CloseAlgorithm: flush, then TransformStreamDefaultControllerClear-
     // Algorithms) runs, then the writable's ClearAlgorithms.
