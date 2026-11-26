@@ -54,23 +54,30 @@ impl<'a> FuncEmitCtx<'a> {
 
     /// The one value of the function declaration `func_idx` (`function_value`).
     pub(super) fn emit_function_value(&mut self, func: &mut Function, func_idx: u32) {
-        let emitter = &self.emitter;
-        let table_idx = emitter
+        let table_idx = self
+            .emitter
             .func_to_table_idx
             .get(&func_idx)
             .copied()
             .unwrap_or(func_idx);
-        let proto = emitter.fn_proto_code(func_idx);
-        let name = emitter.fn_names.get(&func_idx).copied().unwrap_or(0);
-        self.emit_frame_begin(func, 3);
+        self.emit_frame_begin(func, 2);
         self.emit_store_const(func, 0, table_idx as f64);
-        self.emit_store_const(func, 1, proto);
-        self.emit_store_const(
-            func,
-            2,
-            f64::from_bits((STRING_TAG << 48) | u64::from(name)),
-        );
-        self.emit_memcall(func, "function_value", 3);
+        self.emit_store_fn_info(func, 1, func_idx);
+        self.emit_memcall(func, "function_value", 2);
+    }
+
+    /// Stores function `func_idx`'s `__FnInfo` record (its global) in arg slot `slot`.
+    pub(super) fn emit_store_fn_info(&mut self, func: &mut Function, slot: u32, func_idx: u32) {
+        self.emit_slot_addr(func, slot);
+        match self.emitter.fn_info_globals.get(&func_idx) {
+            Some(&gidx) => func.instruction(&Instruction::GlobalGet(gidx)),
+            None => func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64)),
+        };
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
     }
 
     /// Emit a bridge function call via WASM memory (Firefox NaN-safe, reentrant-safe).

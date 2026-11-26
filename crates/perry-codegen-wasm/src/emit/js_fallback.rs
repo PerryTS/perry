@@ -293,16 +293,21 @@ impl WasmModuleEmitter {
             .get(&func_idx)
             .copied()
             .unwrap_or(func_idx);
-        let name = self
-            .fn_names
-            .get(&func_idx)
-            .map_or("", |&id| &self.string_table[id as usize].0);
         format!(
-            "fromJsValue(__memDispatch.function_value({}, {}, {}))",
+            "fromJsValue(__memDispatch.function_value({}, {}))",
             table_idx,
-            self.fn_proto_code(func_idx),
-            js_string_literal(name)
+            self.js_fn_info(func_idx)
         )
+    }
+
+    /// JS for function `func_idx`'s `__FnInfo` record, read from its exported global.
+    fn js_fn_info(&self, func_idx: u32) -> String {
+        match self.fn_info_globals.get(&func_idx) {
+            Some(gidx) => {
+                format!("toJsValue(u64ToF64(wasmInstance.exports.__wasm_global_{gidx}.value))")
+            }
+            None => "undefined".to_string(),
+        }
     }
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
@@ -1380,7 +1385,7 @@ impl WasmModuleEmitter {
                     table_idx,
                     captures.len(),
                     u8::from(this == ClosureThis::Receiver),
-                    self.fn_proto_code(func_idx)
+                    self.js_fn_info(func_idx)
                 );
                 let mut values: Vec<String> = captures
                     .iter()

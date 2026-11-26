@@ -51,7 +51,7 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_const(func, 1, captures.len() as f64);
                     let receives_this = this == ClosureThis::Receiver;
                     self.emit_store_const(func, 2, f64::from(u8::from(receives_this)));
-                    self.emit_store_const(func, 3, self.emitter.fn_proto_code(func_idx));
+                    self.emit_store_fn_info(func, 3, func_idx);
                     self.emit_memcall(func, "closure_new", 4);
                     // Set captures, then the captured `this` (see compile_closure).
                     let local_map = self.local_map;
