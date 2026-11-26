@@ -1685,6 +1685,8 @@ class __PerryReceiverClosure extends __PerryClosure {}
 let __closureReceiver;
 // One value per function declaration, keyed by its table index (`function_value`).
 const __functionValues = new Map();
+// One namespace object per source module, keyed by its module index (`module_namespace`).
+const __moduleNamespaces = new Map();
 function __isPerryClosure(v) {
   return __PerryClosure.is(v);
 }
@@ -2264,6 +2266,10 @@ const __missingWellKnownSymbols = Object.create(null);
 
 // The bridge tables have no prototype: mem_call indexes them by a call site's method name,
 // and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
+// The receivers the array bridges walk (`indexOf`, `map`, `join`, ...): an array or a
+// typed array, whose own method then runs with the typed array's semantics.
+const __arrayOrTyped = (v) => Array.isArray(v) || (ArrayBuffer.isView(v) && !(v instanceof DataView));
+
 const __memDispatch = {
   __proto__: null,
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
@@ -2350,6 +2356,8 @@ const __memDispatch = {
   string_eq: (a, b) => a === b ? 1 : 0,
   string_len: (val) => {
     if (typeof val === 'string') return val.length;
+    // A typed array's own `length` (a DataView has none, so it reads undefined).
+    if (ArrayBuffer.isView(val)) return val.length;
     if (Array.isArray(val)) return val.length;
     return 0;
   },
@@ -2411,6 +2419,28 @@ const __memDispatch = {
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
   // SameValue: NaN is itself and 0 is not -0, unlike `===`.
   object_is: (a, b) => Object.is(a, b),
+  // `import * as ns` used as a value: the source module's exports sorted on a null
+  // prototype, tagged `Module`, not extensible. `values` pairs each export with its
+  // value and `globals` each promoted-let export with its wasm global, read on every
+  // access so the binding stays live.
+  module_namespace: (id, values, globals) => {
+    let ns = __moduleNamespaces.get(id);
+    if (ns) return ns;
+    ns = Object.create(null);
+    const members = [...values, ...globals.map(([key, g]) => [key, undefined, g])];
+    for (const [key, value, g] of members.sort(([a], [b]) => (a < b ? -1 : 1))) {
+      if (g !== undefined) {
+        const cell = wasmInstance.exports[`__wasm_global_${g}`];
+        Object.defineProperty(ns, key, { get: () => toJsValue(u64ToF64(cell.value)), enumerable: true });
+      } else {
+        // Not writable, as an importer cannot assign an export.
+        Object.defineProperty(ns, key, { value, enumerable: true });
+      }
+    }
+    Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });
+    __moduleNamespaces.set(id, Object.preventExtensions(ns));
+    return ns;
+  },
 
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
@@ -2497,6 +2527,30 @@ const __memDispatch = {
     return false;
   },
   reflect_own_keys: (obj) => Reflect.ownKeys(obj).filter(k => !__isInternalKey(obj, k)),
+  // An omitted receiver arrives as `undefined` and means the target.
+  reflect_get: (obj, key, receiver) => {
+    if (!__holdsProperties(obj)) return Reflect.get(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    let holder = obj;
+    if (k === 'funcIdx' || k === 'captures') {
+      while (holder !== null && !__memDispatch.object_has_own(holder, k)) holder = Reflect.getPrototypeOf(holder);
+      if (holder === null) return undefined;
+    }
+    return Reflect.get(holder, k, receiver === undefined ? obj : receiver);
+  },
+  reflect_set: (obj, key, value, receiver) => {
+    if (!__holdsProperties(obj)) return Reflect.set(obj, key, value);
+    const k = __memDispatch.to_property_key(key);
+    return Reflect.set(obj, k, value, receiver === undefined ? obj : receiver);
+  },
+  reflect_delete_property: (obj, key) => {
+    if (!__holdsProperties(obj)) return Reflect.deleteProperty(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    return __isInternalKey(obj, k) || Reflect.deleteProperty(obj, k);
+  },
+  reflect_is_extensible: (obj) => Reflect.isExtensible(obj),
+  reflect_prevent_extensions: (obj) => Reflect.preventExtensions(obj),
+  reflect_set_prototype_of: (obj, proto) => Reflect.setPrototypeOf(obj, proto),
   reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
     ? __memDispatch.object_get_own_property_descriptor(obj, key)
     : Reflect.getOwnPropertyDescriptor(obj, key),
@@ -2604,12 +2658,7 @@ const __memDispatch = {
   },
   array_set: (arr, index, value) => { if (Array.isArray(arr)) arr[typeof index === 'number' ? index : index] = value; },
   array_length: (arr) => Array.isArray(arr) ? arr.length : 0,
-  array_slice: (arr, start, end) => {
-    if (!Array.isArray(arr)) return [];
-    const s = typeof start === 'number' ? start : 0;
-    const e = end === undefined ? undefined : (typeof end === 'number' ? end : end);
-    return arr.slice(s, e);
-  },
+  array_slice: (arr, start, end) => (__arrayOrTyped(arr) ? arr.slice(start, end) : []),
   array_splice: (arr, start, deleteCount, ...items) => {
     if (!Array.isArray(arr)) return [];
     const s = typeof start === 'number' ? start : 0;
@@ -2623,16 +2672,16 @@ const __memDispatch = {
   // The host join owns element conversion (nested arrays, nullish elements) and the
   // separator's: an undefined one is ",", not "undefined".
   array_join: (arr, separator) => {
-    if (!Array.isArray(arr)) return '';
+    if (!__arrayOrTyped(arr)) return '';
     return arr.join(separator);
   },
-  array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
-  array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
+  array_index_of: (arr, value, fromIndex) => { if (!__arrayOrTyped(arr)) return -1; return arr.indexOf(value, fromIndex); },
+  array_includes: (arr, value, fromIndex) => { if (!__arrayOrTyped(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
   // fromIndex goes through only when the call passes one: an explicit `undefined`
   // searches from index 0, not from the end.
-  array_last_index_of: (arr, value, ...fromIndex) => Array.isArray(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
+  array_last_index_of: (arr, value, ...fromIndex) => __arrayOrTyped(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
-  array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
+  array_reverse: (arr) => { if (__arrayOrTyped(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
@@ -2806,12 +2855,12 @@ const __memDispatch = {
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
   array_map: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return [];
     return arr.map((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr))));
   },
   array_filter: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return [];
     return arr.filter((v, i) => {
       const r = call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
@@ -2823,13 +2872,13 @@ const __memDispatch = {
   },
   // `forEach` is dispatched by name, so a Set or a Map receiver reaches it too.
   array_forEach: (arr, cb) => {
-    const isCollection = Array.isArray(arr) || arr instanceof Set || arr instanceof Map;
+    const isCollection = __arrayOrTyped(arr) || arr instanceof Set || arr instanceof Map;
     const call = isCollection ? __arrayCallback(cb) : undefined;
     if (!call) return;
     arr.forEach((v, i) => call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
   },
   array_reduce: (arr, cb, initial) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return undefined;
     let acc = initial === undefined ? __jsValueToBits(arr[0]) : __jsValueToBits(initial);
     const startIdx = initial === undefined ? 1 : 0;
@@ -2837,16 +2886,17 @@ const __memDispatch = {
     return __bitsToJsValue(acc);
   },
   array_find: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return undefined;
     for (let i = 0; i < arr.length; i++) {
-      const vBits = __jsValueToBits(arr[i]);
-      if (__bitsToJsValue(call(vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
+      // The element the predicate saw, whatever the predicate writes.
+      const v = arr[i];
+      if (__bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) return v;
     }
     return undefined;
   },
   array_find_index: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return -1;
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
@@ -2854,7 +2904,7 @@ const __memDispatch = {
   array_find_last: (arr, cb) => __reflectApply(Array.prototype.findLast, arr, [__hostPredicate(cb)]),
   array_find_last_index: (arr, cb) => __reflectApply(Array.prototype.findLastIndex, arr, [__hostPredicate(cb)]),
   array_sort: (arr, cb) => {
-    if (!Array.isArray(arr)) return arr;
+    if (!__arrayOrTyped(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
     const call = __arrayCallback(cb);
     if (!call) { arr.sort(); return arr; }
@@ -2879,8 +2929,8 @@ const __memDispatch = {
   array_to_spliced: (arr, start, deleteCount, ...items) => __reflectApply(Array.prototype.toSpliced, arr, [start, deleteCount, ...items]),
   array_with: (arr, index, value) => __reflectApply(Array.prototype.with, arr, [index, value]),
   array_copy_within: (arr, target, start, end) => __reflectApply(Array.prototype.copyWithin, arr, [target, start, end]),
-  array_some: (arr, cb) => Array.isArray(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
-  array_every: (arr, cb) => Array.isArray(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
+  array_some: (arr, cb) => __arrayOrTyped(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
+  array_every: (arr, cb) => __arrayOrTyped(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
@@ -3489,7 +3539,7 @@ const __memDispatch = {
     return result;
   },
   uint8array_new: (size) => new Uint8Array(size),
-  uint8array_from: (val) => Uint8Array.from(Array.isArray(val) ? val : []),
+  uint8array_from: (val) => Uint8Array.from(val),
   uint8array_length: (buf) => (buf instanceof Uint8Array) ? buf.length : 0,
   uint8array_get: (buf, idx) => (buf instanceof Uint8Array) ? buf[idx] : 0,
   uint8array_set: (buf, idx, val) => { if (buf instanceof Uint8Array) buf[idx] = val; },
@@ -4551,7 +4601,8 @@ function perry_ui_widget_set_shadow(h, r, g, b, a, blur, offsetX, offsetY) {
 }
 function perry_ui_set_opacity(h, opacity) { const el = uiGet(h); if (el) el.style.opacity = opacity; }
 function perry_ui_set_enabled(h, enabled) {
-  const el = uiGet(h); if (el) { el.disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
+  // On a Toggle the checkbox is the control: disabling its wrapper leaves the keyboard working.
+  const el = uiGet(h); if (el) { (el._inp || el).disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
 }
 function perry_ui_set_tooltip(h, text) { const el = uiGet(h); if (el) el.title = text || ""; }
 // On a Toggle the name goes on the checkbox: a screen reader ignores one on its wrapper.
@@ -4674,13 +4725,14 @@ function perry_ui_on_frame(callback) {
 }
 function perry_ui_cancel_frame(id) { cancelAnimationFrame(id); }
 
+// On a Toggle, a click on the wrapper also clicks its checkbox and both reach the wrapper.
 function perry_ui_set_on_click(h, callback) {
-  const el = uiGet(h); if (el) el.addEventListener("click", () => callWasmClosure(callback));
+  const el = uiGet(h); if (el) (el._inp || el).addEventListener("click", () => callWasmClosure(callback));
 }
 function perry_ui_set_on_hover(h, callback) {
   const el = uiGet(h); if (!el) return;
-  el.addEventListener("mouseenter", () => callWasmClosure(callback, 1.0));
-  el.addEventListener("mouseleave", () => callWasmClosure(callback, 0.0));
+  el.addEventListener("mouseenter", () => callWasmClosure(callback, true));
+  el.addEventListener("mouseleave", () => callWasmClosure(callback, false));
 }
 function perry_ui_set_on_double_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("dblclick", () => callWasmClosure(callback));
@@ -4689,6 +4741,8 @@ function perry_ui_set_on_double_click(h, callback) {
 // focus, and Enter or Space to activate it, as a native button would.
 function perry_ui_widget_set_on_click(h, callback) {
   const el = uiGet(h); if (!el) return;
+  // A Toggle's checkbox is already a focusable control.
+  if (el._inp) return perry_ui_set_on_click(h, callback);
   el.addEventListener("click", () => callWasmClosure(callback));
   if (el.tagName === "BUTTON") return;
   el.style.cursor = "pointer";
@@ -4970,6 +5024,39 @@ function perry_ui_wheel_picker_add_item(h, title) {
 }
 function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if (el) el.selectedIndex = index; }
 function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
+// RadioGroup: one `<fieldset>` whose radios share a name, each inside its own `<label>`;
+// onChange receives the chosen index, as Picker's does. An index is a radio's place among
+// the labels the group holds now, so clearing the group leaves no stale radio.
+let radioGroupSeq = 0;
+const radioGroupRadios = (fs) => [...fs.children].map(label => label._radio).filter(Boolean);
+function perry_ui_radio_group_create(callback) {
+  const fs = document.createElement("fieldset");
+  fs.setAttribute("role", "radiogroup");
+  fs.style.display = "flex"; fs.style.flexDirection = "column"; fs.style.gap = "4px";
+  fs.style.border = "none"; fs.style.padding = "0"; fs.style.margin = "0"; fs.style.minWidth = "0";
+  fs._perryCallback = callback;
+  fs._radioName = "perry-radio-" + (++radioGroupSeq);
+  return uiAlloc(fs);
+}
+function perry_ui_radio_group_add_item(h, title) {
+  const fs = uiGet(h); if (!fs) return;
+  const label = document.createElement("label");
+  label.style.display = "flex"; label.style.alignItems = "center"; label.style.gap = "8px";
+  const input = document.createElement("input"); input.type = "radio"; input.name = fs._radioName;
+  input.addEventListener("change", () => {
+    if (input.checked && fs._perryCallback !== undefined) callWasmClosure(fs._perryCallback, radioGroupRadios(fs).indexOf(input));
+  });
+  label.appendChild(input);
+  label._radio = input;
+  const text = document.createElement("span"); text.textContent = title; label.appendChild(text);
+  fs.appendChild(label);
+}
+function perry_ui_radio_group_set_selected(h, index) {
+  const fs = uiGet(h); if (fs) radioGroupRadios(fs).forEach((r, i) => { r.checked = i === (index | 0); });
+}
+function perry_ui_radio_group_get_selected(h) {
+  const fs = uiGet(h); return fs ? radioGroupRadios(fs).findIndex(r => r.checked) : -1;
+}
 
 // ---------- Image ----------
 // A symbol is `symbols/<name>.svg` beside the page, drawn as a mask over the current
@@ -6442,6 +6529,8 @@ const __perryUiDispatch = {
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,
+  perry_ui_radio_group_create, perry_ui_radio_group_add_item,
+  perry_ui_radio_group_set_selected, perry_ui_radio_group_get_selected,
   // Image
   perry_ui_image_create_symbol, perry_ui_image_create_url,
     perry_ui_load_image, perry_ui_image_set_size, perry_ui_image_set_tint,

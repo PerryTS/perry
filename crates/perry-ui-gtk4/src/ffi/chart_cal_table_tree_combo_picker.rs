@@ -160,3 +160,22 @@ pub extern "C" fn perry_ui_wheel_picker_set_selected(handle: i64, index: i64) {
 pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
+
+/// RadioGroup shares Picker's API and index callback; the radio buttons exist on the
+/// web target only, so this backend shows a picker.
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_create(on_change: f64) -> i64 {
+    perry_ui_picker_create(on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_add_item(handle: i64, title_ptr: i64) {
+    perry_ui_picker_add_item(handle, title_ptr);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_set_selected(handle: i64, index: i64) {
+    perry_ui_picker_set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_get_selected(handle: i64) -> i64 {
+    perry_ui_picker_get_selected(handle)
+}

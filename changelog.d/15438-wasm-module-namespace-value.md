@@ -1,0 +1,1 @@
+On `--target web`, `import * as m` used as a value is the module namespace object (sorted exports on a null prototype, tagged `Module`, live `let` bindings) instead of `undefined`, in synchronous and async bodies; a namespace member that is a class (`new m.K()`) is that class (#15385).

@@ -140,6 +140,9 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
+            Expr::ExternFuncRef { name, .. } if self.emitter.namespace_import(name).is_some() => {
+                self.emit_namespace_value(func, name);
+            }
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: an `ExternFuncRef` used as a value can resolve
                 // either to (a) a cross-module function — its one value
@@ -260,8 +263,13 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_memcall(func, "map_new", 0);
                         return true;
                     }
-                    // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic).
-                    "WeakMap" if !self.emitter.user_classes.contains(class_name.as_str()) => {
+                    // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic),
+                    // its ArrayBuffer and DataView, and a typed array over a buffer
+                    // (`new Int32Array(buffer, offset, length)`).
+                    name if (matches!(name, "WeakMap" | "ArrayBuffer" | "DataView")
+                        || perry_hir::ir::typed_array_kind_for_name(name).is_some())
+                        && !self.emitter.user_classes.contains(name) =>
+                    {
                         let callee = Expr::PropertyGet {
                             byte_offset: 0,
                             byte_end: 0,

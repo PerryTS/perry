@@ -1180,6 +1180,23 @@ impl WasmModuleEmitter {
                                         .or_insert(fidx);
                                 }
                             }
+                            let mut classes = BTreeMap::new();
+                            for name in &public {
+                                self.intern_string(name);
+                                if let Some(class) =
+                                    resolve_export_to_class(modules, &name_to_idx, src_idx, name, 8)
+                                {
+                                    classes.insert(name.clone(), class);
+                                }
+                            }
+                            self.namespace_imports.insert(
+                                (consumer_idx, local.clone()),
+                                NamespaceImport {
+                                    source: src_idx,
+                                    members: public.into_iter().collect(),
+                                    classes,
+                                },
+                            );
                         }
                     }
                 }

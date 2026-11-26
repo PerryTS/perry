@@ -122,6 +122,10 @@ A numeric slider.
 
 A dropdown selection control. Items are added with `pickerAddItem`.
 
+```typescript,no-test
+{{#include ../../examples/ui/widgets/picker.ts}}
+```
+
 ## WheelPicker
 
 A wheel-style selector for long sequential lists such as hours, minutes, or
@@ -137,9 +141,27 @@ for (let hour = 0; hour < 24; hour++) {
 }
 ```
 
+## RadioGroup
+
+Radio buttons for a short list where every choice should stay visible. It
+takes Picker's API: items are added with `radioGroupAddItem`, and `onChange`
+receives the chosen index. The web target renders a `<fieldset>` of radio
+buttons, which `widgetSetAccessibilityLabel` names; native backends show a
+Picker, and visionOS its wheel picker.
+
 ```typescript,no-test
-{{#include ../../examples/ui/widgets/picker.ts}}
+import { RadioGroup, radioGroupAddItem } from "perry/ui";
+
+const urgency = RadioGroup((index) => console.log("urgency:", index));
+radioGroupAddItem(urgency, "Today");
+radioGroupAddItem(urgency, "This week");
+radioGroupAddItem(urgency, "Any time");
 ```
+
+- `radioGroupGetSelected` returns -1 on the web and Windows until something is
+  chosen. The other native targets report the first item, 0, once they have items.
+- tvOS never calls `onChange`, and HarmonyOS shows no added items.
+- On macOS two items cannot share a title: the later one replaces the earlier.
 
 ## ImageFile / ImageSymbol
 
@@ -522,10 +544,10 @@ Every widget handle accepts these:
 | `widgetSetOpacity(w, alpha)` | Opacity in [0, 1] |
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
-| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
+| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop and web) |
 | `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; `accessibilityLabel` on Apple targets; content description on Android, where it replaces a text field's value: use `Label`; GTK4 accessible label; no-op on Windows and HarmonyOS) |
 | `widgetSetOnClick(w, cb)` | Click handler |
-| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
+| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop and web) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
 | `setPadding(w, value)` / `setPadding(w, top, left, bottom, right)` | Padding around contents |
 | `widgetSetBorderColor(w, r, g, b, a)` / `widgetSetBorderWidth(w, n)` | Border |

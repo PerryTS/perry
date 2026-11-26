@@ -1,0 +1,1 @@
+On `--target web`, a typed array's `join`, `slice`, `reverse`, `sort`, `map`, `filter`, `forEach`, `reduce`, `find`, `findIndex`, `some` and `every` work in a non-async body instead of returning `""` / an empty Array or never calling the callback (#15460).
