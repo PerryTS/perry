@@ -259,6 +259,9 @@ mod tests {
             // test is unchanged: beforeExit must not consume the timer, and the
             // NEXT turn must.
             assert_eq!(js_promise_run_microtasks_event_loop(), 0);
+            // A 0 ms timeout is a 1 ms timer (node's floor): due once the
+            // loop clock has moved on.
+            std::thread::sleep(std::time::Duration::from_millis(2));
             assert!(crate::timer::js_event_loop_timers_phase() > 0);
             assert_eq!(
                 crate::promise::js_promise_value(rooted_promise(&promise)),
