@@ -3,16 +3,12 @@
 //! Split out of `lib.rs` to keep that file under the 2000-line size gate.
 //! These are the pure value-extraction utilities the FFI entry points use to
 //! read host/port/option fields off JS option objects, turn a `socket.write`
-//! argument into wire bytes, and build the `Error`-shaped object the
-//! `'error'` listener receives. Every symbol stays `pub(crate)` and is
+//! argument into wire bytes. Every symbol stays `pub(crate)` and is
 //! re-exported from the crate root (`pub(crate) use jsvalue::*;`), so the
 //! existing `crate::<fn>` call sites in `lib.rs` and the sibling modules
 //! (`tls`, `classes`, `ip`, `lifecycle`, `option_setters`) are unchanged.
 
-use perry_ffi::{
-    alloc_string, js_object_set_field, nanbox_string_bits, read_string, BufferHeader, JsString,
-    JsValue, ObjectHeader, StringHeader,
-};
+use perry_ffi::{read_string, BufferHeader, JsString, JsValue, ObjectHeader, StringHeader};
 
 pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     let p = ptr as usize;
@@ -341,117 +337,6 @@ pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Op
     None
 }
 
-/// Build an `Error`-shaped object `{ message: msg }` so user code can
-/// read `err.message` from the `'error'` listener — Node emits Error
-/// instances, not raw strings. Returns a NaN-boxed `f64` pointing at
-/// the object. Issue #770.
-/// Split libuv's socket-error message shape, `"<syscall> <CODE>"`, into its
-/// two halves.
-///
-/// Node's `err.message` for a socket failure starts with the syscall and the
-/// code (`connect ECONNREFUSED 127.0.0.1:1`), and `err.syscall` / `err.code` /
-/// `err.errno` are that same information as properties. Parsing the message we
-/// already produce keeps one source of truth instead of threading three more
-/// fields through every event.
-fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
-    let mut parts = msg.split(' ');
-    let syscall = parts.next()?;
-    let code = parts.next()?;
-    let is_code = code.len() >= 2
-        && code.starts_with('E')
-        && code
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    let is_syscall = !syscall.is_empty()
-        && syscall
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    (is_code && is_syscall).then_some((syscall, code))
-}
-
-pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
-    let parts = libuv_message_parts(msg);
-    let obj: *mut ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(
-            perry_ffi::runtime_layouts::RECORD_F21_0::desc(),
-        )
-    };
-    if obj.is_null() {
-        // Fall back to the bare string so the listener still receives
-        // *something* if the object alloc failed.
-        let s = alloc_string(msg);
-        return f64::from_bits(nanbox_string_bits(s.as_raw()));
-    }
-    let roots = perry_ffi::TransientRootScope::enter();
-    let object = roots.root_nanbox(f64::from_bits(
-        JsValue::from_object_ptr(obj as *mut u8).bits(),
-    ));
-    let s = alloc_string(msg);
-    let v = JsValue::from_string_ptr(s.as_raw());
-    js_object_set_field(unbox_pointer(object.get()) as *mut ObjectHeader, 0, v);
-    let code = if let Some((_, code)) = parts {
-        Some(code)
-    } else if msg.starts_with("ERR_") {
-        Some(msg)
-    } else if msg == "Socket is closed" {
-        Some("ERR_SOCKET_CLOSED")
-    } else if msg.contains("UnknownIssuer")
-        || msg.contains("unknown issuer")
-        || msg.contains("invalid peer certificate")
-    {
-        Some("DEPTH_ZERO_SELF_SIGNED_CERT")
-    } else if msg.to_ascii_lowercase().contains("connection refused") {
-        Some("ECONNREFUSED")
-    } else {
-        None
-    };
-    // `JsString` is a bare pointer wrapper, so each freshly allocated string is
-    // rooted through the same scope as the receiver before the next store — a
-    // field write can collect, and a raw local would be read back stale.
-    if let Some(code) = code {
-        let code = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
-            alloc_string(code).as_raw(),
-        )));
-        js_object_set_field(
-            unbox_pointer(object.get()) as *mut ObjectHeader,
-            1,
-            JsValue::from_bits(code.get().to_bits()),
-        );
-    }
-    let name = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
-        alloc_string("Error").as_raw(),
-    )));
-    js_object_set_field(
-        unbox_pointer(object.get()) as *mut ObjectHeader,
-        2,
-        JsValue::from_bits(name.get().to_bits()),
-    );
-    // `errno` and `syscall` only exist on an error that really came from a
-    // syscall; leaving them undefined otherwise is what Node does, and is why
-    // they are set from the parsed message rather than unconditionally. The
-    // number is looked up in the runtime's own table so `code` and `errno`
-    // cannot disagree across platforms.
-    if let Some((syscall, code)) = parts {
-        let errno = perry_ffi::turnloop_net::errno_for_code(code);
-        if errno != 0 {
-            js_object_set_field(
-                unbox_pointer(object.get()) as *mut ObjectHeader,
-                3,
-                JsValue::from_number(errno as f64),
-            );
-        }
-        let syscall = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
-            alloc_string(syscall).as_raw(),
-        )));
-        js_object_set_field(
-            unbox_pointer(object.get()) as *mut ObjectHeader,
-            4,
-            JsValue::from_bits(syscall.get().to_bits()),
-        );
-    }
-    object.get()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,7 +434,7 @@ mod tests {
     fn socket_bytes_rejects_non_buffer_object() {
         let _serial = crate::test_serial();
         perry_ffi::initialize_runtime_fixture();
-        let obj_f64 = unsafe { build_error_object("boom") };
+        let obj_f64 = crate::payload_socket::error("EIO", "boom");
         assert!(JsValue::from_bits(obj_f64.to_bits()).is_pointer());
         let bytes = unsafe { jsvalue_to_socket_bytes(obj_f64) };
         assert!(

@@ -140,6 +140,8 @@ fn resolve_disk(specifier: &str, parent: &Path) -> Option<PathBuf> {
 
 fn decode_path(value: &str) -> PathBuf {
     if value.starts_with("file:") {
+        // A program that never imports `url` has not installed the decoder.
+        crate::feature_hooks::install_url_values();
         let decoded = crate::url_hooks::url_file_url_to_path(string_value(value), undefined());
         PathBuf::from(value_to_string(decoded, "parent"))
     } else {
@@ -238,5 +240,14 @@ mod tests {
         );
         assert_eq!(export_target(&exports, "./private"), None);
         assert_eq!(export_target(&exports, "./missing"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_url_parent_decodes_without_url_module() {
+        assert_eq!(
+            decode_path("file:///tmp/entry%20space/"),
+            PathBuf::from("/tmp/entry space/")
+        );
     }
 }

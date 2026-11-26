@@ -5,8 +5,9 @@
 //!   `js_dynamic_string_or_number_add` in `describe`;
 //! * the same program with a subclass returning a string, or a field that
 //!   becomes a string, keeps the dynamic add (and node's output);
-//! * `s.x = v` on a facts-proven nullable receiver is one receiver test and
-//!   a slot store, not the by-name store site.
+//! * `s.x = v` on a facts-proven object receiver is a slot store, and on a
+//!   facts-proven nullable one a receiver test and a slot store, never the
+//!   by-name store site.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -113,10 +114,22 @@ fn proven_number_returns_add_without_the_dynamic_helper() {
         "describe keeps the dynamic add:\n{describe}"
     );
     assert!(describe.contains("fadd double"), "describe has no fadd");
-    // The store into the proven slot has no by-name site.
+    // `i < shapes.length` proves `shapes[i]` an object: the s.x store is a
+    // slot store with no receiver test and no by-name site.
+    let main = body(&ir, "main");
+    for by_name in [
+        "set_field_by_name",
+        "set_field_by_property_id",
+        "js_put_value_set",
+    ] {
+        assert!(
+            !main.contains(by_name),
+            "the main loop's s.x store is not the proven store ({by_name})"
+        );
+    }
     assert!(
-        ir.contains("wpf.set.obj"),
-        "the main loop's s.x store is not the proven store"
+        !main.contains("wpf.set.obj"),
+        "the in-bounds receiver keeps a test"
     );
     let dir2 = tempfile::tempdir().unwrap();
     let node = Command::new("node")
@@ -166,4 +179,19 @@ fn a_field_that_becomes_a_string_keeps_the_dynamic_add() {
         out.lines().last().unwrap().contains('y'),
         "wrong output: {out}"
     );
+}
+
+#[test]
+fn a_nullable_receiver_keeps_one_test_before_the_slot_store() {
+    let source = format!(
+        "{SHAPES}\ntry {{\n  const t: Shape = shapes[shapes.length];\n  t.x = 1;\n}} catch (e) {{\n  console.log(e instanceof TypeError);\n}}\n"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let (ir, out) = compile_and_run(dir.path(), &source, true);
+    let main = body(&ir, "main");
+    assert!(
+        main.contains("wpf.set.obj"),
+        "the out-of-bounds receiver's t.x store is not the proven store"
+    );
+    assert!(out.ends_with("true\n"), "wrong output: {out}");
 }

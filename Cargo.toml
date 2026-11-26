@@ -537,6 +537,11 @@ http = "1"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
 rustls-pemfile = "2"
 socket2 = "0.6"
+# url 2.5.9 (Cargo.lock) fixes RUSTSEC-2026-0592 in 2.5.8. Published
+# 2026-11-20T23:03Z, inside the 7-day soak; locked once with the owner-approved
+# one-time publish-age override (2026-11-26) for exactly url 2.5.9 and the
+# form_urlencoded 1.2.3 it requires. The override lapses on its own on
+# 2026-11-27, when both clear the window.
 url = "2"
 dirs = "7"
 

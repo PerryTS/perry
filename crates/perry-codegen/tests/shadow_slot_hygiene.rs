@@ -625,6 +625,7 @@ fn closure_captured_write_shadow_module() -> Module {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Closure {
+                        type_params: Vec::new(),
                         byte_offset: 0,
                         func_id: 30,
                         params: Vec::new(),

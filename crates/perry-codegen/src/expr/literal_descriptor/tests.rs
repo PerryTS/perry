@@ -320,6 +320,7 @@ fn born_wide_factory_uses_return_shape_fact() {
 
 fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2002,
         params: vec![],

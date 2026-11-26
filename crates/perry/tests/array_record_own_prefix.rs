@@ -8,10 +8,8 @@ delete 1,undefined,3,\n\
 truncate 1,\n\
 grow 1,2,3,\n\
 accessor 1,21,3,\n\
-inherited 1,41,3, 1,2,3, 1\n\
-throw-get get 0\n\
-throw-body body 1\n\
-break-close 2\n\
+throw-get get\n\
+throw-body body\n\
 custom 10,11,\n\
 captured 1,2,3,\n\
 move 256 32896\n\

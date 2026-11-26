@@ -2,6 +2,7 @@ use perry_hir::{types::Type, Expr, Function, Module, Stmt};
 
 fn literal(captures: u32) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 100,
         params: Vec::new(),

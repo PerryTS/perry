@@ -663,6 +663,7 @@ fn a_write_from_a_closure_disqualifies() {
         condition: Some(cmp(CompareOp::Lt, Expr::LocalGet(2), Expr::Integer(10))),
         update: Some(inc(2)),
         body: vec![Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0,
             params: Vec::<Param>::new(),

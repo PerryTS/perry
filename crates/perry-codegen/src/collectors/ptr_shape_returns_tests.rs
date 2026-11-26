@@ -219,6 +219,7 @@ fn return_inside_a_closure_body_is_not_exempt() {
     let stmts = vec![
         let_c(1, "escapes"),
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
@@ -1298,6 +1299,7 @@ fn boxed_producer_local_gets_no_fact() {
         let_c(1, "o"),
         // A closure that mutably captures `o` — boxes it.
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 98,
             params: Vec::new(),
@@ -1345,6 +1347,7 @@ fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params: Vec::new(),
@@ -1540,6 +1543,7 @@ fn a_reassigned_callee_binding_is_not_resolved() {
     // a per-region scan would miss.
     binding_is_killed_by(
         vec![Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 77,
             params: Vec::new(),

@@ -954,10 +954,14 @@ pub(crate) mod stdlib_pump {
     pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
         // Payload transports have no extension handle registry. Their driver
         // already accounts for ref'd sockets and owed completions, including
-        // Closed after destroy. Query the existing agent loop without creating
-        // one, so a net-only program stays alive to deliver those completions.
+        // Closed after destroy; a socket destroyed while resolving owes its
+        // Closed from `turnloop_net`'s own queue. Query the existing agent loop
+        // without creating one, so a net-only program stays alive to deliver
+        // those completions.
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::event_pump::agent_loop_has_outstanding_work() {
+        if crate::event_pump::agent_loop_has_outstanding_work()
+            || crate::turnloop_net::close_queued()
+        {
             return 1;
         }
         if crate::node_api_host::hooks::has_active_work() {
