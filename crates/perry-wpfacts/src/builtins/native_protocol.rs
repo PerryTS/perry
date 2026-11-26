@@ -204,15 +204,9 @@ pub fn native_nonplain_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// besides `undefined` (ECMA-262 10.1.6.3: the descriptor's own functions).
 pub fn native_accessor_known(m: &mut Model, np: Tok, a: Atom, dst: NodeId, setter: bool) {
     let mut found: Vec<Tok> = Vec::new();
-    for w in m.native_writes.values() {
-        let fns = if setter { &w.setters } else { &w.getters };
-        if fns.is_empty() {
-            continue;
-        }
-        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
-        if top || own {
-            found.extend(fns.iter().copied());
-        }
+    for e in written_entries(m, np, a, false) {
+        let w = &m.native_writes[&e];
+        found.extend(if setter { &w.setters } else { &w.getters }.iter().copied());
     }
     for f in found {
         m.add_tok(dst, f);
@@ -288,10 +282,7 @@ fn written_by(
         .atom_index
         .get(crate::model::NUM_KEY)
         .copied()
-        .filter(|_| {
-            let n = &m.atoms[a as usize];
-            crate::solve::numeric_key(n) || n == "length"
-        });
+        .filter(|_| m.numeric_atom(a) || m.atoms[a as usize] == "length");
     // A computed read (`STAR_KEY`) may name the key of any write.
     let any = m.atoms[a as usize] == crate::STAR_KEY;
     // A read under a number (`NUM_KEY`, DECISIONS 217 c) names a numeric key
@@ -321,10 +312,7 @@ fn written_by(
             || (has(t, Some(a)) && !stored(t))
             || num.is_some_and(|n| has(t, Some(n)))
             || (any && any_on(t, &|k| !field_named(t, k)))
-            || (num_read
-                && any_on(t, &|k| {
-                    k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
-                }))
+            || (num_read && any_on(t, &|k| k.is_some_and(|k| m.numeric_atom(k))))
     };
     // The HIR global sentinel (`Other`, what a bare global name is read
     // off) is the global object: a write through either token is a write
@@ -367,6 +355,155 @@ fn written_by(
     )
 }
 
+/// The write entries [`written_by`] counts for `np`'s key `a`, each once, in
+/// key order: those `written_by(m, np, a, f, &|x| ptr::eq(x, w))` holds
+/// for, found in one walk of the entries it looks at instead of one
+/// `written_by` per entry.
+fn written_entries(
+    m: &Model,
+    np: Tok,
+    a: Atom,
+    field_carries_stores: bool,
+) -> Vec<(Tok, Option<Atom>)> {
+    if realm_replaced(m, np, a) {
+        return m.native_writes.keys().copied().collect();
+    }
+    let name = &m.atoms[a as usize];
+    let num = m
+        .atom_index
+        .get(crate::model::NUM_KEY)
+        .copied()
+        .filter(|_| m.numeric_atom(a) || name == "length");
+    let any = name == crate::STAR_KEY;
+    let num_read = name == crate::model::NUM_KEY;
+    let stored_key = |t: Tok, k: Atom| {
+        field_carries_stores
+            && super::global_object(m, t)
+            && !m.accessors.contains_key(&(t, k))
+            && !m.native_given.iter().any(|&(w, _)| w == t)
+    };
+    let field_named = |t: Tok, k: Option<Atom>| {
+        k.is_some_and(|k| {
+            let n = &m.atoms[k as usize];
+            n != crate::STAR_KEY && n != crate::model::NUM_KEY && stored_key(t, k)
+        })
+    };
+    let mut out: Vec<(Tok, Option<Atom>)> = Vec::new();
+    // `written_by`'s `hit(t)`, as the entries it matches.
+    let mut on = |t: Tok| {
+        let mut key = |k: Option<Atom>| {
+            if m.native_writes.contains_key(&(t, k)) {
+                out.push((t, k));
+            }
+        };
+        key(None);
+        if !stored_key(t, a) {
+            key(Some(a));
+        }
+        if let Some(n) = num {
+            key(Some(n));
+        }
+        if any || num_read {
+            for (&(_, k), _) in m.native_writes.range((t, None)..=(t, Some(Atom::MAX))) {
+                if (any && !field_named(t, k)) || (num_read && k.is_some_and(|k| m.numeric_atom(k)))
+                {
+                    out.push((t, k));
+                }
+            }
+        }
+    };
+    let is_global = super::global_object(m, np);
+    if m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np))) {
+        on(TOP);
+    }
+    on(np);
+    if is_global {
+        for ns in [BuiltinNs::GlobalThis, BuiltinNs::Other] {
+            if let Some(&g) = m.tok_index.get(&TokKind::Builtin(ns)) {
+                if g != np {
+                    on(g);
+                }
+            }
+        }
+    }
+    if let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) {
+        let global = match &m.toks[np as usize] {
+            TokKind::NativeProto(_, ns) => ns.is_some(),
+            _ => is_global,
+        };
+        if global && !locked_chain_read(m, np, a) {
+            on(op);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The (key, native prototype) pairs of `idx` whose [`written_by`] write
+/// entry `(t, k)` may count, a superset: an entry counts only on ⊤, the
+/// lookup's own token, the global object's tokens or `Object.prototype`
+/// (`wide`: any prototype), and only under the lookup's key, any key
+/// (`k` `None`), a computed key (`STAR_KEY`: any write), a number
+/// (`NUM_KEY` reads a numeric write) or, for an element store (`NUM_KEY`
+/// written), a numeric key or `length`. `realm_replaced` counts every entry
+/// but never holds for a lookup still parked or answered from stored values
+/// once `note_realm_held` replayed them; before that every replay is full.
+fn reached<V>(
+    m: &Model,
+    idx: &std::collections::BTreeMap<(Atom, Tok), V>,
+    (t, k): (Tok, Option<Atom>),
+) -> Vec<(Atom, Tok)> {
+    let wide = t == TOP
+        || super::global_object(m, t)
+        || matches!(m.toks[t as usize], TokKind::ObjectProto);
+    let tok_ok = |np: Tok| wide || np == t;
+    let Some(b) = k else {
+        return idx.keys().filter(|&&(_, np)| tok_ok(np)).copied().collect();
+    };
+    let mut out: Vec<(Atom, Tok)> = Vec::new();
+    let key = |a: Atom, out: &mut Vec<(Atom, Tok)>| {
+        if wide {
+            out.extend(idx.range((a, 0)..=(a, Tok::MAX)).map(|(&g, _)| g));
+        } else if idx.contains_key(&(a, t)) {
+            out.push((a, t));
+        }
+    };
+    key(b, &mut out);
+    if let Some(&s) = m.atom_index.get(crate::STAR_KEY) {
+        if s != b {
+            key(s, &mut out);
+        }
+    }
+    if let Some(&n) = m.atom_index.get(crate::model::NUM_KEY) {
+        if n == b {
+            out.extend(idx.keys().copied().filter(|&(a, np)| {
+                a != b && tok_ok(np) && (m.numeric_atom(a) || m.atoms[a as usize] == "length")
+            }));
+        } else if m.numeric_atom(b) {
+            key(n, &mut out);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Before `note_realm_held` replayed (`realm_replaced` may count every write
+/// for a parked or answered lookup): every replay runs all of them.
+fn realm_window(m: &Model) -> bool {
+    m.realm_held && !m.native_realm_replayed
+}
+
+/// An accessor or a prototype was given to `t`: for the global object the
+/// next replay runs every parked lookup ([`Model::native_replay_all`]).
+pub fn note_global_holder(m: &mut Model, t: Tok) {
+    if super::global_object(m, t) {
+        m.native_replay_all = true;
+        m.native_replay_seq += 1;
+    }
+}
+
 /// Unknown code holds the realm (ECMA-262 9.3, `Model::realm_held`): it may
 /// have replaced (or made an accessor of) a member of a built-in family's own
 /// prototype that the runtime's lock does not make final, with any function
@@ -406,6 +543,7 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
 /// have replaced (`realm_replaced`) take the opaque member.
 pub fn note_realm_held(m: &mut Model) {
     replay_native_missing(m);
+    m.native_realm_replayed = true;
     // Unknown code may register a process listener: it is handed the
     // process events (`Model::process_event`).
     let (pe, e) = (m.process_event, m.esc_raise);
@@ -610,7 +748,7 @@ fn note_write(
         }
     }
     if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
-        replay_native_missing(m);
+        replay_native_by(m, Some((t, k)));
         return;
     }
     // A plain store or a delete adds one stored value (or `undefined`) to
@@ -621,7 +759,7 @@ fn note_write(
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
     if fresh || first_value {
-        replay_pending(m);
+        replay_pending(m, Some((t, k)));
     }
 }
 
@@ -923,25 +1061,35 @@ fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
 /// Lookups that passed a native prototype (or read a program-owned global)
 /// under a key that may now be written: they take the opaque member.
 pub(super) fn replay_native_missing(m: &mut Model) {
-    if m.native_missing.is_empty() && m.native_answered.is_empty() {
+    replay_native_by(m, None)
+}
+
+/// [`replay_native_missing`] after write entry `by` changed (`None`: every
+/// lookup): only the lookups whose answer it may change ([`reached`]).
+fn replay_native_by(m: &mut Model, by: Option<(Tok, Option<Atom>)>) {
+    if m.native_missing.is_empty() && m.native_parked.is_empty() && m.native_answered.is_empty() {
         return;
     }
-    replay_pending(m);
+    replay_pending(m, by);
+    let by = by.filter(|_| !realm_window(m));
     // Lookups answered by what the writes stored: refilled, or run as
     // opaque members once an opaque write reaches their key.
     m.native_replays += 1;
     m.with_b(|m| {
-        let keys: Vec<_> = m
-            .native_answer_nodes
-            .iter()
-            .map(|(&k, &e)| (k, e))
-            .collect();
+        let keys: Vec<(Atom, Tok)> = match by {
+            None => m.native_answer_keys.keys().copied().collect(),
+            Some(e) => reached(m, &m.native_answer_keys, e),
+        };
         let mut opaque: std::collections::HashSet<(Tok, Atom)> = Default::default();
-        for ((np, a), e) in keys {
+        for (a, np) in keys {
+            let Some(&e) = m.native_answer_nodes.get(&(np, a)) else {
+                continue;
+            };
             match stored_values(m, np, a) {
                 Some((stored, absent)) => fill_stored(m, e, &stored, absent),
                 None => {
                     m.native_answer_nodes.remove(&(np, a));
+                    m.native_answer_keys.remove(&(a, np));
                     opaque.insert((np, a));
                 }
             }
@@ -964,11 +1112,33 @@ pub(super) fn replay_native_missing(m: &mut Model) {
 
 /// Lookups parked past a native prototype whose key a write may now reach:
 /// answered from the stored values, or run as opaque members.
-fn replay_pending(m: &mut Model) {
-    if m.native_missing.is_empty() {
+///
+/// `by`: the write entry that changed (`None`: every lookup). The lookups
+/// no replay has seen (`native_missing`) always run; of those parked
+/// (`Model::native_parked`) only the groups the entry may reach
+/// ([`reached`]): a parked lookup's answer changes only by such a write or
+/// by an event that replays every lookup (`note_realm_held`,
+/// `note_global_in_top`, `note_handed_to_unknown`,
+/// `Model::native_replay_all`).
+fn replay_pending(m: &mut Model, by: Option<(Tok, Option<Atom>)>) {
+    let all = std::mem::take(&mut m.native_replay_all) || realm_window(m);
+    let by = by.filter(|_| !all);
+    if m.native_missing.is_empty() && m.native_parked.is_empty() {
         return;
     }
-    let pending = std::mem::take(&mut m.native_missing);
+    m.native_replay_seq += 1;
+    let seq = m.native_replay_seq;
+    let mut pending = std::mem::take(&mut m.native_missing);
+    let groups: Vec<((Atom, Tok), Vec<NativeMiss>)> = match by {
+        None => std::mem::take(&mut m.native_parked).into_iter().collect(),
+        Some(e) => reached(m, &m.native_parked, e)
+            .into_iter()
+            .filter_map(|g| m.native_parked.remove(&g).map(|v| (g, v)))
+            .collect(),
+    };
+    for ((a, np), v) in groups {
+        pending.extend(v.into_iter().map(|miss| (np, a, miss)));
+    }
     let mut keep = Vec::with_capacity(pending.len());
     m.with_b(|m| {
         for (np, a, miss) in pending {
@@ -1001,8 +1171,17 @@ fn replay_pending(m: &mut Model) {
             answer_opaque(m, np, a, miss);
         }
     });
-    keep.append(&mut m.native_missing);
-    m.native_missing = keep;
+    if m.native_replay_seq == seq {
+        for (np, a, miss) in keep {
+            m.native_parked.entry((a, np)).or_default().push(miss);
+        }
+    } else {
+        // Another replay ran meanwhile (a write it made, an event) or the
+        // global object gained a holder: what this one kept is seen again
+        // by the next replay, as every lookup is.
+        keep.append(&mut m.native_missing);
+        m.native_missing = keep;
+    }
 }
 
 /// A plain store or a delete recorded in write entry `entry` (`value` not
@@ -1024,16 +1203,20 @@ fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
     let wide = t == TOP
         || super::global_object(m, t)
         || matches!(m.toks[t as usize], TokKind::ObjectProto);
-    let reached: Vec<NodeId> = m
-        .native_answer_nodes
-        .iter()
-        .filter(|(&(np, a), _)| {
+    let keys: Vec<(Atom, Tok)> = if realm_window(m) {
+        m.native_answer_keys.keys().copied().collect()
+    } else {
+        reached(m, &m.native_answer_keys, entry)
+    };
+    let reached: Vec<NodeId> = keys
+        .into_iter()
+        .filter(|&(a, np)| {
             (wide || np == t) && {
                 let (top, own) = written_by(m, np, a, false, &|y| std::ptr::eq(y, x));
                 top || own
             }
         })
-        .map(|(_, &w)| w)
+        .map(|(a, np)| m.native_answer_keys[&(a, np)])
         .collect();
     m.native_fed += reached.len() as u64;
     m.with_b(|m| {
@@ -1057,19 +1240,14 @@ fn stored_values(m: &Model, np: Tok, a: Atom) -> Option<(Vec<NodeId>, bool)> {
     }
     let mut out: Vec<NodeId> = Vec::new();
     let mut absent = false;
-    for w in m.native_writes.values() {
-        if w.stored.is_empty() && !w.absent {
-            continue;
-        }
-        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
-        if top || own {
-            for &n in &w.stored {
-                if !out.contains(&n) {
-                    out.push(n);
-                }
+    for e in written_entries(m, np, a, false) {
+        let w = &m.native_writes[&e];
+        for &n in &w.stored {
+            if !out.contains(&n) {
+                out.push(n);
             }
-            absent |= w.absent;
         }
+        absent |= w.absent;
     }
     Some((out, absent))
 }
@@ -1111,6 +1289,7 @@ pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -
         None => {
             let w = m.node_l("written-value");
             m.native_answer_nodes.insert((np, a), w);
+            m.native_answer_keys.insert((a, np), w);
             w
         }
     };

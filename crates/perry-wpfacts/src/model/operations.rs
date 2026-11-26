@@ -318,6 +318,7 @@ impl Model {
         }
         let a = self.atoms.len() as Atom;
         self.atoms.push(s.to_string());
+        self.note_atom_numeric();
         self.atom_index.insert(s.to_string(), a);
         a
     }
@@ -333,8 +334,25 @@ impl Model {
         }
         let a = self.atoms.len() as Atom;
         self.atoms.push(storage.to_string());
+        self.note_atom_numeric();
         self.private_atoms.insert(storage.to_string(), a);
         a
+    }
+
+    /// [`Model::atom_numeric`] up to the last atom.
+    fn note_atom_numeric(&mut self) {
+        while self.atom_numeric.len() < self.atoms.len() {
+            let n = crate::solve::numeric_key(&self.atoms[self.atom_numeric.len()]);
+            self.atom_numeric.push(n);
+        }
+    }
+
+    /// Is atom `a` a numeric key ([`crate::solve::numeric_key`])?
+    pub fn numeric_atom(&self, a: Atom) -> bool {
+        self.atom_numeric
+            .get(a as usize)
+            .copied()
+            .unwrap_or_else(|| crate::solve::numeric_key(&self.atoms[a as usize]))
     }
 
     /// `a` is a class private field's key (`private_atom`).
@@ -670,6 +688,9 @@ impl Model {
             }
         }
         for &(_, a, _) in &self.native_missing {
+            r.keys.insert(self.atoms[a as usize].clone());
+        }
+        for &(a, _) in self.native_parked.keys() {
             r.keys.insert(self.atoms[a as usize].clone());
         }
         r
