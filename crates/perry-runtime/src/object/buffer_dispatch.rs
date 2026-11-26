@@ -1119,12 +1119,15 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
             let offset_is_encoding = node_buffer
                 && args.len() >= 2
                 && JSValue::from_bits(args[1].to_bits()).is_any_string();
+            // A Buffer's whole-buffer search starts at `len`, which an empty
+            // needle answers; the search clamps any other needle into the data.
+            let whole = if node_buffer { len } else { len - 1 };
             let start = if args.len() < 2 || offset_is_encoding {
-                len - 1
+                whole
             } else if node_buffer {
                 let offset = crate::builtins::js_number_coerce(args[1]);
                 if offset.is_nan() {
-                    len - 1
+                    len
                 } else {
                     crate::array::array_slice_value_to_index(offset)
                 }

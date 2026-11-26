@@ -35,3 +35,4 @@ const text = Buffer.from("abcabc");
 console.log("string needle", text.lastIndexOf("abc", NaN), text.lastIndexOf("abc", undefined));
 console.log("encoding offset", text.lastIndexOf("abc", "utf8"), text.lastIndexOf("616263", "hex"));
 console.log("valueOf", buf.lastIndexOf(7, { valueOf: () => 1 } as any), buf.lastIndexOf(7, { valueOf: () => NaN } as any));
+console.log("empty needle", text.lastIndexOf("", NaN), text.lastIndexOf(""), text.lastIndexOf(Buffer.alloc(0), undefined), text.lastIndexOf("", "utf8"));
