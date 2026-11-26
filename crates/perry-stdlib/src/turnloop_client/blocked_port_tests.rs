@@ -92,6 +92,7 @@ fn redirected_destination_is_rejected_before_connection_allocation() {
                 capacity: None,
                 on_chunk: None,
                 on_done: bad_port_done,
+                alive: None,
             },
             Prepared { request, proxy },
         )

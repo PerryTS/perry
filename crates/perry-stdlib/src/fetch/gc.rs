@@ -157,8 +157,18 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     // Each mutator visits only the records it owns (`lifecycle::owns`).
     if let Ok(mut responses) = FETCH_RESPONSES.lock() {
         for (id, record) in responses.iter_mut() {
-            if lifecycle::owns(*id) && record.props != 0 {
+            if !lifecycle::owns(*id) {
+                continue;
+            }
+            if record.props != 0 {
                 visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
+            // The response's ReadableStream body (an ordinary GC object).
+            for stream in [&mut record.cached_body_stream, &mut record.body_stream]
+                .into_iter()
+                .flatten()
+            {
+                visitor.visit_nanbox_u64_slot(stream);
             }
         }
     }

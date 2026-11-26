@@ -114,6 +114,7 @@ pub(crate) fn dispatch_text(url: String, promise_ptr: usize) {
         capacity: None,
         on_chunk: None,
         on_done: settle_text,
+        alive: None,
     };
     if let Err(declined) = turnloop_client::submit(spec, sink) {
         turnloop_client::note_declined();
@@ -155,6 +156,7 @@ pub(crate) fn dispatch_stream(
         capacity: None,
         on_chunk: Some(stream_chunk),
         on_done: stream_done,
+        alive: None,
     };
     if let Err(declined) = turnloop_client::submit(spec, sink) {
         turnloop_client::note_declined();
@@ -230,17 +232,18 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         abort_key: dispatch.abort_key,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());
-    let stream = crate::streams::alloc_native_readable(
+    let (stream, ctx) = crate::streams::alloc_native_readable(
         promise_ptr as *mut perry_runtime::Promise,
         turnloop_client::resume_source,
         turnloop_client::cancel_source,
     );
     let sink = Sink {
-        ctx: stream.link(),
+        ctx,
         on_head: Some(response_head),
         capacity: Some(crate::streams::native_capacity),
         on_chunk: Some(response_chunk),
         on_done: response_done,
+        alive: Some(crate::streams::native_alive),
     };
     if let Err(declined) = turnloop_client::submit(spec, sink) {
         turnloop_client::note_declined();
@@ -250,11 +253,14 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         unsafe {
             crate::streams::js_readable_stream_controller_close(stream.controller_value());
         }
+        crate::streams::release_native(ctx);
     }
 }
 
-fn response_head(link: usize, response: &ResponseOut) {
-    let stream = crate::streams::RsRef::from_link(link);
+fn response_head(ctx: usize, response: &ResponseOut) {
+    let Some(stream) = crate::streams::native_stream(ctx) else {
+        return;
+    };
     let Some(promise) = crate::streams::take_native_promise(stream) else {
         return;
     };
@@ -282,22 +288,32 @@ fn response_head(link: usize, response: &ResponseOut) {
             url: response.final_url.clone(),
             redirected: response.redirected,
             cached_headers_id: None,
-            cached_body_stream: response.body_present.then_some(stream),
-            body_stream: response.body_present.then_some(stream),
+            cached_body_stream: response.body_present.then_some(stream.bits()),
+            body_stream: response.body_present.then_some(stream.bits()),
         },
     );
     queue_promise_resolution(promise as usize, true, handle_to_f64(id).to_bits());
 }
 
-fn response_chunk(link: usize, bytes: &[u8]) {
-    let stream = crate::streams::RsRef::from_link(link);
+fn response_chunk(ctx: usize, bytes: &[u8]) {
+    let Some(stream) = crate::streams::native_stream(ctx) else {
+        return;
+    };
     unsafe {
         crate::streams::native_enqueue(stream, bytes);
     }
 }
 
-fn response_done(link: usize, outcome: Outcome) {
-    let stream = crate::streams::RsRef::from_link(link);
+/// The producer's last callback: settle the stream (when it still lives),
+/// then release the sink context.
+fn response_done(ctx: usize, outcome: Outcome) {
+    if let Some(stream) = crate::streams::native_stream(ctx) {
+        response_settle(stream, outcome);
+    }
+    crate::streams::release_native(ctx);
+}
+
+fn response_settle(stream: crate::streams::RsRef, outcome: Outcome) {
     if let Some(promise) = crate::streams::take_native_promise(stream) {
         match outcome {
             Outcome::Err(error) if error.aborted => {

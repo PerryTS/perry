@@ -61,6 +61,7 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         .unwrap()
         .get(&resp_id)
         .and_then(|r| r.body_stream)
+        .map(crate::streams::RsRef::from_bits)
     {
         return id.value();
     }
@@ -69,6 +70,7 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         .unwrap()
         .get(&resp_id)
         .and_then(|r| r.cached_body_stream)
+        .map(crate::streams::RsRef::from_bits)
     {
         return id.value();
     }
@@ -79,8 +81,8 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
     };
     let stream = crate::streams::alloc_readable_from_bytes(bytes);
     if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
-        resp.cached_body_stream = Some(stream);
-        resp.body_stream = Some(stream);
+        resp.cached_body_stream = Some(stream.bits());
+        resp.body_stream = Some(stream.bits());
     }
     stream.value()
 }
@@ -239,11 +241,12 @@ mod storage_tests {
 }
 
 pub(crate) fn response_body_is_used(resp_id: usize) -> bool {
-    let state = FETCH_RESPONSES
-        .lock()
-        .unwrap()
-        .get(&resp_id)
-        .map(|r| (r.body_used, r.body_stream));
+    let state = FETCH_RESPONSES.lock().unwrap().get(&resp_id).map(|r| {
+        (
+            r.body_used,
+            r.body_stream.map(crate::streams::RsRef::from_bits),
+        )
+    });
     state.is_some_and(|(used, stream)| {
         used || stream.is_some_and(|id| crate::streams::readable_body_state(id).1)
     })

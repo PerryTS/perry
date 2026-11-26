@@ -20,6 +20,13 @@ fn alloc_closed_readable() -> usize {
     id
 }
 
+/// A closed writable stream (the band ids recycle through `idalloc`).
+fn alloc_closed_writable() -> usize {
+    let id = alloc_writable(0, 0, 0, 1.0);
+    with_ws(WsRef(id), |s| s.state = WritableState::Closed).unwrap();
+    id
+}
+
 #[test]
 fn stream_ids_live_outside_pointer_tag_small_handle_band() {
     // Allocates from the shared pools — serialize so this can't steal the
@@ -45,8 +52,8 @@ fn terminal_stream_ids_recycle_after_quarantine_eviction() {
     idalloc::set_quarantine_limit_for_test(2);
     let ids: Vec<usize> = (0..3)
         .map(|_| {
-            let id = alloc_closed_readable();
-            idalloc::retire_readable_terminal(id);
+            let id = alloc_closed_writable();
+            idalloc::retire_writable_terminal(id);
             id
         })
         .collect();
@@ -54,11 +61,11 @@ fn terminal_stream_ids_recycle_after_quarantine_eviction() {
     // The third retire overflowed the quarantine of 2: the oldest id lost its
     // registry entry (eviction really cleans up)…
     assert!(
-        !rs_exists(RsRef(ids[0])),
+        !ws_exists(WsRef(ids[0])),
         "evicted id must leave the registry"
     );
     assert!(
-        rs_exists(RsRef(ids[2])),
+        ws_exists(WsRef(ids[2])),
         "quarantined id keeps its registry entry"
     );
     // …and the allocator hands it back, oldest first, before any fresh id.
@@ -66,7 +73,7 @@ fn terminal_stream_ids_recycle_after_quarantine_eviction() {
     assert_eq!(reused, ids[0], "evicted id recycles FIFO");
     assert!((STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&reused));
     // With the free list drained the allocator is back on fresh ids.
-    let fresh = alloc_readable(0, 0, 0, 1.0);
+    let fresh = alloc_writable(0, 0, 0, 1.0);
     assert_ne!(fresh, reused);
 }
 
@@ -75,9 +82,9 @@ fn retire_is_idempotent_per_id() {
     let _serial = serial_guard();
     idalloc::test_reset_pools();
     idalloc::set_quarantine_limit_for_test(idalloc::DEFAULT_QUARANTINE);
-    let id = alloc_closed_readable();
-    idalloc::retire_readable_terminal(id);
-    idalloc::retire_readable_terminal(id);
+    let id = alloc_closed_writable();
+    idalloc::retire_writable_terminal(id);
+    idalloc::retire_writable_terminal(id);
     assert_eq!(
         idalloc::test_pool_occurrences(id),
         1,
@@ -89,32 +96,22 @@ fn retire_is_idempotent_per_id() {
 fn live_stream_ids_never_enter_the_pool() {
     let _serial = serial_guard();
     idalloc::test_reset_pools();
-    let id = alloc_readable(0, 0, 0, 1.0);
-    idalloc::retire_readable_terminal(id); // Readable → not terminal
-    assert_eq!(idalloc::test_pool_occurrences(id), 0);
-    // Closed but undrained (slow consumer with queued chunks) stays live.
-    with_rs(RsRef(id), |s| {
-        s.state = ReadableState::Closed;
-        s.push_chunk(TAG_UNDEFINED, 1.0);
-    })
-    .unwrap();
-    idalloc::retire_readable_terminal(id);
+    let id = alloc_writable(0, 0, 0, 1.0);
+    idalloc::retire_writable_terminal(id); // Writable → not terminal
     assert_eq!(idalloc::test_pool_occurrences(id), 0);
 }
 
 /// #12862: a keep-alive fetch whose small body is fully queued and closed
-/// before `text()` runs. Every such body must hand its stream id back.
+/// before `text()` runs: the body promise resolves with the whole body.
 #[test]
-fn whole_body_collected_after_close_retires_its_stream_id() {
+fn whole_body_collected_after_close_resolves() {
     fn no_source(_: usize) {}
     fn byte_count(bytes: Vec<u8>, _: String) -> Result<f64, f64> {
         Ok(bytes.len() as f64)
     }
     let _serial = serial_guard();
-    idalloc::test_reset_pools();
-    let mut live = Vec::new();
     for _ in 0..64 {
-        let id = alloc_native_readable(js_promise_new(), no_source, no_source);
+        let (id, ctx) = alloc_native_readable(js_promise_new(), no_source, no_source);
         take_native_promise(id);
         let body = js_promise_new();
         unsafe {
@@ -124,64 +121,116 @@ fn whole_body_collected_after_close_retires_its_stream_id() {
         }
         assert_eq!(js_promise_state(body), 1, "the body promise resolves");
         assert_eq!(js_promise_value(body), 16.0, "with the whole queued body");
-        if idalloc::test_pool_occurrences(id.0) == 0 {
-            live.push(id.0);
-        }
+        release_native(ctx);
     }
-    assert!(
-        live.is_empty(),
-        "{} of 64 drained stream ids never retired",
-        live.len()
-    );
 }
 
+/// Native bodies paused at zero credit whose only references are dropped on
+/// return: their sink contexts.
+#[inline(never)]
+fn paused_native_bodies(count: usize) -> Vec<usize> {
+    fn no_source(_: usize) {}
+    let chunk = vec![7u8; native::NATIVE_BODY_WINDOW];
+    (0..count)
+        .map(|_| {
+            let (id, ctx) = alloc_native_readable(js_promise_new(), no_source, no_source);
+            take_native_promise(id);
+            unsafe { native_enqueue(id, &chunk) };
+            assert_eq!(native_capacity(ctx), 0, "a full window pauses the producer");
+            ctx
+        })
+        .collect()
+}
+
+/// Native bodies still delivering (pinned by their producer): their sink
+/// contexts.
+#[inline(never)]
+fn delivering_native_bodies(count: usize) -> Vec<usize> {
+    fn no_source(_: usize) {}
+    (0..count)
+        .map(|_| alloc_native_readable(js_promise_new(), no_source, no_source).1)
+        .collect()
+}
+
+#[inline(never)]
+fn scrub_stack() -> u64 {
+    let words = std::hint::black_box([0u64; 512]);
+    words.iter().sum()
+}
+
+/// GC objects: an unreferenced ReadableStream is reclaimed by the collector
+/// (its payload drops), and a dropped fetch body paused at capacity tells its
+/// producer so (`alive` turns false; the engine then aborts the exchange). A
+/// body that is still delivering stays pinned by its producer.
 #[test]
-fn attached_reader_dies_with_terminal_stream_but_not_before() {
+fn unreferenced_paused_native_body_is_reclaimed_and_reports_dead() {
     let _serial = serial_guard();
-    idalloc::test_reset_pools();
-    let stream = alloc_readable(0, 0, 0, 1.0);
-    let reader = next_stream_id();
-    insert_reader(
-        ReaderRef(reader),
-        ReaderData::new(stream, 0x2345_6780 as *mut Promise, false),
+    let paused = paused_native_bodies(32);
+    let delivering = delivering_native_bodies(8);
+    scrub_stack();
+    perry_runtime::gc::js_gc_collect();
+    perry_runtime::gc::js_gc_collect();
+    let dead = paused.iter().filter(|&&ctx| !native_alive(ctx)).count();
+    // A stray conservative stack word may pin one; reclaim is the rule.
+    assert!(
+        dead >= 24,
+        "only {dead} of 32 dropped paused bodies were reclaimed"
     );
-    with_rs(RsRef(stream), |s| {
-        s.reader_handle = Some(reader);
-        s.state = ReadableState::Closed;
+    assert!(
+        paused
+            .iter()
+            .all(|&ctx| native_alive(ctx) || native_stream(ctx).is_none()),
+        "a dead body names no stream"
+    );
+    assert!(
+        delivering.iter().all(|&ctx| native_alive(ctx)),
+        "a pinned body must survive collection"
+    );
+    for ctx in paused.into_iter().chain(delivering) {
+        release_native(ctx);
+    }
+}
+
+/// A stream's JS values live in its slot array: they survive collections
+/// (traced through the object) and are what its accessors read back.
+#[test]
+fn readable_object_slots_hold_queue_requests_and_controller() {
+    let _serial = serial_guard();
+    // Unit tests have no conservative stack scan: root the stream.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream_value(alloc_readable(0, 0, 0, 1.0)));
+    let chunk = scope.root_nanbox_u64(unsafe { alloc_uint8array_from_bytes(b"abc") });
+    let promise = scope.root_raw_mut_ptr(js_promise_new());
+    with_rs(RsRef::from_value(stream.get_nanbox_f64()), |s| {
+        s.push_chunk(chunk.get_nanbox_u64(), 3.0);
+        s.push_read_request(promise.get_raw_mut_ptr());
     })
     .unwrap();
-    // A still-locked reader does not retire on its own…
-    idalloc::retire_reader_if_released(reader);
-    assert_eq!(idalloc::test_pool_occurrences(reader), 0);
-    // …but goes down with its terminal stream.
-    idalloc::retire_readable_terminal(stream);
-    assert_eq!(idalloc::test_pool_occurrences(stream), 1);
-    assert_eq!(idalloc::test_pool_occurrences(reader), 1);
-}
-
-#[test]
-fn root_scanner_emits_callbacks_chunks_and_promises() {
-    // Clears the readable registry wholesale — serialize against the
-    // allocator tests, whose assertions read it.
-    let _serial = serial_guard();
-    state::test_clear_readables();
-    let mut record = ReadableStreamData::new(0x3456_7890, 0, 0, 0, 1.0, false);
-    record.state = ReadableState::Errored;
-    record.push_chunk(0x7FFD_0000_0000_1234, 1.0);
-    record.push_chunk(0x7FFA_0000_0000_2345, 1.0);
-    record.pending_reads.push_back(0x2345_6780 as *mut Promise);
-    record.error_value = 0x7FFF_0000_0000_4567;
-    insert_rs(RsRef(1), record);
-
-    let mut emitted = Vec::new();
-    scan_stream_roots(&mut |value| emitted.push(value.to_bits()));
-
-    assert!(emitted.contains(&0x7FFD_0000_0000_1234));
-    assert!(emitted.contains(&0x7FFA_0000_0000_2345));
-    assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
-    assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x3456_7890)));
-    assert!(emitted.contains(&0x7FFF_0000_0000_4567));
-    state::test_clear_readables();
+    perry_runtime::gc::gc_collect_minor();
+    perry_runtime::gc::js_gc_collect();
+    let id = stream_id(stream.get_nanbox_f64());
+    with_rs(RsRef(id), |s| {
+        assert_eq!(s.chunk_count(), 1);
+        assert_eq!(s.queue_total_size, 3.0);
+        assert_eq!(s.read_request_count(), 1);
+        let popped = s.pop_chunk().unwrap();
+        assert_eq!(
+            unsafe { read_bytes_from_chunk(popped) }.as_deref(),
+            Some(&b"abc"[..])
+        );
+        assert!(s.shift_read_request().is_some());
+        assert!(s.chunks_empty());
+    })
+    .unwrap();
+    assert_eq!(
+        objects::class_id_of(RsRef(id).value()),
+        perry_runtime::native_class_ids::WEB_READABLE_STREAM
+    );
+    assert_eq!(
+        controller_stream_id(controller_value(id)),
+        id,
+        "the controller names its stream"
+    );
 }
 
 #[test]
@@ -202,26 +251,9 @@ fn transform_root_scanner_writes_relocated_pointers_back() {
         }
     }
 
-    // The transform bookkeeping of a readable (parked writes, deferred jobs)
-    // and of a writable (deferred close) is traced with its record, and a
-    // moving visitor's rewrite lands in the record.
-    let mut readable = ReadableStreamData::new(0, 0, 0, 0, 1.0, false);
-    readable
-        .transform_parked_writes
-        .push(0x2100 as *mut Promise);
-    readable
-        .transform_backpressured_jobs
-        .push(0x4100 as *mut ClosureHeader);
-    readable.trace(&mut RelocatingVisitor);
-    assert_eq!(
-        readable.transform_parked_writes,
-        vec![0x3100 as *mut Promise]
-    );
-    assert_eq!(
-        readable.transform_backpressured_jobs,
-        vec![0x5100 as *mut ClosureHeader]
-    );
-
+    // The transform bookkeeping of a writable (deferred close) is traced with
+    // its record, and a moving visitor's rewrite lands in the record (a
+    // readable's lives in its object's slots).
     let mut writable =
         WritableStreamData::new(0, 0, 0, 0, 1.0, std::ptr::null_mut(), std::ptr::null_mut());
     writable.transform_pending_close = Some(0x3100 as *mut Promise);
@@ -297,13 +329,19 @@ fn pipe_through_rejects_locked_endpoints_before_starting() {
     let output = alloc_readable(0, 0, 0, 1.0);
     let destination = alloc_writable(0, 0, 0, 1.0);
 
-    rs_rec(RsRef(source)).as_deref_mut().unwrap().reader_handle = Some(1);
+    rs_rec(RsRef(source))
+        .as_deref_mut()
+        .unwrap()
+        .set_reader_handle(Some(1));
     assert_eq!(
         pipe_through_validation_error(source, destination, output),
         Some("ReadableStream is locked")
     );
 
-    rs_rec(RsRef(source)).as_deref_mut().unwrap().reader_handle = None;
+    rs_rec(RsRef(source))
+        .as_deref_mut()
+        .unwrap()
+        .set_reader_handle(None);
     ws_rec(WsRef(destination))
         .as_deref_mut()
         .unwrap()
@@ -524,9 +562,13 @@ fn pipe_through_pair_survives_a_moving_getter() {
         );
         let options = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         let pair_before = pair.get_raw_mut_ptr::<ObjectHeader>();
-        let source = stream_value(alloc_closed_readable());
+        // Streams are GC objects: a unit test has no conservative stack scan
+        // (no registered stack top), so every stream held across the moving
+        // getters is rooted.
+        let readable = scope.root_nanbox_f64(readable);
+        let source = scope.root_nanbox_f64(stream_value(alloc_closed_readable()));
         let output = js_readable_stream_pipe_through_pair(
-            source,
+            source.get_nanbox_f64(),
             f64::from_bits(
                 JSValue::pointer(pair.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
             ),
@@ -534,7 +576,7 @@ fn pipe_through_pair_survives_a_moving_getter() {
                 JSValue::pointer(options.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
             ),
         );
-        assert_eq!(output.to_bits(), readable.to_bits());
+        assert_eq!(output.to_bits(), readable.get_nanbox_f64().to_bits());
         assert_ne!(
             pair.get_raw_mut_ptr::<ObjectHeader>(),
             pair_before,
@@ -658,7 +700,7 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
         // A read delivering the last chunk flips the stream to Errored, so the
         // NEXT read is the one that rejects.
         let reason = js_string_from_bytes(b"boom".as_ptr(), 4);
-        s.pending_error_after_chunks = Some(JSValue::string_ptr(reason).bits());
+        s.set_pending_error_after_chunks(Some(JSValue::string_ptr(reason).bits()));
     }
     let before = perry_runtime::promise::rejection::unhandled_rejection_count();
     let bytes = drain_readable_into_bytes(RsRef(id));
@@ -673,15 +715,16 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
     );
 }
 
-/// RSTREAM R1: a controller id is its stream id plus the controller bit, the
-/// allocator never hands out an id with that bit, and a plain readable's
-/// controller is the default family.
+/// A readable's controller is its own object (born with the stream, the
+/// same value every time), names its stream, and a plain readable's
+/// controller is the default family. No readable ref is a band id.
 #[test]
 fn controller_value_round_trips_and_stays_out_of_the_allocator() {
     let _serial = serial_guard();
     let id = alloc_readable(0, 0, 0, 1.0);
-    assert!(id < STREAM_ALLOC_END);
+    assert!(!(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id));
     let controller = controller_value(id);
+    assert_eq!(controller.to_bits(), controller_value(id).to_bits());
     assert_ne!(stream_id(controller), id);
     assert_eq!(controller_stream_id(controller), id);
     assert_eq!(controller_stream_id(stream_value(id)), 0);
@@ -752,7 +795,12 @@ fn algorithm_calls() -> usize {
 
 fn readable_algorithms(id: usize) -> [i64; 4] {
     with_rs(RsRef(id), |s| {
-        [s.start_cb, s.pull_cb, s.cancel_cb, s.strategy_size_cb]
+        [
+            s.start_cb(),
+            s.pull_cb(),
+            s.cancel_cb(),
+            s.strategy_size_cb(),
+        ]
     })
     .unwrap()
 }

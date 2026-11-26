@@ -45,66 +45,12 @@ mod web_streams {
     const READABLE: u32 = 1;
     const WRITABLE: u32 = 2;
     const TRANSFORM: u32 = 4;
-    const READER: u32 = 8;
     const WRITER: u32 = 16;
 
-    #[test]
-    fn thread_exit_releases_readable_streams_and_their_readers() {
-        let ((with_cb, linked, reader, plain), alive) = std::thread::spawn(|| unsafe {
-            // Seeded directly: holds the thread's cancel closure.
-            let with_cb = s::stream_id(s::js_readable_stream_new(
-                undef(),
-                undef(),
-                closure_value(),
-                f64::NAN,
-            ));
-            // Holds nothing of the thread's heap itself; dies through the
-            // link to its reader, whose `closed` promise is the thread's.
-            let linked = s::stream_id(s::js_readable_stream_new(
-                undef(),
-                undef(),
-                undef(),
-                f64::NAN,
-            ));
-            let reader = s::stream_id(s::js_readable_stream_get_reader(s::stream_value(linked)));
-            // Holds no heap address and has no links: must survive.
-            let plain = s::stream_id(s::js_readable_stream_new(
-                undef(),
-                undef(),
-                undef(),
-                f64::NAN,
-            ));
-            let alive = s::stream_registry_presence_for_test(with_cb) == READABLE
-                && s::stream_registry_presence_for_test(linked) == READABLE
-                && s::stream_registry_presence_for_test(reader) == READER
-                && s::stream_registry_presence_for_test(plain) == READABLE;
-            ((with_cb, linked, reader, plain), alive)
-        })
-        .join()
-        .unwrap();
-
-        assert!(alive, "the records must exist while their thread lives");
-        assert_eq!(
-            s::stream_registry_presence_for_test(with_cb),
-            0,
-            "a dead thread's readable (cancel closure) outlived its heap"
-        );
-        assert_eq!(
-            s::stream_registry_presence_for_test(reader),
-            0,
-            "a dead thread's reader (closed promise) outlived its heap"
-        );
-        assert_eq!(
-            s::stream_registry_presence_for_test(linked),
-            0,
-            "a reader's stream must go with it, or the reader id dangles"
-        );
-        assert_eq!(
-            s::stream_registry_presence_for_test(plain),
-            READABLE,
-            "a record holding no freed address must be left alone"
-        );
-    }
+    // Readable streams, readers, controllers and parked BYOB reads are GC
+    // objects of their thread's heap (streams P2a): they die with it, and no
+    // process-global record names them. What is left to check is that the
+    // records which still name one (a transform's readable side) go too.
 
     #[test]
     fn thread_exit_releases_writable_streams_and_their_writers() {
@@ -161,11 +107,10 @@ mod web_streams {
         .unwrap();
 
         assert!(alive, "the records must exist while their thread lives");
-        for (id, what) in [
-            (transform, "transform"),
-            (readable, "readable side"),
-            (writable, "writable side"),
-        ] {
+        // The readable side was an object of the dead heap: only its address
+        // is left, and the transform's record named it, so it must be gone.
+        let _ = readable;
+        for (id, what) in [(transform, "transform"), (writable, "writable side")] {
             assert_eq!(
                 s::stream_registry_presence_for_test(id),
                 0,
@@ -179,38 +124,13 @@ mod web_streams {
     }
 
     #[test]
-    fn thread_exit_releases_parked_byob_reads() {
-        let (stream, alive) = std::thread::spawn(|| unsafe {
-            let stream = s::js_readable_stream_new_with_source_type(
-                undef(),
-                undef(),
-                undef(),
-                f64::NAN,
-                string_value("bytes"),
-            );
-            let reader = s::js_readable_stream_get_byob_reader(stream);
-            let view = perry_runtime::buffer::js_uint8array_alloc(8);
-            let view = f64::from_bits(perry_runtime::JSValue::pointer(view as *const u8).bits());
-            s::js_reader_read_with_view(reader, view);
-            let stream = s::stream_id(stream);
-            (stream, s::byob_pending_for_test(stream))
-        })
-        .join()
-        .unwrap();
-
-        assert!(alive, "the BYOB read must be parked while its thread lives");
-        assert!(
-            !s::byob_pending_for_test(stream),
-            "a dead thread's parked BYOB read (promise, view) outlived its heap"
-        );
-        assert_eq!(s::stream_registry_presence_for_test(stream), 0);
-    }
-
-    #[test]
     fn thread_exit_releases_stream_expando_values() {
         const KEY: &str = "__perry_11471_expando_probe";
         let (stream, alive) = std::thread::spawn(|| unsafe {
-            let stream = s::stream_id(s::js_readable_stream_new(
+            // A writable stream keeps band-id expandos (readable streams are
+            // objects with ordinary own properties).
+            let stream = s::stream_id(s::js_writable_stream_new(
+                undef(),
                 undef(),
                 undef(),
                 undef(),
@@ -231,11 +151,8 @@ mod web_streams {
             s::stream_expando_get(stream, KEY).is_none(),
             "a dead thread's expando value outlived its heap"
         );
-        assert_eq!(
-            s::stream_registry_presence_for_test(stream),
-            READABLE,
-            "only the offending property goes, not a stream holding nothing freed"
-        );
+        // (The writable record itself holds the thread's ready/closed
+        // promises, so it goes too; the expando list went with it.)
     }
 }
 

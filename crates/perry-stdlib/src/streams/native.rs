@@ -1,67 +1,182 @@
 //! Native producers share the ordinary stream queue, readers, tee and GC scanner.
 //! Their pull/cancel hooks contain numeric exchange keys, never heap pointers.
 use super::*;
+use perry_runtime::native_payload::OwnerLink;
+use std::cell::Cell;
+use std::rc::Rc;
 
+/// A native producer feeding the stream. Its pending response promise is the
+/// stream's NATIVE_PROMISE slot. `token` is shared with the producer, whose
+/// sink context points at it.
 pub(super) struct NativeSource {
-    pub(super) promise: Option<*mut Promise>,
     pull: fn(usize),
     cancel: fn(usize),
+    pub(super) token: Rc<SourceToken>,
 }
 
+/// What a native producer's sink context names: plain Rust data shared by the
+/// stream payload and the producer (one `Rc` count each), so the producer can
+/// always ask whether its stream still lives.
+///
+/// While the producer may deliver (from submit until it pauses at zero
+/// credit) the stream object is pinned through its payload link, so a body
+/// nobody has read yet stays alive. Paused, it is unpinned: a body the
+/// program dropped is collected, `Drop for ReadableStreamData` clears
+/// `alive`, and the engine aborts the exchange (`Sink::alive`). A pull
+/// re-pins before it resumes the producer.
+pub(crate) struct SourceToken {
+    link: Cell<usize>,
+    pub(super) alive: Cell<bool>,
+    pinned: Cell<bool>,
+}
+
+impl SourceToken {
+    fn pin(&self) {
+        if self.alive.get() && !self.pinned.get() && self.link.get() != 0 {
+            // SAFETY: alive => the stream's payload cell lives; creator thread.
+            unsafe {
+                perry_runtime::native_payload::link_ref(OwnerLink::from_raw(self.link.get()))
+            };
+            self.pinned.set(true);
+        }
+    }
+
+    fn unpin(&self) {
+        if self.alive.get() && self.pinned.get() {
+            // SAFETY: as in `pin`; matches its link_ref.
+            unsafe {
+                perry_runtime::native_payload::link_unref(OwnerLink::from_raw(self.link.get()))
+            };
+            self.pinned.set(false);
+        }
+    }
+}
+
+#[inline]
+fn ctx_of(token: &Rc<SourceToken>) -> usize {
+    Rc::as_ptr(token) as usize
+}
+
+/// The token a sink context names.
+///
+/// # Safety
+/// `ctx` came from [`alloc_native_readable`] and [`release_native`] has not
+/// run for it.
+#[inline]
+unsafe fn token<'a>(ctx: usize) -> &'a SourceToken {
+    &*(ctx as *const SourceToken)
+}
+
+/// The stream a sink context feeds, while it lives.
+pub(crate) fn native_stream(ctx: usize) -> Option<RsRef> {
+    // SAFETY: the producer holds the context until `release_native`.
+    let token = unsafe { token(ctx) };
+    if !token.alive.get() {
+        return None;
+    }
+    // SAFETY: alive => the payload cell lives.
+    let stream = unsafe { RsRef::from_link(token.link.get()) };
+    (stream.0 != 0).then_some(stream)
+}
+
+/// `Sink::alive` of a native body producer.
+pub(crate) fn native_alive(ctx: usize) -> bool {
+    // SAFETY: as in `native_stream`.
+    unsafe { token(ctx) }.alive.get()
+}
+
+/// The producer is done with its context (after its final callback, or when
+/// the engine refused the request): drop its pin and its token count.
+pub(crate) fn release_native(ctx: usize) {
+    // SAFETY: as in `native_stream`; this is the producer's last use.
+    let token = unsafe { Rc::from_raw(ctx as *const SourceToken) };
+    token.unpin();
+}
+
+/// A whole-body consumer (`text()`, `arrayBuffer()`, ..). Its promise is the
+/// stream's BODY_CONSUMER_PROMISE slot.
 pub(super) struct BodyConsumer {
-    pub(super) promise: *mut Promise,
     bytes: Vec<u8>,
     metadata: String,
     finish: fn(Vec<u8>, String) -> Result<f64, f64>,
 }
 
-const BODY_READER: usize = usize::MAX - 1;
+pub(super) const BODY_READER: usize = usize::MAX - 1;
 pub(crate) const NATIVE_BODY_WINDOW: usize = 64 * 1024;
 
+/// A byte stream fed by a native producer, pinned until the producer
+/// pauses; returns the stream and the producer's sink context (release it
+/// with [`release_native`]).
 pub(crate) fn alloc_native_readable(
     promise: *mut Promise,
     pull: fn(usize),
     cancel: fn(usize),
-) -> RsRef {
+) -> (RsRef, usize) {
     ensure_gc_registered();
-    let id = alloc_readable_with_type(0, 0, 0, NATIVE_BODY_WINDOW as f64, true);
-    with_rs(RsRef(id), |stream| {
-        stream.started = true;
-        stream.native_source = Some(NativeSource {
-            promise: Some(promise),
+    let stream = RsRef(alloc_readable_with_type(
+        0,
+        0,
+        0,
+        NATIVE_BODY_WINDOW as f64,
+        true,
+    ));
+    let token = Rc::new(SourceToken {
+        link: Cell::new(stream.link()),
+        alive: Cell::new(true),
+        pinned: Cell::new(false),
+    });
+    token.pin();
+    let ctx = Rc::into_raw(token.clone()) as usize;
+    with_rs(stream, |s| {
+        s.started = true;
+        s.set_native_promise(Some(promise));
+        s.native_source = Some(NativeSource {
             pull,
             cancel,
+            token,
         });
     })
     .unwrap();
-    RsRef(id)
+    (stream, ctx)
 }
 
 pub(crate) fn take_native_promise(stream: RsRef) -> Option<*mut Promise> {
-    rs_rec(stream)
-        .as_deref_mut()?
-        .native_source
-        .as_mut()?
-        .promise
-        .take()
+    let rec = rs_rec(stream)?;
+    rec.native_source.as_ref()?;
+    let promise = rec.native_promise();
+    if promise.is_some() {
+        rec.set_native_promise(None);
+    }
+    promise
 }
 
-pub(crate) fn native_capacity(id: usize) -> usize {
-    rs_rec(RsRef(id)).as_deref().map_or(0, |s| {
+/// How many more bytes the stream behind sink context `ctx` takes. At zero
+/// the producer pauses, so the stream is unpinned (see [`SourceToken`]).
+pub(crate) fn native_capacity(ctx: usize) -> usize {
+    let Some(stream) = native_stream(ctx) else {
+        return 0;
+    };
+    let credit = rs_rec(stream).as_deref().map_or(0, |s| {
         if s.state != ReadableState::Readable {
             return 0;
         }
         NATIVE_BODY_WINDOW.saturating_sub(s.queue_total_size as usize)
-    })
+    });
+    if credit == 0 {
+        // SAFETY: as in `native_stream`.
+        unsafe { token(ctx) }.unpin();
+    }
+    credit
 }
 
 pub(super) fn pull_native(id: usize) -> bool {
-    let pull = rs_rec(RsRef(id))
+    let source = rs_rec(RsRef(id))
         .as_deref()
         .and_then(|s| s.native_source.as_ref())
-        .map(|s| s.pull);
-    if let Some(pull) = pull {
-        pull(id);
+        .map(|s| (s.pull, s.token.clone()));
+    if let Some((pull, token)) = source {
+        token.pin();
+        pull(ctx_of(&token));
         true
     } else {
         false
@@ -69,12 +184,11 @@ pub(super) fn pull_native(id: usize) -> bool {
 }
 
 pub(super) fn cancel_native(id: usize) {
-    let cancel = rs_rec(RsRef(id))
+    let source = rs_rec(RsRef(id))
         .as_deref_mut()
-        .and_then(|s| s.native_source.take())
-        .map(|s| s.cancel);
-    if let Some(cancel) = cancel {
-        cancel(id);
+        .and_then(|s| s.native_source.take());
+    if let Some(source) = source {
+        (source.cancel)(ctx_of(&source.token));
     }
 }
 
@@ -134,9 +248,9 @@ pub(crate) unsafe fn collect_body(
     {
         if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
             s.disturbed = true;
-            s.reader_handle = Some(BODY_READER);
+            s.set_reader_handle(Some(BODY_READER));
+            s.set_body_consumer_promise(promise);
             s.body_consumer = Some(BodyConsumer {
-                promise,
                 metadata,
                 finish,
                 bytes: Vec::new(),
@@ -162,16 +276,20 @@ pub(super) unsafe fn advance_body(id: usize) {
     }
     let terminal = {
         rs_rec(RsRef(id)).as_deref_mut().and_then(|s| {
-            if s.state != ReadableState::Readable && s.chunks.is_empty() {
-                s.body_consumer.take().map(|c| (c, s.state, s.error_value))
+            if s.state != ReadableState::Readable && s.chunks_empty() {
+                let promise = s.body_consumer_promise();
+                s.set_body_consumer_promise(std::ptr::null_mut());
+                s.body_consumer
+                    .take()
+                    .map(|c| (c, promise, s.state, s.error_value()))
             } else {
                 None
             }
         })
     };
-    if let Some((c, state, error)) = terminal {
+    if let Some((c, promise, state, error)) = terminal {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let promise = scope.root_raw_mut_ptr(c.promise);
+        let promise = scope.root_raw_mut_ptr(promise);
         if state == ReadableState::Errored {
             js_promise_reject(promise.get_raw_mut_ptr(), f64::from_bits(error));
         } else {
@@ -186,7 +304,6 @@ pub(super) unsafe fn advance_body(id: usize) {
         // A closed stream whose queue just drained: ClearAlgorithms (error
         // already cleared them in error_pending).
         readable_clear_algorithms(id);
-        idalloc::retire_readable_terminal(id);
     } else if rs_rec(RsRef(id))
         .as_deref()
         .is_some_and(|s| s.body_consumer.is_some())

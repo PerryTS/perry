@@ -854,6 +854,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
                     capacity: None,
                     on_chunk: None,
                     on_done: p10_sink_done,
+                    alive: None,
                 },
             ),
             Err(super::Declined::Unsupported(turnloop_http::Error::new(
@@ -882,6 +883,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
             capacity: None,
             on_chunk: None,
             on_done: p10_sink_done,
+            alive: None,
         };
         super::submit(spec, sink).expect(
             "a thread whose agent has a loop must not decline — that decline is \

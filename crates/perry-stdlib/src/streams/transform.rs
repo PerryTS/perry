@@ -68,7 +68,10 @@ unsafe fn alloc_transform_stream_with_strategies(
     ensure_gc_registered();
 
     // Allocate the readable side empty (controller is its own handle).
-    let readable_id = alloc_readable_with_strategy(0, 0, 0, r_hwm, false, r_size_cb);
+    // The transform's id comes first: its readable side is born owned by it
+    // (its controller is a TransformStreamDefaultController).
+    let id = next_stream_id();
+    let readable_id = alloc_readable_owned(0, 0, 0, r_hwm, false, r_size_cb, Some(id));
     {
         if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
             s.started = true;
@@ -99,23 +102,22 @@ unsafe fn alloc_transform_stream_with_strategies(
         closed,
     );
 
-    let id = next_stream_id();
     writable.owner_transform = Some(id);
     insert_ws(WsRef(writable_id), writable);
     insert_ts(
         TsRef(id),
         TransformStreamData {
             props: Default::default(),
-            readable_handle: readable_id,
+            readable: stream_value(readable_id).to_bits(),
             writable_handle: writable_id,
             transform_cb,
             flush_cb,
             native,
             backpressure: r_hwm <= 0.0,
             expando: Vec::new(),
+            controller_expando: Vec::new(),
         },
     );
-    with_rs(RsRef(readable_id), |s| s.owner_transform = Some(id));
 
     // #1644: TransformStream `start(controller)` fires synchronously at
     // construction. The controller is the readable-side handle (same value the
@@ -152,7 +154,7 @@ pub unsafe extern "C" fn js_transform_stream_readable(handle: f64) -> f64 {
     let id = stream_id(handle);
     ts_rec(TsRef(id))
         .as_deref()
-        .map(|t| stream_value(t.readable_handle))
+        .map(|t| stream_value(t.readable_handle()))
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
@@ -196,15 +198,14 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
         match transform_of_writable(WsRef(writable_id)) {
             Some(t_id) => match ts_rec(t_id).as_deref_mut() {
                 Some(t) => {
+                    let readable = t.readable_handle();
                     if let Some(native) = t.native.as_mut() {
                         handled_native = true;
-                        if let Err(error_bits) =
-                            native_transform_write(native, t.readable_handle, chunk)
-                        {
+                        if let Err(error_bits) = native_transform_write(native, readable, chunk) {
                             native_error = Some(error_bits);
                         }
                     }
-                    (t.transform_cb, t.readable_handle)
+                    (t.transform_cb, t.readable_handle())
                 }
                 None => (0, 0),
             },
@@ -237,17 +238,15 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
         5,
     );
     perry_runtime::closure::closure_set_capture_ref(job, 0, transform_cb);
-    perry_runtime::closure::closure_set_capture_word(job, 1, readable_id as i64);
+    super::capture_stream(job, 1, readable_id);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 2, chunk.to_bits() as i64);
     perry_runtime::closure::closure_set_capture_ref(job, 3, promise as i64);
-    perry_runtime::closure::closure_set_capture_word(job, 4, writable_id as i64);
+    super::capture_stream(job, 4, writable_id);
     // #6607: a `writer.close()` in the same synchronous run must not close the
     // readable ahead of this queued job — count it so transform_close defers.
     with_ws(WsRef(writable_id), |s| s.transform_pending_writes += 1);
     if transform_initial_backpressure(readable_id) {
-        with_rs(RsRef(readable_id), |s| {
-            s.transform_backpressured_jobs.push(job)
-        });
+        with_rs(RsRef(readable_id), |s| s.defer_job(job));
     } else {
         perry_runtime::builtins::js_queue_microtask(job as i64);
     }
@@ -285,10 +284,10 @@ extern "C" fn transform_write_job2(
 ) -> f64 {
     unsafe {
         let transform_cb = perry_runtime::closure::closure_capture_ref(closure, 0);
-        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let readable_id = super::captured_stream(closure, 1);
         let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as u64;
         let promise = perry_runtime::closure::closure_capture_ref(closure, 3) as *mut Promise;
-        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 4) as usize;
+        let writable_id = super::captured_stream(closure, 4);
         let chunk = f64::from_bits(chunk_bits);
         if transform_cb != 0 && readable_id != 0 {
             let ret = js_closure_call2(
@@ -309,16 +308,16 @@ extern "C" fn transform_write_job2(
                         perry_runtime::fn_info!(transform_write_settle_fulfilled, 1; with_declared(1)),
                         3,
                     );
-                    perry_runtime::closure::closure_set_capture_word(fc, 0, readable_id as i64);
+                    super::capture_stream(fc, 0, readable_id);
                     perry_runtime::closure::closure_set_capture_ref(fc, 1, promise as i64);
-                    perry_runtime::closure::closure_set_capture_word(fc, 2, writable_id as i64);
+                    super::capture_stream(fc, 2, writable_id);
                     let rc = perry_runtime::closure::js_closure_alloc(
                         perry_runtime::fn_info!(transform_write_settle_rejected, 1; with_declared(1)),
                         3,
                     );
-                    perry_runtime::closure::closure_set_capture_word(rc, 0, readable_id as i64);
+                    super::capture_stream(rc, 0, readable_id);
                     perry_runtime::closure::closure_set_capture_ref(rc, 1, promise as i64);
-                    perry_runtime::closure::closure_set_capture_word(rc, 2, writable_id as i64);
+                    super::capture_stream(rc, 2, writable_id);
                     let _ = perry_runtime::promise::js_promise_then(inner, fc, rc);
                     return f64::from_bits(TAG_UNDEFINED);
                 }
@@ -355,7 +354,7 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
     let initial_backpressure = transform_initial_backpressure(readable_id);
     let settle = {
         match rs_rec(RsRef(readable_id)).as_deref() {
-            Some(s) if s.state == ReadableState::Errored => Settle::Errored(s.error_value),
+            Some(s) if s.state == ReadableState::Errored => Settle::Errored(s.error_value()),
             Some(s) if transform_has_backpressure(s, initial_backpressure) => Settle::Park,
             _ => Settle::Resolve,
         }
@@ -363,9 +362,7 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
     match settle {
         Settle::Errored(reason) => js_promise_reject(promise, f64::from_bits(reason)),
         Settle::Park => {
-            with_rs(RsRef(readable_id), |s| {
-                s.transform_parked_writes.push(promise)
-            });
+            with_rs(RsRef(readable_id), |s| s.park_write(promise));
         }
         Settle::Resolve => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
     }
@@ -409,9 +406,9 @@ extern "C" fn transform_write_settle_fulfilled(
     _value: f64,
 ) -> f64 {
     unsafe {
-        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let readable_id = super::captured_stream(closure, 0);
         let promise = perry_runtime::closure::closure_capture_ref(closure, 1) as *mut Promise;
-        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
+        let writable_id = super::captured_stream(closure, 2);
         settle_transform_write(readable_id, promise);
         transform_write_job_done(writable_id);
     }
@@ -427,9 +424,9 @@ extern "C" fn transform_write_settle_rejected(
     reason: f64,
 ) -> f64 {
     unsafe {
-        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let readable_id = super::captured_stream(closure, 0);
         let promise = perry_runtime::closure::closure_capture_ref(closure, 1) as *mut Promise;
-        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
+        let writable_id = super::captured_stream(closure, 2);
         if readable_id != 0 {
             js_readable_stream_controller_error(controller_value(readable_id), reason);
         }
@@ -444,18 +441,18 @@ extern "C" fn transform_write_settle_rejected(
 /// backpressure = false). Called from the reader-read paths in `streams.rs`.
 pub(super) unsafe fn transform_release_writes(readable_id: usize) {
     set_transform_initial_backpressure(readable_id, false);
-    let jobs = with_rs(RsRef(readable_id), |s| {
-        std::mem::take(&mut s.transform_backpressured_jobs)
-    })
-    .unwrap_or_default();
-    for job in jobs {
+    // Detached arrays below are locals (stack-pinned with their entries).
+    let jobs = with_rs(RsRef(readable_id), |s| s.take_deferred_jobs())
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    for k in 0..objects::array_len(jobs) {
+        let job = closure_of_value(objects::array_get(jobs, k));
         perry_runtime::builtins::js_queue_microtask(job as i64);
     }
     let (backpressured, errored) = {
         match rs_rec(RsRef(readable_id)).as_deref() {
             Some(s) => (
                 transform_has_backpressure(s, false),
-                (s.state == ReadableState::Errored).then_some(s.error_value),
+                (s.state == ReadableState::Errored).then_some(s.error_value()),
             ),
             None => (false, None),
         }
@@ -463,11 +460,10 @@ pub(super) unsafe fn transform_release_writes(readable_id: usize) {
     if backpressured && errored.is_none() {
         return;
     }
-    let parked = with_rs(RsRef(readable_id), |s| {
-        std::mem::take(&mut s.transform_parked_writes)
-    })
-    .unwrap_or_default();
-    for p in parked {
+    let parked = with_rs(RsRef(readable_id), |s| s.take_parked_writes())
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    for k in 0..objects::array_len(parked) {
+        let p = state::promise_of(objects::array_get(parked, k));
         match errored {
             Some(reason) => js_promise_reject(p, f64::from_bits(reason)),
             None => js_promise_resolve(p, f64::from_bits(TAG_UNDEFINED)),
@@ -477,23 +473,27 @@ pub(super) unsafe fn transform_release_writes(readable_id: usize) {
 
 pub(super) unsafe fn transform_abort_pending_writes(writable_id: usize, reason: f64) {
     let readable_id = transform_of_writable(WsRef(writable_id))
-        .and_then(|transform| with_ts(transform, |stream| stream.readable_handle));
+        .and_then(|transform| with_ts(transform, |stream| stream.readable_handle()));
     let Some(readable_id) = readable_id else {
         return;
     };
-    let jobs = with_rs(RsRef(readable_id), |s| {
-        std::mem::take(&mut s.transform_backpressured_jobs)
-    })
-    .unwrap_or_default();
-    for job in jobs {
+    let jobs = with_rs(RsRef(readable_id), |s| s.take_deferred_jobs())
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    for k in 0..objects::array_len(jobs) {
+        let job = closure_of_value(objects::array_get(jobs, k));
         let promise = perry_runtime::closure::closure_capture_ref(job, 3) as *mut Promise;
         js_promise_reject(promise, reason);
         transform_write_job_done(writable_id);
     }
 }
 
+/// A closure value back as its raw pointer.
+fn closure_of_value(value: f64) -> *mut ClosureHeader {
+    state::promise_of(value) as *mut ClosureHeader
+}
+
 fn transform_has_backpressure(stream: &ReadableStreamData, initial: bool) -> bool {
-    initial || (!stream.chunks.is_empty() && stream.queue_total_size >= stream.high_water_mark)
+    initial || (!stream.chunks_empty() && stream.queue_total_size >= stream.high_water_mark)
 }
 
 fn transform_initial_backpressure(readable_id: usize) -> bool {
@@ -629,13 +629,14 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
         match transform_of_writable(WsRef(writable_id)) {
             Some(t_id) => match ts_rec(t_id).as_deref_mut() {
                 Some(t) => {
+                    let readable = t.readable_handle();
                     if let Some(native) = t.native.as_mut() {
                         handled_native = true;
-                        if let Err(error_bits) = native_transform_close(native, t.readable_handle) {
+                        if let Err(error_bits) = native_transform_close(native, readable) {
                             native_error = Some(error_bits);
                         }
                     }
-                    (t.flush_cb, t.readable_handle)
+                    (t.flush_cb, t.readable_handle())
                 }
                 None => (0, 0),
             },
@@ -711,27 +712,11 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
                             perry_runtime::fn_info!(transform_flush_rejected, 1),
                             3,
                         );
-                        perry_runtime::closure::closure_set_capture_word(
-                            fulfill,
-                            0,
-                            writable_id as i64,
-                        );
-                        perry_runtime::closure::closure_set_capture_word(
-                            fulfill,
-                            1,
-                            readable_id as i64,
-                        );
+                        super::capture_stream(fulfill, 0, writable_id);
+                        super::capture_stream(fulfill, 1, readable_id);
                         perry_runtime::closure::closure_set_capture_ref(fulfill, 2, promise as i64);
-                        perry_runtime::closure::closure_set_capture_word(
-                            reject,
-                            0,
-                            writable_id as i64,
-                        );
-                        perry_runtime::closure::closure_set_capture_word(
-                            reject,
-                            1,
-                            readable_id as i64,
-                        );
+                        super::capture_stream(reject, 0, writable_id);
+                        super::capture_stream(reject, 1, readable_id);
                         perry_runtime::closure::closure_set_capture_ref(reject, 2, promise as i64);
                         let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
                         return;
@@ -800,8 +785,8 @@ extern "C" fn transform_flush_fulfilled(
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let writable_id = super::captured_stream(closure, 0);
+        let readable_id = super::captured_stream(closure, 1);
         let close_promise = perry_runtime::closure::closure_capture_ref(closure, 2) as *mut Promise;
         finish_transform_close(writable_id, readable_id, close_promise);
     }
@@ -817,8 +802,8 @@ extern "C" fn transform_flush_rejected(
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let writable_id = super::captured_stream(closure, 0);
+        let readable_id = super::captured_stream(closure, 1);
         let close_promise = perry_runtime::closure::closure_capture_ref(closure, 2) as *mut Promise;
         error_transform_close(writable_id, readable_id, close_promise, reason.to_bits());
     }

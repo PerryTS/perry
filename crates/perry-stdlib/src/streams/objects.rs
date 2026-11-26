@@ -38,6 +38,8 @@ extern "C" {
     fn provider_js_array_set(array: *mut ArrayHeader, index: u32, value: JSValue);
     #[link_name = "js_array_shift_f64"]
     fn provider_js_array_shift_f64(array: *mut ArrayHeader) -> f64;
+    #[link_name = "js_array_unshift_f64"]
+    fn provider_js_array_unshift_f64(array: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
 }
 
 /// ReadableStream slots.
@@ -235,6 +237,23 @@ pub(super) fn queue_push(obj: f64, i: u32, value: f64) {
         );
     }
     let grown = js_array_push_f64(array, value);
+    if grown != array {
+        set_slot(
+            obj,
+            i,
+            perry_runtime::value::js_nanbox_pointer(grown as i64),
+        );
+    }
+}
+
+/// Put `value` at the head of the queue in slot `i`.
+pub(super) fn queue_unshift(obj: f64, i: u32, value: f64) {
+    let array = queue_array(obj, i);
+    if array.is_null() {
+        queue_push(obj, i, value);
+        return;
+    }
+    let grown = unsafe { provider_js_array_unshift_f64(array, value) };
     if grown != array {
         set_slot(
             obj,

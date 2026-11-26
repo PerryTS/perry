@@ -1,8 +1,8 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::state::{
-    remove_reader, remove_writer, rs_rec, transform_of_writable, ws_rec, ReaderRef, RsRef,
-    WriterRef, WsRef,
+    remove_writer, rs_rec, transform_of_writable, with_reader, ws_rec, ReaderRef, RsRef, WriterRef,
+    WsRef,
 };
 use super::writable::acquire_writer;
 use super::{
@@ -61,13 +61,13 @@ fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLock
 /// keep) and retire the bare id. A second release finds no record.
 fn release_pipe_reader(readable_id: usize, reader_id: usize) {
     if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
-        if s.reader_handle == Some(reader_id) {
-            s.reader_handle = None;
+        if s.reader_handle() == Some(reader_id) {
+            s.set_reader_handle(None);
         }
     }
-    if remove_reader(ReaderRef(reader_id)).is_some() {
-        idalloc::retire_unused_id(reader_id);
-    }
+    // The pipe's reader is never handed to JS: unlocking the stream drops
+    // the last reference to it.
+    with_reader(ReaderRef(reader_id), |r| r.locked = false);
 }
 
 /// Release the pipe's reader and writer (ReadableStreamDefaultReaderRelease /
@@ -101,8 +101,8 @@ fn capture_f64(closure: *const ClosureHeader, idx: u32) -> f64 {
 fn pipe_state_from_capture(closure: *const ClosureHeader) -> PipeState {
     PipeState {
         locks: PipeLockIds {
-            reader_id: capture_f64(closure, 3) as usize,
-            writer_id: capture_f64(closure, 4) as usize,
+            reader_id: stream_id(capture_f64(closure, 3)),
+            writer_id: stream_id(capture_f64(closure, 4)),
         },
         prevent_close: perry_runtime::value::js_is_truthy(capture_f64(closure, 5)) != 0,
         prevent_abort: perry_runtime::value::js_is_truthy(capture_f64(closure, 6)) != 0,
@@ -117,8 +117,8 @@ extern "C" fn readable_stream_pipe_to_microtask(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         pipe_step(r_id, w_id, promise, pipe_state_from_capture(closure));
     }
@@ -131,8 +131,8 @@ extern "C" fn readable_stream_pipe_to_read_fulfilled(
     result: f64,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         let state = pipe_state_from_capture(closure);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
@@ -153,8 +153,8 @@ extern "C" fn readable_stream_pipe_to_write_fulfilled(
     _value: f64,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
@@ -170,8 +170,8 @@ extern "C" fn readable_stream_pipe_to_close_fulfilled(
     _value: f64,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
@@ -190,8 +190,8 @@ extern "C" fn readable_stream_pipe_to_read_rejected(
     reason: f64,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
@@ -213,8 +213,8 @@ extern "C" fn readable_stream_pipe_to_write_rejected(
     reason: f64,
 ) -> f64 {
     unsafe {
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let promise = promise_from_capture(closure, 2);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
@@ -239,8 +239,8 @@ extern "C" fn readable_stream_pipe_to_aborted(
         if perry_runtime::promise::js_promise_state(promise) != 0 {
             return f64::from_bits(TAG_UNDEFINED);
         }
-        let r_id = capture_f64(closure, 0) as usize;
-        let w_id = capture_f64(closure, 1) as usize;
+        let r_id = stream_id(capture_f64(closure, 0));
+        let w_id = stream_id(capture_f64(closure, 1));
         let state = pipe_state_from_capture(closure);
         let reason = pipe_signal_reason(state.signal);
         let mut actions = [std::ptr::null_mut(); 2];
@@ -281,7 +281,7 @@ unsafe fn pipe_next_read(readable_id: usize) -> PipeReadStep {
             } else if s.state == ReadableState::Closed {
                 PipeReadStep::Done
             } else if s.state == ReadableState::Errored {
-                PipeReadStep::Error(s.error_value)
+                PipeReadStep::Error(s.error_value())
             } else {
                 PipeReadStep::Pending
             }
@@ -421,8 +421,8 @@ extern "C" fn readable_stream_pipe_to_shutdown_fulfilled(
             return f64::from_bits(TAG_UNDEFINED);
         }
         reject_pipe(
-            capture_f64(closure, 0) as usize,
-            capture_f64(closure, 1) as usize,
+            stream_id(capture_f64(closure, 0)),
+            stream_id(capture_f64(closure, 1)),
             promise,
             pipe_state_from_capture(closure),
             capture_f64(closure, 10).to_bits(),
@@ -442,8 +442,8 @@ extern "C" fn readable_stream_pipe_to_shutdown_rejected(
             return f64::from_bits(TAG_UNDEFINED);
         }
         reject_pipe(
-            capture_f64(closure, 0) as usize,
-            capture_f64(closure, 1) as usize,
+            stream_id(capture_f64(closure, 0)),
+            stream_id(capture_f64(closure, 1)),
             promise,
             pipe_state_from_capture(closure),
             reason.to_bits(),
@@ -570,7 +570,7 @@ unsafe fn pipe_write_then_continue(
         let park_now = {
             rs_rec(RsRef(readable_id))
                 .as_deref()
-                .map(|s| s.chunks.is_empty() && s.state == ReadableState::Readable)
+                .map(|s| s.chunks_empty() && s.state == ReadableState::Readable)
                 .unwrap_or(false)
         };
         if park_now {
@@ -606,12 +606,12 @@ unsafe fn wait_for_next_read(
     let read_promise = js_promise_new();
     if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
         if s.state == ReadableState::Readable {
-            s.pending_reads.push_back(read_promise);
+            s.push_read_request(read_promise);
         } else if s.state == ReadableState::Closed {
             let result = pipe_iter_result_object(TAG_UNDEFINED, true);
             js_promise_resolve(read_promise, f64::from_bits(result));
         } else {
-            js_promise_reject(read_promise, f64::from_bits(s.error_value));
+            js_promise_reject(read_promise, f64::from_bits(s.error_value()));
         }
     } else {
         let result = pipe_iter_result_object(TAG_UNDEFINED, true);
@@ -693,12 +693,12 @@ fn pipe_closure_with_extra(
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         0,
-        (readable_id as f64).to_bits() as i64,
+        stream_value(readable_id).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         1,
-        (writable_id as f64).to_bits() as i64,
+        stream_value(writable_id).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
@@ -708,12 +708,12 @@ fn pipe_closure_with_extra(
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         3,
-        (state.locks.reader_id as f64).to_bits() as i64,
+        stream_value(state.locks.reader_id).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         4,
-        (state.locks.writer_id as f64).to_bits() as i64,
+        stream_value(state.locks.writer_id).to_bits() as i64,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn pipe_locks_are_real_reader_and_writer_records_released_once() {
-        use crate::streams::state::{reader_exists, with_reader, with_writer, writer_exists};
+        use crate::streams::state::{with_reader, with_writer, writer_exists};
         let _serial = crate::streams::tests::serial_guard();
         idalloc::test_reset_pools();
         let readable = alloc_readable(0, 0, 0, 1.0);
@@ -899,13 +899,16 @@ mod tests {
         // A stale duplicate release (close-fulfilled then a late rejection)
         // finds both released and retires nothing twice.
         release_pipe_locks(readable, writable, locks);
-        assert_eq!(idalloc::test_pool_occurrences(locks.reader_id), 1);
         assert_eq!(idalloc::test_pool_occurrences(locks.writer_id), 1);
-        // No wrapper of a pipe lock exists: release drops the records, only
-        // the bare ids sit in the quarantine.
-        assert!(!reader_exists(ReaderRef(locks.reader_id)));
+        // No wrapper of a pipe lock exists: release unlocks the reader object
+        // (its stream no longer names it) and drops the writer record, whose
+        // bare id sits in the quarantine.
+        assert_eq!(
+            with_reader(ReaderRef(locks.reader_id), |r| r.locked),
+            Some(false)
+        );
         assert!(!writer_exists(WriterRef(locks.writer_id)));
-        assert!(rs_rec(RsRef(readable)).unwrap().reader_handle.is_none());
+        assert!(rs_rec(RsRef(readable)).unwrap().reader_handle().is_none());
         assert!(ws_rec(WsRef(writable)).unwrap().writer_handle.is_none());
         // The live streams themselves stay out of the pools.
         assert_eq!(idalloc::test_pool_occurrences(readable), 0);
@@ -938,7 +941,7 @@ mod tests {
             } else {
                 assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
                 assert_eq!(
-                    rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle,
+                    rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle(),
                     Some(locks.reader_id)
                 );
                 assert_eq!(
@@ -950,7 +953,7 @@ mod tests {
                 assert!(rs_rec(RsRef(readable))
                     .as_deref()
                     .unwrap()
-                    .reader_handle
+                    .reader_handle()
                     .is_none());
                 assert!(ws_rec(WsRef(writable))
                     .as_deref()
@@ -993,7 +996,7 @@ mod tests {
         perry_runtime::promise::js_promise_run_microtasks();
         assert_eq!(perry_runtime::promise::js_promise_state(promise), 0);
         assert_eq!(
-            rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle,
+            rs_rec(RsRef(readable)).as_deref().unwrap().reader_handle(),
             Some(locks.reader_id)
         );
         assert_eq!(
@@ -1007,7 +1010,7 @@ mod tests {
         assert!(rs_rec(RsRef(readable))
             .as_deref()
             .unwrap()
-            .reader_handle
+            .reader_handle()
             .is_none());
         assert!(ws_rec(WsRef(writable))
             .as_deref()

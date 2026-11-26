@@ -70,6 +70,7 @@ fn consumer_credit_bounds_native_buffers_and_cancel_disconnects() {
             capacity: Some(capacity),
             on_chunk: Some(chunk),
             on_done: done,
+            alive: None,
         },
     )
     .unwrap();
@@ -153,6 +154,7 @@ fn consumer_resume_before_connect_keeps_the_request_pending() {
             capacity: None,
             on_chunk: None,
             on_done: resume_done,
+            alive: None,
         },
     )
     .unwrap();
@@ -221,6 +223,7 @@ fn consumer_resume_before_partial_headers_still_completes_the_body() {
             capacity: None,
             on_chunk: None,
             on_done: resume_done,
+            alive: None,
         },
     )
     .unwrap();
@@ -264,6 +267,7 @@ fn submit_after_response(ctx: usize, outcome: Outcome) {
             capacity: None,
             on_chunk: None,
             on_done: resume_done,
+            alive: None,
         },
     )
     .unwrap();
@@ -321,6 +325,7 @@ fn response_callback_does_not_resume_a_new_connecting_request() {
             capacity: None,
             on_chunk: None,
             on_done: submit_after_response,
+            alive: None,
         },
     )
     .unwrap();

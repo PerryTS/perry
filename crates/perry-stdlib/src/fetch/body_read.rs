@@ -14,11 +14,13 @@ pub(super) unsafe fn read(handle: f64, kind: Kind) -> *mut perry_runtime::Promis
     let _roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let id = handle_id(handle);
-    let state = FETCH_RESPONSES
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|r| (r.body_present, r.body_used, r.body_stream));
+    let state = FETCH_RESPONSES.lock().unwrap().get(&id).map(|r| {
+        (
+            r.body_present,
+            r.body_used,
+            r.body_stream.map(crate::streams::RsRef::from_bits),
+        )
+    });
     let Some((present, used, stream)) = state else {
         reject_fetch_type_error(promise, "Invalid response handle");
         return promise;

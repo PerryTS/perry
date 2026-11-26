@@ -306,7 +306,7 @@ extern "C" fn byob_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 {
 
 /// The byte stream a BYOB request receiver belongs to.
 unsafe fn request_stream(this: JsThis) -> usize {
-    byob_request_id_stream(stream_id(receiver(this, KIND_BYOB_REQUEST, RSBYOBREQ)))
+    state::byob_request_stream(receiver(this, KIND_BYOB_REQUEST, RSBYOBREQ))
 }
 extern "C" fn req_view(_: *const ClosureHeader, this: JsThis) -> f64 {
     unsafe { super::byob::byob_request_view(receiver(this, KIND_BYOB_REQUEST, RSBYOBREQ)) }

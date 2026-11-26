@@ -271,6 +271,11 @@ pub(crate) struct Sink {
     /// streaming caller; when set, `on_done` receives an empty body.
     pub(crate) on_chunk: Option<fn(usize, &[u8])>,
     pub(crate) on_done: fn(usize, Outcome),
+    /// Is the consumer still there? None for a caller that always is. A
+    /// streaming body whose stream object was collected while the response
+    /// sat paused at zero credit answers false: the engine then aborts the
+    /// exchange (`cancel_dead_sources`), and `on_done` still runs once.
+    pub(crate) alive: Option<fn(usize) -> bool>,
 }
 
 enum Delivery {
@@ -303,6 +308,22 @@ pub(crate) fn resume_source(ctx: usize) {
         }
     });
     drain_pending();
+}
+
+/// Abort every exchange whose consumer died (its `alive` answers false).
+/// Runs outside the engine borrow, before each drain.
+fn cancel_dead_sources() {
+    loop {
+        let dead = ENGINE.with(|e| {
+            e.borrow()
+                .requests
+                .iter()
+                .find(|(_, r)| r.sink.alive.is_some_and(|alive| !alive(r.sink.ctx)))
+                .map(|(id, _)| *id)
+        });
+        let Some(id) = dead else { break };
+        exchange::abort(id, 0);
+    }
 }
 
 pub(crate) fn cancel_source(ctx: usize) {
@@ -549,6 +570,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
 /// request (a redirect chain in JS, `Promise.all` fan-out), which takes the
 /// same `RefCell`.
 fn drain_pending() {
+    cancel_dead_sources();
     let already = ENGINE.with(|e| {
         let mut engine = e.borrow_mut();
         if engine.draining {

@@ -121,12 +121,6 @@ extern "C" fn scan_stream_roots_ffi(
     scan_stream_roots_with(&mut FfiStreamRootVisitor { visit, ctx });
 }
 
-#[cfg(test)]
-pub(super) fn scan_stream_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_stream_roots_with(&mut visitor);
-}
-
 pub(super) fn visit_stream_value_slot<V: StreamRootVisitor>(visitor: &mut V, slot: &mut u64) {
     let top = *slot >> 48;
     if matches!(top, 0x7FFA | 0x7FFD | 0x7FFF) {

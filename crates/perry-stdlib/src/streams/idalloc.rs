@@ -31,11 +31,8 @@
 //! retire of a mid-eviction id is rejected, and `retire_*` entry checks run
 //! before the allocator lock is taken.
 
-use super::state::{
-    evict, reader_rec, rs_rec, transform_of_writable, ts_exists, writer_rec, ws_rec, ReaderRef,
-    RsRef, WriterRef, WsRef,
-};
-use super::{ReadableState, WritableState, STREAM_ALLOC_END, STREAM_HANDLE_ID_START};
+use super::state::{evict, transform_of_writable, ts_exists, writer_rec, ws_rec, WriterRef, WsRef};
+use super::{WritableState, STREAM_ALLOC_END, STREAM_HANDLE_ID_START};
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -183,38 +180,6 @@ fn evict_ids(batch: &[usize]) {
     evict(batch);
 }
 
-/// Retire a readable stream that reached a terminal state: errored, or closed
-/// with its queue and pending reads drained. A still-attached reader dies
-/// with it (a released one goes through [`retire_reader_if_released`]); the
-/// tee lock sentinel (`usize::MAX`) fails `retire`'s band guard.
-pub(super) fn retire_readable_terminal(stream_id: usize) {
-    let reader = {
-        match rs_rec(RsRef(stream_id)).as_deref() {
-            Some(s)
-                if s.tee_cancel_promise.is_none()
-                    && match s.state {
-                        ReadableState::Errored => true,
-                        ReadableState::Closed => s.chunks.is_empty() && s.pending_reads.is_empty(),
-                        ReadableState::Readable => false,
-                    } =>
-            {
-                s.reader_handle
-            }
-            _ => return,
-        }
-    };
-    retire(stream_id);
-    if let Some(reader_id) = reader {
-        let attached = reader_rec(ReaderRef(reader_id))
-            .as_deref()
-            .map(|r| r.stream_handle == stream_id)
-            .unwrap_or(false);
-        if attached {
-            retire(reader_id);
-        }
-    }
-}
-
 /// Retire a writable stream that reached a terminal state (closed / errored /
 /// aborted) with no write in flight and an empty queue. A still-attached
 /// writer dies with it, and so does the transform stream whose sink this
@@ -249,20 +214,8 @@ pub(super) fn retire_writable_terminal(stream_id: usize) {
     }
 }
 
-/// Retire a reader whose lock was released (`releaseLock()` / iterator
-/// return). Post-release calls already answer through the registry-miss arms
-/// (`read()` → TypeError, `closed` → resolved promise).
-pub(super) fn retire_reader_if_released(reader_id: usize) {
-    let released = reader_rec(ReaderRef(reader_id))
-        .as_deref()
-        .map(|r| !r.locked)
-        .unwrap_or(false);
-    if released {
-        retire(reader_id);
-    }
-}
-
-/// Writer counterpart of [`retire_reader_if_released`].
+/// Retire a writer whose lock was released (`releaseLock()`). Post-release
+/// calls answer through the registry-miss arms.
 pub(super) fn retire_writer_if_released(writer_id: usize) {
     let released = writer_rec(WriterRef(writer_id))
         .as_deref()

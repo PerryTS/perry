@@ -79,13 +79,14 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     }
     // Only a stream-band handle can be a stream; skip the registry probe for
     // everything else.
-    if let Some(id) = perry_runtime::object::stream_handle_id(value) {
-        // kind == 1 ⇒ live ReadableStream. Stash it for the constructor that
-        // requested the body-init conversion: Request drains it to bytes, while
-        // Response preserves it lazily because transformed SSR streams often
-        // produce data only when the downstream consumer pulls.
-        if crate::streams::is_readable_stream(crate::streams::RsRef(id)) {
-            PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(id));
+    {
+        // A live ReadableStream object. Stash it (its value, traced by the
+        // fetch scanner) for the constructor that requested the body-init
+        // conversion: Request drains it to bytes, while Response preserves it
+        // lazily because transformed SSR streams often produce data only when
+        // the downstream consumer pulls.
+        if crate::streams::is_readable_stream(crate::streams::RsRef::from_value(value)) {
+            PENDING_FETCH_BODY_STREAM.with(|pending| pending.set(value.to_bits()));
             return 0;
         }
     }

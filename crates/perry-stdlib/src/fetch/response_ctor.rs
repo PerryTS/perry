@@ -139,8 +139,8 @@ pub unsafe extern "C" fn js_response_new(
                 resp.cached_headers_id = Some(headers_id);
             }
             if let Some(stream_id) = body_stream {
-                resp.body_stream = Some(stream_id);
-                resp.cached_body_stream = Some(stream_id);
+                resp.body_stream = Some(stream_id.bits());
+                resp.cached_body_stream = Some(stream_id.bits());
             }
         }
     }
@@ -165,11 +165,12 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     // and allocates) may run under the guard: a throw unwinds without running
     // `Drop`, leaving the registry locked for good, and the collector locks
     // this registry (`lifecycle`). Decide under the guard, act after it.
-    let state = FETCH_RESPONSES
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|resp| (resp.body_present && resp.body_used, resp.body_stream));
+    let state = FETCH_RESPONSES.lock().unwrap().get(&id).map(|resp| {
+        (
+            resp.body_present && resp.body_used,
+            resp.body_stream.map(crate::streams::RsRef::from_bits),
+        )
+    });
     let Some((consumed, stream_id)) = state else {
         return f64::from_bits(TAG_UNDEFINED);
     };
@@ -186,8 +187,8 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
         let mut guard = FETCH_RESPONSES.lock().unwrap();
         guard.get_mut(&id).map(|resp| {
             let cloned_stream_id = teed.map(|(original, cloned)| {
-                resp.body_stream = Some(original);
-                resp.cached_body_stream = Some(original);
+                resp.body_stream = Some(original.bits());
+                resp.cached_body_stream = Some(original.bits());
                 cloned
             });
             FetchResponse {
@@ -202,8 +203,8 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 url: resp.url.clone(),
                 redirected: resp.redirected,
                 cached_headers_id: None,
-                cached_body_stream: cloned_stream_id,
-                body_stream: cloned_stream_id,
+                cached_body_stream: cloned_stream_id.map(|s| s.bits()),
+                body_stream: cloned_stream_id.map(|s| s.bits()),
             }
         })
     };

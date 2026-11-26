@@ -355,7 +355,8 @@ mod native;
 mod objects;
 mod pipe;
 pub(crate) use native::{
-    alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
+    alloc_native_readable, collect_body, native_alive, native_capacity, native_enqueue,
+    native_stream, release_native, take_native_promise,
 };
 mod prototypes;
 mod strategy;
@@ -375,8 +376,6 @@ pub use self::byob::{
     js_reader_read_with_view,
 };
 use self::gc::ensure_gc_registered;
-#[cfg(test)]
-use self::gc::scan_stream_roots;
 pub(crate) use self::strategy::parse_strategy_value;
 pub use self::strategy::{
     js_byte_length_queuing_strategy_new, js_count_queuing_strategy_new,
@@ -384,8 +383,6 @@ pub use self::strategy::{
 };
 use self::strategy::{read_high_water_mark, read_queuing_strategy_size};
 
-#[cfg(test)]
-pub(crate) use self::byob::byob_pending_for_test;
 pub(crate) use self::expando::stream_expando_get;
 #[cfg(test)]
 pub(crate) use self::expando::stream_expando_set_hook;
@@ -512,52 +509,31 @@ const _: () = assert!(
         == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1
 );
 
-/// The controller value of readable stream `id`.
+/// The controller object of readable stream `id`.
 #[inline]
 pub(crate) fn controller_value(id: usize) -> f64 {
-    stream_value(id | STREAM_CONTROLLER_BIT)
+    RsRef(id).controller_value()
 }
 
-/// The readable stream id a controller value controls; 0 (a registry miss)
-/// for every other value, a stream handle included.
+/// The readable stream a controller value controls; 0 (a miss) for every
+/// other value, a stream included.
 #[inline]
 pub(crate) fn controller_stream_id(value: f64) -> usize {
-    controller_id_stream(stream_id(value))
-}
-
-/// The readable stream id of controller id `id`, else 0.
-#[inline]
-pub(crate) fn controller_id_stream(id: usize) -> usize {
-    if (STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT..STREAM_HANDLE_ID_END).contains(&id) {
-        id & !STREAM_CONTROLLER_BIT
-    } else {
-        0
-    }
-}
-
-/// The BYOB request value of byte stream `id`.
-#[inline]
-pub(crate) fn byob_request_value(id: usize) -> f64 {
-    stream_value(id | STREAM_BYOB_REQUEST_BIT)
-}
-
-/// The byte stream id of BYOB request id `id`, else 0.
-#[inline]
-pub(crate) fn byob_request_id_stream(id: usize) -> usize {
-    if (STREAM_ALLOC_END..STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT).contains(&id) {
-        id & !STREAM_BYOB_REQUEST_BIT
-    } else {
-        0
-    }
+    state::controller_stream(value)
 }
 
 /// The JS value of a stream-family registry id (stream, reader, writer,
 /// transform): a `POINTER_TAG` handle in the stream band, like every other
 /// registry handle. Never a number — a number is always a Number, so
 /// `typeof 1048576` cannot depend on whether stream 0x100000 is live.
+///
+/// A readable-family ref is its object's address: its value is the object.
 #[inline]
 pub(crate) fn stream_value(id: usize) -> f64 {
-    perry_runtime::value::js_nanbox_handle(id as i64)
+    match state::object_at(id) {
+        Some(object) => object,
+        None => perry_runtime::value::js_nanbox_handle(id as i64),
+    }
 }
 
 /// True for a JS object (a heap `POINTER_TAG` value), false for a stream
@@ -572,9 +548,15 @@ pub(crate) fn is_object_value(value: f64) -> bool {
 /// The registry id a JS value names: the payload of a stream-band
 /// `POINTER_TAG` handle, else 0 (which no registry holds). Every stream FFI
 /// decodes its handle arguments here.
+///
+/// Any other heap object answers its address: the readable-family ref
+/// (accessors check the object's family, so a foreign object misses).
 #[inline]
 pub(crate) fn stream_id(value: f64) -> usize {
-    perry_runtime::object::stream_handle_id(value).unwrap_or(0)
+    match perry_runtime::object::stream_handle_id(value) {
+        Some(id) => id,
+        None => state::object_address(value),
+    }
 }
 
 /// The error a readable stream ended with, if any. A stream built from an
@@ -582,8 +564,8 @@ pub(crate) fn stream_id(value: f64) -> usize {
 /// has popped the queued chunks, so check both.
 pub(crate) fn readable_stream_error(stream: RsRef) -> Option<f64> {
     with_rs(stream, |s| match s.state {
-        ReadableState::Errored => Some(f64::from_bits(s.error_value)),
-        _ => s.pending_error_after_chunks.map(f64::from_bits),
+        ReadableState::Errored => Some(f64::from_bits(s.error_value())),
+        _ => s.pending_error_after_chunks().map(f64::from_bits),
     })
     .flatten()
 }
@@ -611,6 +593,20 @@ unsafe fn closure_from_bits(bits: u64) -> i64 {
     } else {
         0
     }
+}
+
+/// Keep stream-family ref `id` in capture `index` of `closure` as its traced
+/// value (a readable ref is an object address: an untraced capture word
+/// would neither keep it alive nor follow it when it moves).
+pub(super) fn capture_stream(closure: *mut ClosureHeader, index: u32, id: usize) {
+    js_closure_set_capture_ptr(closure, index, stream_value(id).to_bits() as i64);
+}
+
+/// The stream-family ref [`capture_stream`] stored (0 for none).
+pub(super) fn captured_stream(closure: *const ClosureHeader, index: u32) -> usize {
+    stream_id(f64::from_bits(
+        js_closure_get_capture_ptr(closure, index) as u64
+    ))
 }
 
 unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
@@ -753,11 +749,39 @@ fn alloc_readable_with_strategy(
     is_byte_stream: bool,
     strategy_size_cb: i64,
 ) -> usize {
-    let id = next_stream_id();
+    alloc_readable_owned(
+        start_cb,
+        pull_cb,
+        cancel_cb,
+        hwm,
+        is_byte_stream,
+        strategy_size_cb,
+        None,
+    )
+}
+
+/// [`alloc_readable_with_strategy`] for the readable side of TransformStream
+/// `owner_transform` (its controller is a TransformStreamDefaultController).
+fn alloc_readable_owned(
+    start_cb: i64,
+    pull_cb: i64,
+    cancel_cb: i64,
+    hwm: f64,
+    is_byte_stream: bool,
+    strategy_size_cb: i64,
+    owner_transform: Option<usize>,
+) -> usize {
+    let high_water_mark = readable_high_water_mark(hwm, is_byte_stream);
+    let mut data = ReadableStreamData::new(high_water_mark, is_byte_stream);
+    data.owner_transform = owner_transform;
+    alloc_rs(data, [start_cb, pull_cb, cancel_cb, strategy_size_cb]).0
+}
+
+fn readable_high_water_mark(hwm: f64, is_byte_stream: bool) -> f64 {
     // Byte streams default to highWaterMark 0 (per spec — no eager pull at
     // construction; the first pull fires when a read request arrives, #4915).
     // Default streams keep the legacy clamp-to-1 behavior.
-    let high_water_mark = if hwm.is_nan() {
+    if hwm.is_nan() {
         if is_byte_stream {
             0.0
         } else {
@@ -767,19 +791,14 @@ fn alloc_readable_with_strategy(
         1.0
     } else {
         hwm.max(0.0)
-    };
-    insert_rs(
-        RsRef(id),
-        ReadableStreamData::new(
-            start_cb,
-            pull_cb,
-            cancel_cb,
-            strategy_size_cb,
-            high_water_mark,
-            is_byte_stream,
-        ),
-    );
-    id
+    }
+}
+
+/// `super(source)` of `class X extends ReadableStream`: `this` itself becomes
+/// the stream. 0 when `this` cannot carry it.
+fn attach_readable(this: f64, start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
+    let data = ReadableStreamData::new(readable_high_water_mark(hwm, false), false);
+    attach_rs_to(this, data, [start_cb, pull_cb, cancel_cb, 0]).0
 }
 
 fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usize {
@@ -818,7 +837,7 @@ unsafe fn invoke_start(stream_id: usize) {
         match rs_rec(RsRef(stream_id)).as_deref_mut() {
             Some(s) if !s.started => {
                 s.started = true;
-                (s.start_cb, controller_value(stream_id))
+                (s.start_cb(), controller_value(stream_id))
             }
             _ => return,
         }
@@ -837,8 +856,7 @@ extern "C" fn readable_pull_microtask(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe {
-        let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
-        let stream_id = f64::from_bits(stream_bits) as usize;
+        let stream_id = captured_stream(closure, 0);
         let cb = perry_runtime::closure::closure_capture_ref(closure, 1);
         let pull_returns_byte_chunk = js_closure_get_capture_ptr(closure, 2) != 0;
         let should_pull = {
@@ -917,7 +935,7 @@ fn readable_pull_settled_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    perry_runtime::closure::closure_set_capture_word(closure, 0, stream_id as i64);
+    capture_stream(closure, 0, stream_id);
     closure
 }
 
@@ -927,7 +945,7 @@ extern "C" fn readable_pull_fulfilled(
     _value: f64,
 ) -> f64 {
     unsafe {
-        let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
+        let stream_id = captured_stream(closure, 0);
         if let Some(s) = rs_rec(RsRef(stream_id)).as_deref_mut() {
             s.pulling = false;
         }
@@ -942,7 +960,7 @@ extern "C" fn readable_pull_rejected(
     reason: f64,
 ) -> f64 {
     unsafe {
-        let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
+        let stream_id = captured_stream(closure, 0);
         let should_error = {
             match rs_rec(RsRef(stream_id)).as_deref_mut() {
                 Some(stream) => {
@@ -1003,14 +1021,19 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
         match rs_rec(RsRef(stream_id)).as_deref_mut() {
             Some(s) if s.state == ReadableState::Readable && !s.pulling && s.started => {
                 let has_read_request =
-                    !s.pending_reads.is_empty() || s.body_consumer.is_some() || has_byob_pending;
-                let need = (force && s.chunks.is_empty())
+                    !(s.read_request_count() == 0) || s.body_consumer.is_some() || has_byob_pending;
+                let need = (force && s.chunks_empty())
                     || has_read_request
-                    || (s.chunks.is_empty() && s.high_water_mark > 0.0)
-                    || (!s.chunks.is_empty() && s.queue_total_size < s.high_water_mark);
-                if need && s.pull_cb != 0 {
+                    || (s.chunks_empty() && s.high_water_mark > 0.0)
+                    || (!s.chunks_empty() && s.queue_total_size < s.high_water_mark);
+                if need && s.pull_cb() != 0 {
                     s.pulling = true;
-                    (s.pull_cb, stream_id as f64, true, s.pull_returns_byte_chunk)
+                    (
+                        s.pull_cb(),
+                        stream_value(stream_id),
+                        true,
+                        s.pull_returns_byte_chunk,
+                    )
                 } else {
                     (0, 0.0, false, false)
                 }
@@ -1048,50 +1071,32 @@ unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
 }
 
 unsafe fn close_pending(stream_id: usize) {
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
     native::advance_body(stream_id);
-    let promises: Vec<*mut Promise> = {
-        match rs_rec(RsRef(stream_id)).as_deref_mut() {
-            Some(s) => s.pending_reads.drain(..).collect(),
-            None => Vec::new(),
-        }
-    };
-    // Keep the entire detached batch live while an earlier result allocates.
-    let promises: Vec<_> = promises
-        .into_iter()
-        .map(|p| scope.root_raw_mut_ptr(p))
-        .collect();
-    for p in promises {
+    // The detached batch is a JS array held by this frame (a pinned stack
+    // word keeps it and its promises alive while an earlier result allocates).
+    let promises = with_rs(RsRef(stream_id), |s| s.take_read_requests())
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    for k in 0..objects::array_len(promises) {
+        let p = state::promise_of(objects::array_get(promises, k));
         let result = build_iter_result(TAG_UNDEFINED, true);
-        js_promise_resolve(p.get_raw_mut_ptr(), f64::from_bits(result));
+        js_promise_resolve(p, f64::from_bits(result));
     }
     byob::close_pending_byob(stream_id);
     // ReadableStreamClose with the queue drained (or after the cancel
     // algorithm ran): the controller's ClearAlgorithms step.
     readable_clear_algorithms(stream_id);
-    // #5437: stream is done — drop any expando entries so the table doesn't
-    // grow one row per stream over the server's lifetime.
-    expando::stream_expando_clear(stream_id);
-    idalloc::retire_readable_terminal(stream_id);
 }
 
 unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let reason = scope.root_nanbox_u64(reason_bits);
     native::advance_body(stream_id);
-    let promises: Vec<*mut Promise> = {
-        match rs_rec(RsRef(stream_id)).as_deref_mut() {
-            Some(s) => s.pending_reads.drain(..).collect(),
-            None => Vec::new(),
-        }
-    };
-    // Keep the entire detached batch live while an earlier result allocates.
-    let promises: Vec<_> = promises
-        .into_iter()
-        .map(|p| scope.root_raw_mut_ptr(p))
-        .collect();
-    for p in promises {
-        js_promise_reject(p.get_raw_mut_ptr(), f64::from_bits(reason.get_nanbox_u64()));
+    // The detached batch: a JS array held by this frame (see close_pending).
+    let promises = with_rs(RsRef(stream_id), |s| s.take_read_requests())
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    for k in 0..objects::array_len(promises) {
+        let p = state::promise_of(objects::array_get(promises, k));
+        js_promise_reject(p, f64::from_bits(reason.get_nanbox_u64()));
     }
     byob::error_pending_byob(stream_id, reason.get_nanbox_u64());
     // ReadableStreamDefaultControllerError / ReadableByteStreamControllerError
@@ -1101,9 +1106,6 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
     if let Some(writable_id) = transform_writable_for_readable(stream_id) {
         transform_clear_algorithms(writable_id);
     }
-    // #5437: stream errored — drop any expando entries (see close_pending).
-    expando::stream_expando_clear(stream_id);
-    idalloc::retire_readable_terminal(stream_id);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1306,18 +1308,19 @@ pub(super) unsafe fn acquire_reader(r: RsRef, byob: bool) -> Result<ReaderRef, A
         return Err(AcquireError::Missing);
     };
     let s = &mut *rec;
-    if s.reader_handle.is_some() {
+    if s.reader_handle().is_some() {
         return Err(AcquireError::Locked);
     }
-    let reader = ReaderRef(next_stream_id());
+    let (state, error) = (s.state, s.error_value());
+    drop(rec);
     let closed_p = internal_promise();
-    if s.state == ReadableState::Closed {
+    if state == ReadableState::Closed {
         js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
-    } else if s.state == ReadableState::Errored {
-        js_promise_reject(closed_p, f64::from_bits(s.error_value));
+    } else if state == ReadableState::Errored {
+        js_promise_reject(closed_p, f64::from_bits(error));
     }
-    s.reader_handle = Some(reader.0);
-    insert_reader(reader, ReaderData::new(r.0, closed_p, byob));
+    let reader = alloc_reader(ReaderData::new(r.0, closed_p, byob));
+    with_rs(r, |s| s.set_reader_handle(Some(reader.0)));
     Ok(reader)
 }
 
@@ -1370,7 +1373,7 @@ unsafe fn js_string_value_to_string(value: f64, coerce: bool) -> Option<String> 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_locked(stream_handle: f64) -> f64 {
     let id = stream_id(stream_handle);
-    let locked = with_rs(RsRef(id), |s| s.reader_handle.is_some()).unwrap_or(false);
+    let locked = with_rs(RsRef(id), |s| s.reader_handle().is_some()).unwrap_or(false);
     f64::from_bits(if locked { TAG_TRUE } else { TAG_FALSE })
 }
 
@@ -1394,7 +1397,7 @@ unsafe fn js_readable_stream_cancel_inner(
     let cb = {
         match rs_rec(RsRef(id)).as_deref_mut() {
             Some(s) => {
-                if !allow_locked && s.reader_handle.is_some() {
+                if !allow_locked && s.reader_handle().is_some() {
                     locked_reject = true;
                     0
                 } else if s.state == ReadableState::Errored {
@@ -1402,14 +1405,14 @@ unsafe fn js_readable_stream_cancel_inner(
                     // with its stored error; the source (whose algorithms the
                     // error cleared) is not consulted.
                     s.disturbed = true;
-                    stored_error = Some(s.error_value);
+                    stored_error = Some(s.error_value());
                     0
                 } else {
                     s.canceled = true;
                     s.disturbed = true;
                     s.state = ReadableState::Closed;
                     s.clear_chunks();
-                    s.cancel_cb
+                    s.cancel_cb()
                 }
             }
             None => 0,
@@ -1731,20 +1734,29 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
         throw_type_error("ReadableStream.from requires an iterable");
     };
 
+    // The stream and its queue allocate: the collected chunks (Rust heap) are
+    // rooted until they sit in the stream's queue slot.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let chunks: Vec<_> = source
+        .chunks
+        .iter()
+        .map(|&bits| scope.root_nanbox_u64(bits))
+        .collect();
+    let error = source.error.map(|bits| scope.root_nanbox_u64(bits));
     let id = alloc_readable(0, 0, 0, 1.0);
     {
         if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
-            for bits in source.chunks {
-                s.push_chunk(bits, 1.0);
+            for chunk in &chunks {
+                s.push_chunk(chunk.get_nanbox_u64(), 1.0);
             }
             s.started = true;
-            if let Some(error) = source.error {
-                if s.chunks.is_empty() {
+            if let Some(error) = error.map(|e| e.get_nanbox_u64()) {
+                if s.chunks_empty() {
                     s.state = ReadableState::Errored;
-                    s.error_value = error;
+                    s.set_error_value(error);
                 } else {
                     s.state = ReadableState::Readable;
-                    s.pending_error_after_chunks = Some(error);
+                    s.set_pending_error_after_chunks(Some(error));
                 }
             } else {
                 s.state = ReadableState::Closed;
@@ -1791,10 +1803,10 @@ unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
         match rs_rec(RsRef(stream_id)).as_deref_mut() {
             Some(s) => {
                 s.state = ReadableState::Errored;
-                s.error_value = reason_bits;
-                s.pending_error_after_chunks = None;
+                s.set_error_value(reason_bits);
+                s.set_pending_error_after_chunks(None);
                 s.clear_chunks();
-                s.reader_handle
+                s.reader_handle()
             }
             None => return,
         }
@@ -1877,10 +1889,10 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
     let (popped, strategy_size_cb) = {
         match rs_rec(RsRef(id)).as_deref_mut() {
             Some(s) if s.state == ReadableState::Readable => {
-                if let Some(p) = s.pending_reads.pop_front() {
+                if let Some(p) = s.shift_read_request() {
                     (Some(p), 0)
                 } else {
-                    (None, s.strategy_size_cb)
+                    (None, s.strategy_size_cb())
                 }
             }
             _ => return f64::from_bits(TAG_UNDEFINED),
@@ -1947,14 +1959,14 @@ pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64)
         if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
             if s.state == ReadableState::Readable {
                 s.state = ReadableState::Closed;
-                s.pending_error_after_chunks = None;
+                s.set_pending_error_after_chunks(None);
             }
         }
     }
     // Reader.closed promise resolves when stream closes and queue empties.
     let (queue_empty, reader_id) = {
         match rs_rec(RsRef(id)).as_deref() {
-            Some(s) => (s.chunks.is_empty(), s.reader_handle),
+            Some(s) => (s.chunks_empty(), s.reader_handle()),
             None => (true, None),
         }
     };
@@ -2130,16 +2142,16 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
             Some(s) => {
                 s.disturbed = true;
                 if let Some(c) = s.pop_chunk() {
-                    if s.chunks.is_empty() {
-                        if let Some(error) = s.pending_error_after_chunks.take() {
+                    if s.chunks_empty() {
+                        if let Some(error) = s.take_pending_error_after_chunks() {
                             s.state = ReadableState::Errored;
-                            s.error_value = error;
+                            s.set_error_value(error);
                             s.clear_algorithms();
-                            if let Some(reader_id) = s.reader_handle {
+                            if let Some(reader_id) = s.reader_handle() {
                                 closed_rejection = Some((reader_id, error));
                             }
                         } else if s.state == ReadableState::Closed {
-                            if let Some(reader_id) = s.reader_handle {
+                            if let Some(reader_id) = s.reader_handle() {
                                 closed_resolution = Some(reader_id);
                             }
                         }
@@ -2148,9 +2160,9 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
                 } else if s.state == ReadableState::Closed {
                     Some((TAG_UNDEFINED, true, false))
                 } else if s.state == ReadableState::Errored {
-                    Some((s.error_value, false, true))
+                    Some((s.error_value(), false, true))
                 } else {
-                    s.pending_reads.push_back(promise.get_raw_mut_ptr());
+                    s.push_read_request(promise.get_raw_mut_ptr());
                     None
                 }
             }
@@ -2313,12 +2325,8 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
         }
     };
     if let Some(s) = rs_rec(RsRef(stream_id)).as_deref_mut() {
-        s.reader_handle = None;
+        s.set_reader_handle(None);
     }
-    // #5437: the reader instance is done — drop any expando entries keyed by
-    // its handle id so the table doesn't retain them for the process lifetime.
-    expando::stream_expando_clear(reader_id);
-    idalloc::retire_reader_if_released(reader_id);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -2358,7 +2366,7 @@ fn pipe_through_validation_error(
     writable_id: usize,
     output_id: usize,
 ) -> Option<&'static str> {
-    match with_rs(RsRef(readable_id), |s| s.reader_handle.is_some()) {
+    match with_rs(RsRef(readable_id), |s| s.reader_handle().is_some()) {
         Some(true) => return Some("ReadableStream is locked"),
         Some(false) => {}
         None => return Some("Invalid ReadableStream"),
@@ -2459,6 +2467,16 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
     // options. The scope always exists here; individual numeric values need
     // no handle slots.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    // The source and the endpoints are GC objects too (streams P2a): the
+    // endpoint getters may move them.
+    let source_root =
+        is_object_value(readable_handle).then(|| scope.root_nanbox_f64(readable_handle));
+    let source_value = || {
+        source_root
+            .as_ref()
+            .map(|root| root.get_nanbox_f64())
+            .unwrap_or(readable_handle)
+    };
     let pair_root = pair_is_object.then(|| scope.root_nanbox_f64(pair));
     let options_root = options_is_object.then(|| scope.root_nanbox_f64(options));
     let transform = match pair_root {
@@ -2496,9 +2514,11 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         // Keep object-specific property dispatch out of the numeric endpoint
         // getters, so merely reading TransformStream endpoints does not link
         // the generic object-property machinery into an otherwise lean binary.
-        let readable = subclass::unwrap_pair_stream_handle(transform_field(b"readable"));
+        let readable = scope.root_nanbox_f64(subclass::unwrap_pair_stream_handle(transform_field(
+            b"readable",
+        )));
         let writable = subclass::unwrap_pair_stream_handle(transform_field(b"writable"));
-        (readable, writable)
+        (readable.get_nanbox_f64(), writable)
     } else {
         (
             js_transform_stream_readable(transform),
@@ -2506,12 +2526,12 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         )
     };
     let output = js_readable_stream_pipe_through_validate(
-        readable_handle,
+        source_value(),
         writable,
         readable,
         options_value(),
     );
-    let pipe = js_readable_stream_pipe_to(readable_handle, writable, options_value());
+    let pipe = js_readable_stream_pipe_to(source_value(), writable, options_value());
     js_promise_mark_internally_handled(pipe);
     output
 }
@@ -2555,7 +2575,14 @@ mod handle_boundary_tests {
                     let property = perry_runtime::value::js_nanbox_string(key as i64);
                     perry_runtime::proxy::js_put_value_set(object, property, value, object, 0);
                 }
-                assert_eq!(stream_expando_get(id, key_name), Some(value));
+                // A ReadableStream is an ordinary object: the property is its
+                // own, whichever receiver form stored it.
+                let read = perry_runtime::value::js_get_property(
+                    stream,
+                    key_name.as_ptr() as i64,
+                    key_name.len() as i64,
+                );
+                assert_eq!(read, value);
             }
         }
     }

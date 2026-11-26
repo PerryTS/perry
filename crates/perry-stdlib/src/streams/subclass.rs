@@ -68,6 +68,15 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     let Some(obj) = this_object_ptr(value) else {
         return value;
     };
+    // A readable-family object is its own handle (a subclass `this` carries
+    // the ReadableStream payload itself).
+    if matches!(
+        objects::class_id_of(value),
+        perry_runtime::native_class_ids::WEB_READABLE_STREAM
+            ..=perry_runtime::native_class_ids::WEB_RS_BYOB_READER
+    ) {
+        return value;
+    }
     let key = subclass_handle_key();
     let result = js_object_get_field_by_name(obj, key);
     let result_bits = result.bits();
@@ -134,39 +143,14 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
-        return 0;
+        return object_kind(id);
     }
-    let requested = byob_request_id_stream(id);
-    if requested != 0 {
-        return match rs_rec(RsRef(requested)).as_deref() {
-            Some(s) if s.is_byte_stream => 10,
-            _ => 0,
-        };
-    }
-    let controlled = controller_id_stream(id);
-    if controlled != 0 {
-        let is_byte_stream = match rs_rec(RsRef(controlled)).as_deref() {
-            Some(s) => s.is_byte_stream,
-            None => return 0,
-        };
-        return if transform_writable_for_readable(controlled).is_some() {
-            7
-        } else if is_byte_stream {
-            8
-        } else {
-            6
-        };
-    }
-    if rs_exists(RsRef(id)) {
-        return 1;
+    let transform = state::transform_controller_transform(id);
+    if transform != 0 {
+        return if ts_exists(TsRef(transform)) { 7 } else { 0 };
     }
     if ws_exists(WsRef(id)) {
         return 2;
-    }
-    match with_reader(ReaderRef(id), |r| r.is_byob) {
-        Some(true) => return 9,
-        Some(false) => return 3,
-        None => {}
     }
     if writer_exists(WriterRef(id)) {
         return 4;
@@ -175,6 +159,25 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
         return 5;
     }
     0
+}
+
+/// The kind ([`js_stream_handle_kind`] numbering) of a readable-family
+/// object: its class id says which member it is (a controller of a
+/// TransformStream's readable side is a TransformStreamDefaultController).
+pub(super) fn object_kind(id: usize) -> u8 {
+    use perry_runtime::native_class_ids as ids;
+    let Some(obj) = state::object_at(id) else {
+        return 0;
+    };
+    match objects::class_id_of(obj) {
+        ids::WEB_RS_DEFAULT_READER => 3,
+        ids::WEB_RS_BYOB_READER => 9,
+        ids::WEB_RS_DEFAULT_CONTROLLER => 6,
+        ids::WEB_RS_BYTE_CONTROLLER => 8,
+        ids::WEB_RS_BYOB_REQUEST => 10,
+        _ if rs_exists(RsRef(id)) => 1,
+        _ => 0,
+    }
 }
 
 /// #1545: runtime method dispatch for Web Streams handles whose static type
@@ -200,7 +203,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     args: &[f64],
 ) -> Option<f64> {
     let id = stream_id(handle);
-    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
+    if id == 0 {
         return None;
     }
     let arg0 = args
@@ -213,7 +216,7 @@ pub(crate) unsafe fn dispatch_stream_method(
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
     // A byte stream's BYOB request handle answers its two operations.
-    let requested = byob_request_id_stream(id);
+    let requested = state::byob_request_stream(handle);
     if requested != 0 {
         return match method {
             "respond" => Some(super::byob::byob_request_respond(requested, arg0)),
@@ -286,7 +289,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     }
     // RSTREAM R3: a controller (start/pull/transform/flush callbacks receive
     // it) is its own handle; its methods never answer on the stream itself.
-    let controlled = controller_id_stream(id);
+    let controlled = controller_stream_id(handle);
     let kind = if controlled != 0 {
         js_stream_handle_kind(id)
     } else {
@@ -412,13 +415,17 @@ pub unsafe extern "C" fn js_readable_stream_subclass_init(
     hwm: f64,
 ) -> f64 {
     ensure_gc_registered();
-    let id = alloc_readable(
+    let (start, pull, cancel) = (
         closure_from_bits(start_bits.to_bits()),
         closure_from_bits(pull_bits.to_bits()),
         closure_from_bits(cancel_bits.to_bits()),
-        hwm,
     );
-    attach_handle_to_this(this_bits, id);
+    // `this` itself becomes the stream (payload, slots, controller).
+    let mut id = attach_readable(this_bits, start, pull, cancel, hwm);
+    if id == 0 {
+        id = alloc_readable(start, pull, cancel, hwm);
+        attach_handle_to_this(this_bits, id);
+    }
     invoke_start(id);
     maybe_pull(id);
     f64::from_bits(TAG_UNDEFINED)
@@ -542,7 +549,7 @@ pub(crate) fn drain_readable_into_bytes(stream: RsRef) -> Vec<u8> {
 }
 
 pub(crate) fn readable_body_state(stream: RsRef) -> (bool, bool) {
-    with_rs(stream, |s| (s.reader_handle.is_some(), s.disturbed)).unwrap_or((false, false))
+    with_rs(stream, |s| (s.reader_handle().is_some(), s.disturbed)).unwrap_or((false, false))
 }
 
 /// The stream of a body that was read to its end (`request.body` after
