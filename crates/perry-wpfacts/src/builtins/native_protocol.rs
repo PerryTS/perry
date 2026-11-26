@@ -1080,6 +1080,7 @@ fn replay_native_by(m: &mut Model, by: Option<(Tok, Option<Atom>)>) {
             None => m.native_answer_keys.keys().copied().collect(),
             Some(e) => reached(m, &m.native_answer_keys, e),
         };
+        m.charge_work(keys.len() as u64);
         let mut opaque: std::collections::HashSet<(Tok, Atom)> = Default::default();
         for (a, np) in keys {
             let Some(&e) = m.native_answer_nodes.get(&(np, a)) else {
@@ -1139,6 +1140,7 @@ fn replay_pending(m: &mut Model, by: Option<(Tok, Option<Atom>)>) {
     for ((a, np), v) in groups {
         pending.extend(v.into_iter().map(|miss| (np, a, miss)));
     }
+    m.charge_work(pending.len() as u64);
     let mut keep = Vec::with_capacity(pending.len());
     m.with_b(|m| {
         for (np, a, miss) in pending {
@@ -1208,6 +1210,7 @@ fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
     } else {
         reached(m, &m.native_answer_keys, entry)
     };
+    m.charge_work(keys.len() as u64);
     let reached: Vec<NodeId> = keys
         .into_iter()
         .filter(|&(a, np)| {
