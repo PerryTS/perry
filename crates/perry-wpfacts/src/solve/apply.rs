@@ -1405,13 +1405,13 @@ impl Model {
                     }
                 }
             }
-            Cons::AnyAccessors { origin, act } => {
+            Cons::AnyAccessors { origin, key, act } => {
                 for &q in toks {
                     if q != TOP {
                         self.any_walk_holders
                             .entry(q)
                             .or_default()
-                            .push((origin, act));
+                            .push((origin, key, act));
                     }
                     // A realm prototype's setters run for a computed-key
                     // store the key may name (`realm_setter_hit`).
@@ -1421,7 +1421,7 @@ impl Model {
                         && (realm_store
                             || self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()))
                     {
-                        self.accessor_hit(origin, q, Key::any(), act);
+                        self.accessor_hit(origin, q, key, act);
                     }
                 }
             }

@@ -144,6 +144,7 @@ mod for_of_yield;
 mod forin_key_string;
 mod fresh_static_blocks;
 mod assign_source_kinds;
+mod shaped_key_accessors;
 mod function_call_value;
 mod written_global_ctor;
 mod function_ctor_without_interp;

@@ -2512,10 +2512,10 @@ pub struct Model {
     pub parent_unsettled: crate::pts::FxHashSet<TmplId>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
-    /// Computed-key walks by holder: every (receiver, act) whose walk
+    /// Computed-key walks by holder: every (receiver, key, act) whose walk
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
-    pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, Key, ChainAct)>>,
     /// Published literals whose own accessors leave to other units
     /// (`leave_walk`): the node what they return loads into.
     pub leave_loads: FxHashMap<Tok, NodeId>,

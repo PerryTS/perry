@@ -1224,7 +1224,7 @@ impl Model {
             self.any_walk_holders
                 .entry(t)
                 .or_default()
-                .push((origin, act));
+                .push((origin, Key::any(), act));
             self.accessor_hit(origin, t, Key::any(), act);
             // An ordinary object a builtin made finds `Object.prototype`'s
             // members in `tok_load`; a prototype the program gave it
@@ -1493,8 +1493,11 @@ impl Model {
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.
     pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
-        // Accessor groups are keyed by the computed key itself.
-        let key = key.unshaped();
+        // A computed key keeps its shape: a [[Get]]/[[Set]] of key P runs
+        // only an accessor defined under P (ECMA-262 10.1.8.1 OrdinaryGet,
+        // 10.1.9.2 OrdinarySetWithOwnDescriptor), so on a holder the shape
+        // splits (`shape_splits`) only the accessors it names run
+        // (`accessor_hit`); the walk itself is per shape (`shared_act`).
         if matches!(act, ChainAct::Lookup { .. }) {
             if let Some(act) = self.shared_act(origin, t, key, act) {
                 self.chain_step(0, origin, t, key, act);
@@ -1514,15 +1517,15 @@ impl Model {
         match key {
             Key::Named(_) => self.holder_walk(origin, t, key, act, false),
             Key::Any(_) => {
-                self.accessor_hit(origin, t, Key::any(), act);
+                self.accessor_hit(origin, t, key, act);
                 let cp = self.cp(t);
                 if self.any_walk_done.insert((cp, origin, act)) {
                     self.any_walks.push((cp, origin, t, act));
                     self.any_walk_holders
                         .entry(t)
                         .or_default()
-                        .push((origin, act));
-                    self.cons(cp, Cons::AnyAccessors { origin, act });
+                        .push((origin, key, act));
+                    self.cons(cp, Cons::AnyAccessors { origin, key, act });
                 }
             }
         }
@@ -2492,7 +2495,14 @@ impl Model {
         let cp = self.cp(t);
         if self.any_walk_done.insert((cp, t, act)) {
             self.any_walks.push((cp, t, t, act));
-            self.cons(cp, Cons::AnyAccessors { origin: t, act });
+            self.cons(
+                cp,
+                Cons::AnyAccessors {
+                    origin: t,
+                    key: Key::any(),
+                    act,
+                },
+            );
         }
         if seen {
             return;
@@ -2547,7 +2557,9 @@ impl Model {
             .map(|v| {
                 v.iter()
                     .copied()
-                    .filter(|&(_, kk, _)| wildcard || kk == k || kk.is_any())
+                    .filter(|&(_, kk, _)| {
+                        wildcard || kk == k || (kk.is_any() && self.shape_admits(holder, kk, key))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -2589,13 +2601,24 @@ impl Model {
                 .get(&holder)
                 .cloned()
                 .unwrap_or_default();
-            if !walks.is_empty() {
-                self.acc_group(holder, Key::any());
-                for (origin, act) in walks {
+            for (origin, wk, act) in walks {
+                if self.shape_splits(holder, wk).is_some() {
+                    if wildcard || self.key_may_name(wk, key) {
+                        self.acc_group(holder, k);
+                        self.group_hit(origin, holder, k, act);
+                    }
+                } else {
+                    self.acc_group(holder, Key::any());
                     self.group_hit(origin, holder, Key::any(), act);
                 }
             }
         }
+    }
+
+    /// A computed-key lookup `kk` that reached `holder` may name accessor
+    /// key `a`: always, unless its shape splits the holder and excludes `a`.
+    fn shape_admits(&self, holder: Tok, kk: Key, a: Atom) -> bool {
+        self.shape_splits(holder, kk).is_none() || self.key_may_name(kk, a)
     }
 
     /// Reuse recorded visits and leave nodes to start the walks that were
