@@ -674,7 +674,8 @@ pub enum Cons {
     /// The node is the evaluated `extends` value of class `tm`, linked by
     /// name to a built-in parent whose summary `super()` runs: any value
     /// other than `expected`, the global object's declared constructor
-    /// (⊤, a program-written global, `null`), runs as the parent
+    /// (⊤, a program-written global; `null` makes no instance: SuperCall
+    /// throws before `this` exists, rule NULLPARENT), runs as the parent
     /// constructor with `this` = the instance: it escapes, and the instance
     /// escapes with hard E11. A program class among the values is modeled
     /// code: the instance is hard E11 and its chain takes that class's
