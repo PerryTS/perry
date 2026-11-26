@@ -109,7 +109,26 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, p);
         }
         BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => {
-            implicit_args(m, call, "Error message", Protocol::Any);
+            // Rule NPARG (as the Error-family native parent, native_protocol.rs
+            // `error_parent_args`): the message is ToString'd (Protocol::ToPrimitive,
+            // nothing else of it is read or called), `options` gets one [[Get]]
+            // of `cause` stored below, later operands are never read. The
+            // AggregateError message is operand 1 (operand 0 is iterated).
+            let msg_at = usize::from(ns == BuiltinNs::AggregateError);
+            // (A spread was widened to every position above.)
+            let message: Vec<NodeId> = arg(m, call, msg_at).into_iter().collect();
+            let why = m.reason("Error message ToString");
+            for &a in &message {
+                m.why_implicit(a, why, call);
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                        region: m.thrown,
+                    },
+                );
+            }
             let e = error_tok(m, call);
             let options = if ns == BuiltinNs::AggregateError {
                 if let Some(src) = arg(m, call, 0) {
