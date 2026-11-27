@@ -715,6 +715,21 @@ pub(crate) mod tests {
         assert!(session.close_callbacks.is_empty() && session.destroyed);
     }
 
+    /// A `close(cb)` removes only its own entry, the last registered: the
+    /// same function added earlier with `on('close', cb)` stays, in order.
+    #[test]
+    fn a_close_callback_removes_only_its_own_listener() {
+        let mut session = client_session(0);
+        let (shared, other) = (i64::MAX - 15_530, i64::MAX - 15_531);
+        session
+            .listeners
+            .insert("close".into(), vec![shared, other, shared]);
+        session.close_callbacks.push(shared);
+        assert_eq!(session.take_close_listeners(), [shared, other, shared]);
+        assert_eq!(session.listeners["close"], [shared, other]);
+        assert!(session.close_callbacks.is_empty());
+    }
+
     /// A failed TLS handshake reaches the session's `'error'` as Node's
     /// `Error`: the cause code becomes `.code`, not part of a bare string.
     #[test]

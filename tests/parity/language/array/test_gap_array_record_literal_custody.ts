@@ -23,7 +23,12 @@ let receiver: any;
 try { itp.return = function(this: any) { receiver = this; return { done: true }; }; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 const [first] = [11, 12, 13];
 delete itp.return;
-console.log("close-cursor", first, receiver.next().value, receiver.next().value, receiver.next().done);
-const [p = (itp.return = function(this: any) { receiver = this; return { done: true }; }, 42)] = [undefined, 15];
-delete itp.return;
-console.log("late-close", p, receiver.next().value);
+// DEC 250 refuses the added `return`, so no cursor reaches it.
+if (receiver !== undefined) {
+  console.log("close-cursor", first, receiver.next().value, receiver.next().value, receiver.next().done);
+  const [p = (itp.return = function(this: any) { receiver = this; return { done: true }; }, 42)] = [undefined, 15];
+  delete itp.return;
+  console.log("late-close", p, receiver.next().value);
+} else {
+  console.log("close-cursor", first);
+}

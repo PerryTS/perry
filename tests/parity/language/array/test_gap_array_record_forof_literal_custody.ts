@@ -34,9 +34,10 @@ for (const item of [7, 8, 9]) {
   break;
 }
 delete itp.return;
-console.log("remaining", closeReceiver.next().value, closeReceiver.next().value, closeReceiver.next().done);
+// DEC 250 refuses the added `return`, so no cursor reaches it.
+if (closeReceiver !== undefined) console.log("remaining", closeReceiver.next().value, closeReceiver.next().value, closeReceiver.next().done);
 let holes = "";
-Object.defineProperty(proto, "1", {get() { return 12; }, configurable: true});
+try { Object.defineProperty(proto, "1", {get() { return 12; }, configurable: true}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
 for (const item of [1, , 3]) holes += item + ",";
 delete proto[1];
 console.log("holes", holes);

@@ -14,10 +14,14 @@ const pair = (function() {
   return Repeated;
 }).call(null);
 try { fnProto.call = original; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
-console.log('identity', pair[0] !== pair[1], pair[0].prototype !== pair[1].prototype);
-console.log('captures', new pair[0]().capture(), new pair[1]().capture());
-pair[0].prototype.own = () => 71;
-console.log('values', new pair[0]().run(), new pair[1]().run());
+// DEC 250 keeps the original call, so `pair` is the class itself and
+// `pair[0]` is undefined: the first read below throws.
+try {
+  console.log('identity', pair[0] !== pair[1], pair[0].prototype !== pair[1].prototype);
+  console.log('captures', new pair[0]().capture(), new pair[1]().capture());
+  pair[0].prototype.own = () => 71;
+  console.log('values', new pair[0]().run(), new pair[1]().run());
+} catch (e) { console.log((e as Error).constructor.name + ": " + (e as Error).message); }
 let thisEvaluations = 0;
 const answer = (function(value) { return value + 1; }).call(++thisEvaluations, 7);
 console.log('thisArg', thisEvaluations, answer);

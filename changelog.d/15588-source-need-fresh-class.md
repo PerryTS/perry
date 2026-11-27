@@ -1,0 +1,1 @@
+Fix: `String(C)` of a class declared in a function that runs more than once prints the class source again. The retained-source census now follows a fresh class evaluation to its template, so it no longer drops that text as unread.
