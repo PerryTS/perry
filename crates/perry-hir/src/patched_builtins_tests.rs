@@ -168,9 +168,11 @@ fn reads_and_ordinary_objects_are_not_patches() {
         "#,
     );
     assert_array_iteration_facts(&s, &["write"]);
+    // NXCALL3: `process.stdout.write = f` is a store into node:process.
+    assert!(s.contains(&pair("node:process", "stdout.write")), "{s:?}");
     assert_eq!(
         s.len(),
-        1,
+        2,
         "ordinary writes add no namespace/prototype patch: {s:?}"
     );
 }
@@ -660,4 +662,170 @@ fn dynamic_code_reach_rebinds_only_global_functions() {
     clear_patched_builtins();
     assert!(!foo);
     assert!(st);
+}
+
+// NXCALL3: node-core namespaces under the same program-wide no-store fact.
+#[test]
+fn node_core_namespace_writes() {
+    let s = scan(
+        r#"
+        const path = require("path");
+        import * as fs from "node:fs";
+        const { promises: fsp } = require("fs");
+        path.join = () => "";
+        path.posix.relative = () => "";
+        Object.assign(fs, { existsSync: () => true });
+        delete fsp.readFile;
+        function f(o: any) {}
+        f(require("os"));
+        const { sep } = path;
+        typeof path;
+        path.resolve("a");
+        (0, path.normalize)("a");
+        "#,
+    );
+    for (k, m) in [
+        ("node:path", "join"),
+        ("node:path", "relative"),
+        ("node:fs", "existsSync"),
+        ("node:fs", "promises.readFile"),
+    ] {
+        assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
+    }
+    assert!(
+        !s.iter().any(|(k, m)| k == "node:path"
+            && matches!(m.as_str(), "*" | "resolve" | "sep" | "normalize")),
+        "{s:?}"
+    );
+    let set = &s;
+    assert!(node_ns::member_patched(set, "path", &["join"]));
+    assert!(node_ns::member_patched(
+        set,
+        "node:path",
+        &["posix", "join"]
+    ));
+    assert!(node_ns::member_patched(set, "path", &["win32", "relative"]));
+    assert!(!node_ns::member_patched(set, "path", &["resolve"]));
+    assert!(node_ns::member_patched(
+        set,
+        "fs",
+        &["promises", "readFile"]
+    ));
+    assert!(node_ns::member_patched(set, "fs/promises", &["readFile"]));
+    assert!(!node_ns::member_patched(set, "fs", &["promises", "stat"]));
+    // Handed to `f`, which stores nothing: an escape is not a write.
+    assert!(!node_ns::member_patched(set, "os", &["cpus"]));
+}
+
+#[test]
+fn node_core_namespace_handed_on_is_not_a_write() {
+    let s = scan(
+        r#"
+        import path from "path";
+        const w = path.win32;
+        export { w };
+        module.exports = { fs: require("fs") };
+        export * from "util";
+        take(process);
+        "#,
+    );
+    assert!(!s.iter().any(|(k, _)| k.starts_with("node:")), "{s:?}");
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(
+        &s,
+        "fs",
+        &["promises", "readFile"]
+    ));
+    assert!(!node_ns::member_patched(
+        &s,
+        "process",
+        &["hrtime", "bigint"]
+    ));
+}
+
+/// The scan counts stores onto the targets it resolves (a binding, an alias,
+/// a member chain, a literal `require`, a destructured member). A store onto
+/// a target it does not resolve is the gap the module docs name (the same
+/// as the #10848 globals scan): it does not make a same-named member generic.
+#[test]
+fn node_core_store_counts_only_through_resolved_targets() {
+    let s = scan(
+        r#"
+        const path = require("path"), fs = require("fs");
+        const p = path;
+        p.basename = () => "x";
+        require("os").cpus = () => [];
+        const { promises: fsp } = fs;
+        fsp.stat = async () => 0;
+        process.hrtime.bigint = () => 0n;
+        function patch(m) { m.join = () => "x"; }
+        patch(path);
+        const holder = { f: fs };
+        holder.f.existsSync = () => true;
+        thing.cwd = 1;
+        "#,
+    );
+    assert!(node_ns::member_patched(&s, "path", &["basename"]));
+    assert!(node_ns::member_patched(&s, "path", &["posix", "basename"]));
+    assert!(node_ns::member_patched(&s, "os", &["cpus"]));
+    assert!(node_ns::member_patched(&s, "fs", &["promises", "stat"]));
+    assert!(node_ns::member_patched(&s, "fs/promises", &["stat"]));
+    assert!(node_ns::member_patched(
+        &s,
+        "process",
+        &["hrtime", "bigint"]
+    ));
+    assert!(!node_ns::member_patched(&s, "process", &["hrtime"]));
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(&s, "fs", &["existsSync"]));
+    assert!(!node_ns::member_patched(&s, "process", &["cwd"]));
+}
+
+#[test]
+fn node_core_namespace_reads_are_not_patches() {
+    let s = scan(
+        r#"
+        const path = require("path");
+        const { join } = path;
+        const j = path.join;
+        path.join("a", "b");
+        process.nextTick(() => {});
+        if (typeof process !== "undefined") {}
+        "#,
+    );
+    assert!(
+        !s.iter()
+            .any(|(k, m)| k.starts_with("node:") && !m.ends_with(".*")),
+        "{s:?}"
+    );
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(&s, "process", &["nextTick"]));
+}
+
+/// `global.process = process` stores the global `process` into its own slot;
+/// with a binding named `process` in the module it may store another value.
+#[test]
+fn global_process_stored_into_itself_is_not_a_write() {
+    let s = scan(
+        r#"
+        if (process !== global.process) { process.env = global.process.env; global.process = process; }
+        "#,
+    );
+    assert!(
+        !node_ns::member_patched(&s, "process", &["nextTick"]),
+        "{s:?}"
+    );
+    assert!(
+        node_ns::member_patched(&s, "process", &["env", "X"]),
+        "{s:?}"
+    );
+    let t = scan(
+        r#"
+        function f(process) { global.process = process; }
+        "#,
+    );
+    assert!(
+        node_ns::member_patched(&t, "process", &["nextTick"]),
+        "{t:?}"
+    );
 }

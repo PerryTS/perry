@@ -9,6 +9,7 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const re = /b/;
@@ -31,7 +32,7 @@ fn proven(v: &Verdict) -> bool {
 fn runs_replaced_exec(use_it: &str) {
     let v = verdict(&unseen(&format!(
         "const o = new Svc();
-         (re as any).exec = function (_x: string) {{ (globalThis as any).hostTake(o); return null; }};
+         (re as any).exec = function (_x: string) {{ external(o); return null; }};
          {use_it}; console.log(g(o));"
     )));
     assert!(!proven(&v), "{use_it}: {v:?}");
@@ -72,7 +73,7 @@ fn test_with_the_builtin_exec_is_proven() {
 fn runs_stored_species_constructor(use_it: &str) {
     let v = verdict(&unseen(&format!(
         "const o = new Svc(); const rg = /b/g;
-         const C: any = function () {{ (globalThis as any).hostTake(o); }};
+         const C: any = function () {{ external(o); }};
          C[Symbol.species] = C; (rg as any).constructor = C;
          try {{ {use_it}; }} catch (_e) {{}} console.log(g(o));"
     )));

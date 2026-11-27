@@ -8,6 +8,9 @@ fn capture_facts(unknown_in_constructor_slot: bool, snapshot: bool) -> crate::Pr
         "t.ts",
     ).unwrap();
     let mut hir = perry_hir::lower_module(&parsed, "t", "t.ts").unwrap();
+    // A body-less `declare function`: native code outside the program. An
+    // undeclared name would be the global object's member (REALMVAL), absent.
+    hir.extern_funcs.push(("externalCtor".into(), vec![], perry_hir::types::Type::Any));
     let unknown = Expr::ExternFuncRef {
         name: "externalCtor".into(),
         param_types: vec![],

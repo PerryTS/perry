@@ -32,7 +32,7 @@
 //! The process exits with code 86 after printing one block to stderr.
 //! Off: `Model::stop_top` is `None`, and nothing of this runs.
 
-use crate::model::{Cons, Model, NodeId, Tok, NO_NODE, TOP};
+use crate::model::{CallId, Cons, Model, NodeId, Tok, NO_NODE, TOP};
 use crate::pts::FxHashMap;
 use std::panic::Location;
 use std::sync::Mutex;
@@ -81,6 +81,9 @@ pub struct StopTop {
     pub(crate) cons_at: FxHashMap<(NodeId, u32), &'static Location<'static>>,
     /// The program position of each copy edge, keyed `a << 32 | b`.
     pub(crate) edge_pos: FxHashMap<u64, (u32, u32)>,
+    /// A copy edge made with no program position, keyed as `edge_pos`: the
+    /// solver line that made it, the rule being applied and the phase.
+    pub(crate) edge_at: FxHashMap<u64, (&'static Location<'static>, Option<(NodeId, Cons)>, &'static str)>,
     /// Shared operations: what each is, and its callers' positions (program
     /// positions or `(SHARED, id)` of the shared operation that asked).
     pub(crate) shared: Vec<(String, Vec<(u32, u32)>)>,
@@ -103,30 +106,81 @@ pub struct StopTop {
     pub(crate) phase: &'static str,
     /// Escapes in progress: (token, reason id, node the rule ran on).
     pub(crate) esc: Vec<(Tok, u32, NodeId)>,
+    /// Native calls in progress: (call, callee token), innermost last.
+    pub(crate) natives: Vec<(CallId, Tok)>,
+    /// The escape a native hands to unknown code while it raises the
+    /// native's throw region (`escape_at`): (token, reason id).
+    pub(crate) hand: Option<(Tok, u32)>,
     /// The origin `Model::add_top` names while it adds ⊤.
     pub(crate) why: Option<String>,
+    /// `PERRY_TOPSTOP_TOPFROM=1`: the ⊤ chain of an input that holds ⊤.
+    topfrom: bool,
+    /// Under `topfrom`: the first arrival of ⊤ in each node: its sender
+    /// (`cur_src`), the reason named, the rule running, the solver line,
+    /// the origin `add_top` names and the escape that runs (if any).
+    top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>, String)>,
+    /// Tests (`tests::amp_flow`): every ⊤ creation is recorded here and the
+    /// solve goes on (nothing printed, no exit).
+    #[cfg(test)]
+    pub(crate) flow: Option<Vec<FlowArrival>>,
 }
 
-static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
+/// One ⊤ creation in flow record mode: its class (1 S, 2 A, 4 M), the node
+/// (`NO_NODE` for a marker), the marked token, the rule that ran (its
+/// node and constraint), and the solver line.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct FlowArrival {
+    pub class: u8,
+    pub node: NodeId,
+    pub tok: Tok,
+    pub rule: Option<(NodeId, Cons)>,
+    pub what: String,
+    pub at: &'static Location<'static>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FLOW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: the next solves on this thread record every ⊤ creation
+/// (`StopTop::flow`) instead of stopping.
+#[cfg(test)]
+pub(crate) fn flow_on(on: bool) {
+    FLOW.with(|f| f.set(on));
+}
+
+thread_local! {
+    /// Per thread: a test that captures sees only the blocks of its own solve.
+    static CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Tests: run the switch without exiting; `take_captured` returns the block.
 pub fn capture_on() {
-    *CAPTURE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
+    CAPTURE.with_borrow_mut(|c| *c = Some(Vec::new()));
 }
 
 pub fn take_captured() -> Vec<String> {
-    CAPTURE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take()
-        .unwrap_or_default()
+    CAPTURE.with_borrow_mut(|c| c.take()).unwrap_or_default()
 }
 
 pub(crate) type RuleSaved = (Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
 
 impl StopTop {
     pub(crate) fn from_env(paths: Vec<String>) -> Option<Box<StopTop>> {
-        let capture = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        #[cfg(test)]
+        if FLOW.with(|f| f.get()) {
+            return Some(Box::new(StopTop {
+                class: 7,
+                paths,
+                gen_pos: NOPOS,
+                rule_pos: NOPOS,
+                flow: Some(Vec::new()),
+                ..Default::default()
+            }));
+        }
+        let capture = CAPTURE.with_borrow(|c| c.is_some());
         if !capture && std::env::var("PERRY_FACTS_STOP_ON_TOP").ok().as_deref() != Some("1") {
             return None;
         }
@@ -161,6 +215,7 @@ impl StopTop {
             paths,
             gen_pos: NOPOS,
             rule_pos: NOPOS,
+            topfrom: std::env::var_os("PERRY_TOPSTOP_TOPFROM").is_some(),
             shared_pos: NOPOS,
             ..Default::default()
         }))
@@ -181,6 +236,26 @@ impl StopTop {
 
     pub(crate) fn leave_rule(&mut self, r: RuleSaved) {
         (self.rule, self.rule_pos, self.shared_pos, self.rule_ci) = r;
+    }
+
+    /// A step recorded at program position `p` runs now (a generation step
+    /// deferred until summaries exist, an instance's copy of its body's
+    /// rule): what it attaches and makes stands at `p`, not at the rule or
+    /// expression running when it is replayed. Restore with `replay_done`.
+    pub(crate) fn replay_at(&mut self, p: (u32, u32)) -> ((u32, u32), (u32, u32)) {
+        (
+            std::mem::replace(&mut self.gen_pos, p),
+            std::mem::replace(&mut self.rule_pos, p),
+        )
+    }
+
+    pub(crate) fn replay_done(&mut self, saved: ((u32, u32), (u32, u32))) {
+        (self.gen_pos, self.rule_pos) = saved;
+    }
+
+    /// The program position of node `n` (`node_pos`).
+    pub(crate) fn pos_of(&self, n: NodeId) -> (u32, u32) {
+        self.node_pos.get(n as usize).copied().unwrap_or(NOPOS)
     }
 
     /// The program position of what runs now: the shared operation being
@@ -424,6 +499,7 @@ impl Model {
     fn push_fed_by(&self, b: &mut String, n: NodeId) {
         let s = self.stop_top.as_ref().unwrap();
         let mut ps: Vec<(u32, u32)> = Vec::new();
+        let mut nopos: Vec<NodeId> = Vec::new();
         let mut k = 0usize;
         for (a, nd) in self.nodes.iter().enumerate() {
             if nd.succ.contains(&n) {
@@ -433,6 +509,9 @@ impl Model {
                     .get(&((a as u64) << 32 | n as u64))
                     .copied()
                     .unwrap_or(NOPOS);
+                if p == NOPOS {
+                    nopos.push(a as NodeId);
+                }
                 if !ps.contains(&p) {
                     ps.push(p);
                 }
@@ -455,6 +534,20 @@ impl Model {
         if ps.len() > 5 {
             b.push_str(&format!("  edge:    ... {} more\n", ps.len() - 5));
         }
+        // An edge with no position: where it comes from and the solver
+        // line that made it (each one a position bug of that line).
+        for &a in nopos.iter().take(5) {
+            let (at, rule, phase) = match s.edge_at.get(&((a as u64) << 32 | n as u64)) {
+                Some(&(l, r, ph)) => (format!("{}:{}", l.file(), l.line()), r, ph),
+                None => ("(not recorded)".to_string(), None, ""),
+            };
+            b.push_str(&format!(
+                "  nopos:   from {} ({} values); made at {at} in phase {phase}{}\n",
+                self.node_words(a),
+                self.nodes[a as usize].pts.len(),
+                rule.map_or(String::new(), |(rn, c)| format!(", rule {c:?} on node {rn}"))
+            ));
+        }
     }
 
     /// ⊤ just arrived in `n` (`cur_src`/`cur_why`: what sent it; `at`: the
@@ -472,6 +565,24 @@ impl Model {
         {
             return;
         }
+        if s.topfrom {
+            let (src, why) = (self.cur_src, self.cur_why);
+            if !s.top_from.contains_key(&n) {
+                let mut o = s.why.clone().map_or(String::new(), |w| format!(" origin \"{w}\""));
+                if let Some((t, r, sink)) = s.esc.last().copied() {
+                    o += &format!(
+                        " during escape of {} ({}) on node {sink} `{}`",
+                        self.tok_name(t),
+                        self.reason_text(r),
+                        self.labels[sink as usize]
+                    );
+                }
+                let s = self.stop_top.as_mut().unwrap();
+                let rule = s.rule;
+                s.top_from.insert(n, (src, why, rule, at, o));
+            }
+        }
+        let s = self.stop_top.as_ref().unwrap();
         let src = self.cur_src;
         let why = self.cur_why;
         let src_ok = src != NO_NODE && (src as usize) < self.nodes.len();
@@ -555,6 +666,15 @@ impl Model {
                 )
             };
         let s = self.stop_top.as_mut().unwrap();
+        #[cfg(test)]
+        if let Some(f) = s.flow.as_mut() {
+            let what = match &trigger {
+                Some(t) => format!("{rule_name} ({t})"),
+                None => rule_name,
+            };
+            f.push(FlowArrival { class, node: n, tok: TOP, rule: rule_any, what, at });
+            return;
+        }
         if s.class & class == 0 {
             return;
         }
@@ -621,14 +741,27 @@ impl Model {
         if let Some((rn, c)) = rule_any {
             b.push_str(&format!("  context: constraint {:?} on node {rn}\n", c));
         }
+        let st = self.stop_top.as_ref().unwrap();
+        for &(c, t) in st.natives.iter().rev() {
+            b.push_str(&format!("  native:  call #{c} of {}\n", self.tok_name(t)));
+        }
+        if let Some((t, r)) = st.hand {
+            b.push_str(&format!(
+                "  hands:   {} ({})\n",
+                self.tok_name(t),
+                self.reason_text(r)
+            ));
+        }
         self.finish_block(b, capture);
     }
 
     fn finish_block(&self, b: String, capture: bool) {
         if capture {
-            if let Some(v) = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                v.push(b);
-            }
+            CAPTURE.with_borrow_mut(|c| {
+                if let Some(v) = c.as_mut() {
+                    v.push(b);
+                }
+            });
             return;
         }
         if let Some(s) = self.stop_top.as_ref() {
@@ -718,10 +851,11 @@ impl Model {
         let (_, steps) = self.program_origin(n);
         let k = steps.len();
         for (i, st) in steps.into_iter().enumerate() {
-            if i == 3 && k > 4 {
+            let all = std::env::var_os("PERRY_TOPSTOP_VIAHOLD").is_some();
+            if !all && i == 3 && k > 4 {
                 b.push_str(&format!("  via:     ... {} more steps\n", k - 4));
             }
-            if i < 3 || i + 1 == k {
+            if all || i < 3 || i + 1 == k {
                 b.push_str(&format!("  via:     {st}\n"));
             }
         }
@@ -751,6 +885,20 @@ impl Model {
                 "node {cur} `{}` was made by the solver applying {r} on node {from} `{}`",
                 self.labels[cur as usize], self.labels[from as usize]
             ));
+            if std::env::var_os("PERRY_TOPSTOP_VIAHOLD").is_some()
+                && cur > 0
+                && self.labels[cur as usize - 1] == "implicit-recv"
+            {
+                let r = cur - 1;
+                let ts = self.nodes[r as usize].pts.to_sorted();
+                let w: Vec<String> = ts.iter().take(3).map(|&t| self.tok_words(t)).collect();
+                let lst = steps.pop().unwrap();
+                steps.push(format!(
+                    "{lst} [recv {r} holds {} toks: {}]",
+                    ts.len(),
+                    w.join("; ")
+                ));
+            }
             cur = from;
         }
         (p, steps)
@@ -769,8 +917,9 @@ impl Model {
             held.push(format!("{} more", toks.len() - 6));
         }
         let prim = self.nodes[n as usize].prim;
+        let chain = self.top_chain(n);
         format!(
-            "node {n} `{label}` ({}), from {}{}; holds [{}]{}",
+            "node {n} `{label}` ({}), from {}{}; holds [{}]{}{chain}",
             self.node_words_short(n),
             self.pos_text(p),
             if steps.is_empty() {
@@ -788,6 +937,44 @@ impl Model {
                 String::new()
             }
         )
+    }
+
+    /// `PERRY_TOPSTOP_TOPFROM=1`: where the ⊤ node `n` holds came from, one
+    /// line per first arrival back to the node it entered without a ⊤
+    /// sender (the seed: its rule, reason and solver line).
+    fn top_chain(&self, n: NodeId) -> String {
+        let Some(s) = self.stop_top.as_ref().filter(|s| s.topfrom) else {
+            return String::new();
+        };
+        let mut out = String::new();
+        let mut cur = n;
+        let mut seen = std::collections::HashSet::new();
+        while seen.insert(cur) && seen.len() < 400 {
+            let Some((src, why, rule, at, o)) = s.top_from.get(&cur) else {
+                out += &format!("\n    top-from: node {cur}: no recorded arrival");
+                break;
+            };
+            let (src, why, rule, at) = (*src, *why, *rule, *at);
+            let p = self.node_program_pos(cur);
+            let w = if why != u32::MAX { self.reason_text(why) } else { String::new() };
+            let r = rule.map_or(String::new(), |(rn, c)| format!(" rule {} on {rn}", c.kind_name()));
+            out += &format!(
+                "\n    top-from: node {cur} `{}` at {} <- {}{r} [{w}]{o} ({}:{})",
+                self.labels[cur as usize],
+                self.pos_text(p),
+                if src == NO_NODE { "NO_NODE".to_string() } else { format!("{src} `{}`", self.labels.get(src as usize).copied().unwrap_or("?")) },
+                at.file(),
+                at.line()
+            );
+            let src_top = src != NO_NODE
+                && (src as usize) < self.nodes.len()
+                && self.nodes[src as usize].pts.contains_tok(TOP);
+            if !src_top {
+                break;
+            }
+            cur = src;
+        }
+        out
     }
 
     fn node_words_short(&self, n: NodeId) -> String {
@@ -848,6 +1035,12 @@ impl Model {
         let Some(s) = self.stop_top.as_mut() else {
             return;
         };
+        #[cfg(test)]
+        if let Some(f) = s.flow.as_mut() {
+            let rule = s.rule;
+            f.push(FlowArrival { class: 4, node: NO_NODE, tok: t, rule, what: what.to_string(), at });
+            return;
+        }
         if s.done || s.class & 4 == 0 {
             return;
         }

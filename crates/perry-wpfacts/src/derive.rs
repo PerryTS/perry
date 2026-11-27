@@ -309,7 +309,7 @@ pub enum Verdict {
     /// PROXY3 (owner 2026-11-16: trap sites count as proven, in their own
     /// column): a read, call or named store whose receivers are all Proxy
     /// objects of `new Proxy( t, h )` that the solver modeled
-    /// (`solve/proxy.rs`, never degraded): the operation calls the trap read
+    /// (`solve/proxy.rs`): the operation calls the trap read
     /// from the program handler `h` with `this = h` and the spec arguments
     /// (ECMA-262 10.5.8 [[Get]], 10.5.9 [[Set]]), or forwards to `t`, and
     /// both are in the solve. The emitted operation stays the generic one
@@ -1095,10 +1095,9 @@ fn template_facts(
     m.tok(TokKind::Obj(tm, NO_CTX));
     let ts = m.tmpl_toks(tm);
     let tpl = m.tmpls[tm as usize].clone();
-    let escape = ts
-        .iter()
-        .find_map(|t| m.escaped.get(t))
-        .map(|r| m.reasons[*r as usize].clone());
+    // Only code that may write a token beyond a builtin contract changes
+    // its layout; a contract writes only what it states (Phase B).
+    let escape = ts.iter().find_map(|&t| m.writer_escape_why(t));
     let hard = ts
         .iter()
         .find_map(|t| m.hard.get(t))
@@ -1167,14 +1166,9 @@ fn template_facts(
             });
         }
         if p != m.tok_index[&TokKind::ObjectProto] {
-            if let Some(r) = m.escaped.get(&p) {
-                chain_problem.get_or_insert_with(|| {
-                    format!(
-                        "prototype {} escapes: {}",
-                        m.tok_name(p),
-                        m.reasons[*r as usize]
-                    )
-                });
+            if let Some(r) = m.writer_escape_why(p) {
+                chain_problem
+                    .get_or_insert_with(|| format!("prototype {} escapes: {r}", m.tok_name(p)));
             }
         }
         if let Some(ks) = m.accessor_keys.get(&p) {
@@ -1880,6 +1874,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     }
                 });
                 ledger_refused.push(crate::hold_ledger::Refused {
+                    site: format!("{path}\t{}\t{key}\t{}", s.byte_offset, store as u8),
                     roots,
                     full,
                     causes,
@@ -2450,7 +2445,7 @@ fn judge(
     let mut traps = 0usize;
     for &t in toks {
         match &m.toks[t as usize] {
-            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+            TokKind::Proxy(_) => {
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }
@@ -3063,7 +3058,7 @@ enum AccOne {
 /// accessor property. `t` must not own the key in any form (no field node
 /// with values, no computed store, no own accessor); each prototype on the
 /// way neither holds the key as data nor may gain it (computed store,
-/// escape, hard operation), and the chain cannot end at `null` before the
+/// writer escape, hard operation), and the chain cannot end at `null` before the
 /// holder. Every holder found names the same getter and setter lists.
 fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String> {
     let has = |n: NodeId| {
@@ -3085,6 +3080,22 @@ fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String>
     let mut ended = false;
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut todo = vec![t];
+    // A prototype gains the key by a computed store, a hard operation or
+    // code that may write it under any key (`writer_escape_why`, as the
+    // template's chain check reads it): code handed it by a builtin contract
+    // writes only what the contract states, which the solve models (Phase B,
+    // owner 2026-11-23). `Object.prototype` escapes along the chain of every
+    // handed value, and unknown code never writes a member of an intrinsic
+    // it reaches along a handed value's chain (owner premise 2026-11-19,
+    // the closed world): only the program's writes (`computed`, `holds`,
+    // its accessors) and a hard operation give it the key. Code beside the
+    // program (`foreign_code`) may write it.
+    let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
+    let may_gain = |p: Tok| {
+        computed(p)
+            || m.hard.contains_key(&p)
+            || ((Some(p) != objproto || m.foreign_code()) && m.writer_escape_why(p).is_some())
+    };
     while let Some(h) = todo.pop() {
         let protos: Vec<Tok> = match m.proto_node.get(&h) {
             Some(&pn) if m.nodes[pn as usize].prim != 0 => {
@@ -3104,7 +3115,7 @@ fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String>
             if p == TOP || m.is_marker(p) {
                 return Err("a prototype from unmodeled code".into());
             }
-            if computed(p) || m.is_escaped(p) || m.hard.contains_key(&p) {
+            if may_gain(p) {
                 return Err("a prototype on the chain may gain the key".into());
             }
             match m.accessors.get(&(p, a)) {
@@ -3297,7 +3308,7 @@ fn judge_store(
             }
             // PROXY3: a modeled Proxy object: its `set` trap or the forward
             // (10.5.9; `Verdict::ProxyTrap`).
-            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+            TokKind::Proxy(_) => {
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }
@@ -3910,6 +3921,32 @@ fn builtin_protos_unwritten(
             "native member: unknown code holds the realm and may replace the member".into(),
         );
     }
+    // PSTORE (owner 2026-11-24, the E20 realm hold dropped): a program
+    // store onto a prototype on the family's chain is a member of THAT
+    // intrinsic, which every lookup on a value of the family passes
+    // (`builtins::intrinsic_miss_on`). A realm prototype taken as a value
+    // (`Storage.prototype`, `Response.prototype`: `builtins::realm_proto_of`)
+    // is one object of its own, its writes are recorded under its identity
+    // alone (`solve::native_proto_alias`), not under `ObjectProto`: ask
+    // each prototype of the realm's declared chain (`native_chain`) here.
+    if let Some(fam) = fam.filter(|_| !locked) {
+        for name in crate::builtins::native_chain(fam.chain_holder()) {
+            let Some(&np) = m.tok_index.get(&TokKind::native_proto(&name)) else {
+                continue;
+            };
+            let (top, own) = crate::builtins::native_written_by(m, np, a);
+            if own {
+                return Err(format!(
+                    "native member: the program writes the key onto {name}.prototype"
+                ));
+            }
+            if top {
+                return Err(format!(
+                    "native member: a store into ⊤ may write the key onto {name}.prototype"
+                ));
+            }
+        }
+    }
     let (through_top, own) = match objproto {
         _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
@@ -4191,10 +4228,6 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     let relinked = m.super_relink.contains(&t);
     if relinked && !m.json_relink.contains(&t) {
         return Err("__proto__ relink".into());
-    }
-    if m.is_escaped(t) {
-        let why = m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone());
-        return Err(format!("escape: {}", why.unwrap_or_default()));
     }
     if let Some((k, r)) = m.hard.get(&t) {
         return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));

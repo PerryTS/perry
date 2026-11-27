@@ -157,7 +157,8 @@ impl Model {
             SharedWrite::Hard(Shared::Top, Hard::E5DefineProperty) => self.reshape(None),
             SharedWrite::Removed(k) => {
                 let a = k.as_ref().map(|k| self.atom(k));
-                self.top_reshape(a)
+                self.top_reshape(a);
+                self.enum_top_lose();
             }
             SharedWrite::Hard(s, kind) => {
                 let t = self.shared_tok(s);

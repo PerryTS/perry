@@ -334,10 +334,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let native_label = ctx.block_label(native_idx);
             let slow_label = ctx.block_label(slow_idx);
             let done_label = ctx.block_label(done_idx);
-            let invalidated =
-                ctx.block()
-                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-            let pristine = ctx.block().icmp_eq(I8, &invalidated, "0");
+            let pristine = crate::expr::property_get::typed_named::emit_named_props_pristine(ctx);
             ctx.block().cond_br(&pristine, &native_label, &slow_label);
             ctx.current_block = native_idx;
             let arr_id = match object.as_ref() {

@@ -108,8 +108,11 @@ def rows(realm):
         name, kind = d["name"], d["kind"]
         keys = [p["key"] for p in d.get("properties", []) if not p.get("symbol")]
         if (name.endswith(".prototype") or namespace_holder(name, kind) or name == "%Global%"
-                or intrinsic_prototype(name, kind) or node_module(name, kind)):
-            inherited = namespace_holder(name, kind) or name == "%Global%" or node_module(name, kind)
+                or intrinsic_prototype(name, kind) or host_object(name, kind)):
+            # A realm namespace (node module or held host object such as
+            # `process.allowedNodeEnvironmentFlags`) reads its members by
+            # ordinary lookup on its declared chain.
+            inherited = namespace_holder(name, kind) or name == "%Global%" or host_object(name, kind)
             for prop in member_properties(declarations, d, inherited):
                 getter = prop.get("get")
                 if getter and declarations[getter].get("effects") == receiver_result:

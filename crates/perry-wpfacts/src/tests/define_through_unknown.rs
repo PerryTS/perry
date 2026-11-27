@@ -58,9 +58,12 @@ fn any_key_walk_without_a_definition_through_unknown_holds_no_top() {
     check(&walk_with("", ANY, STORE), true);
 }
 
-/// Control: an unknown getter through ⊤ under the key: unknown.
+/// An unknown getter defined through ⊤ under the key: P-N1 (owner
+/// 2026-11-23: a value the analysis does not model is never a built-in
+/// object) puts it on no `Math`: the builtin walk finds no getter, `g(cell)`
+/// throws. (The control with an unknown descriptor stays open above.)
 #[test]
-fn builtin_walk_after_an_unknown_getter_through_unknown_stays_unknown() {
+fn builtin_walk_after_an_unknown_getter_through_unknown_finds_no_getter() {
     check(
         &walk_with(
             "Object.defineProperty(unknown(), \"b\", { get: unknown() });",
@@ -71,7 +74,7 @@ fn builtin_walk_after_an_unknown_getter_through_unknown_stays_unknown() {
             "const g = o.__lookupGetter__(\"b\");",
             "const g = (Math as any).__lookupGetter__(\"b\"); g(cell);",
         ),
-        false,
+        true,
     );
 }
 

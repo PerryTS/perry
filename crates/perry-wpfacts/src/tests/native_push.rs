@@ -8,6 +8,7 @@ use super::*;
 fn verdict(tail: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         class Bag {{
             items: Svc[] = [];
@@ -36,6 +37,6 @@ fn a_pushed_value_stays_known() {
 /// node (`hostTake = (xs) => { xs[0].size = 'x'; }`): prints `x`.
 #[test]
 fn an_array_given_to_unknown_code_still_escapes() {
-    let v = verdict("(globalThis as any).hostTake(b.items); console.log(g(b.items[0]));");
+    let v = verdict("external(b.items); console.log(g(b.items[0]));");
     assert!(!proven(&v), "{v:?}");
 }

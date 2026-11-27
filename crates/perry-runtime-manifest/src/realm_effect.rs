@@ -54,6 +54,10 @@ pub enum RealmSlotStep {
     StrKey,
     Field(Cow<'static, str>),
     Internal(Cow<'static, str>),
+    /// The prototype of the slot's value (`proto(s)`): ToObject, then
+    /// [[GetPrototypeOf]] (ECMA-262 7.1.18, 10.1.1; the `__proto__` getter,
+    /// 20.1.3.8.1): an object or `null`. A value only: no store goes there.
+    Proto,
 }
 
 /// `this`, `arg(0)`, `elems(this)`, `field(arg(0), key)`, ...
@@ -103,7 +107,8 @@ pub enum RealmPrim {
 
 /// A value a native passes or returns: primitives of the listed kinds, the
 /// value held in a slot, an object born by the call (its prototype is a
-/// realm node; its elements are the listed slots), the object the species
+/// realm node, or `null`: OrdinaryObjectCreate(null); its elements are the
+/// listed slots), the object the species
 /// constructor of a slot makes, or one of a few such values.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -132,6 +137,10 @@ pub enum RealmOperand {
     /// The host function value the realm declares at this path (a closure
     /// the body makes); its own declaration says what calling it does.
     Native(Cow<'static, str>),
+    /// The one host namespace object the realm declares at this path
+    /// (`kind = namespace`), which the body returns on every call
+    /// (`crypto.<get>`: the cached `node:crypto.webcrypto` namespace).
+    Namespace(Cow<'static, str>),
     /// ArraySpeciesCreate on `of`: reads `of.constructor` and its
     /// `@@species`; a program constructor is run as `new C(...args)` and what
     /// it returns is the value, else a fresh Array. `elems` are defined into
@@ -157,6 +166,10 @@ pub enum RealmOperand {
     Unknown,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
+    /// No value: the call never returns normally (`returns(never)`, the
+    /// whole result: %ThrowTypeError%, ECMA-262 10.2.4.1, throws a realm
+    /// TypeError on every call).
+    Never,
 }
 
 /// One own data field of a fresh object: its key and its value.
@@ -240,13 +253,16 @@ impl RealmOperand {
             Self::Prim(_) => Ok(()),
             Self::Slot(slot) => slot.validate(at),
             Self::Bound | Self::Json | Self::Unknown => Ok(()),
+            Self::Never => Err(format!(
+                "{at}: `never` is a whole result only: `returns(never)`, alone"
+            )),
             Self::Fresh {
                 proto,
                 elems,
                 fields,
                 slots,
             } => {
-                if !names(proto) {
+                if proto != "null" && !names(proto) {
                     return Err(format!(
                         "{at}: fresh object prototype {proto} is not a realm node"
                     ));
@@ -268,6 +284,12 @@ impl RealmOperand {
                     .iter()
                     .chain(reject.iter())
                     .try_for_each(|v| v.validate(at, names))
+            }
+            Self::Namespace(path) => {
+                if !names(path) {
+                    return Err(format!("{at}: namespace {path} is not a realm node"));
+                }
+                Ok(())
             }
             Self::Native(path) => {
                 if !names(path) {
@@ -334,7 +356,9 @@ pub fn validate_effects(
             | RealmOperand::Bound
             | RealmOperand::Json
             | RealmOperand::Unknown
-            | RealmOperand::Native(_) => {}
+            | RealmOperand::Never
+            | RealmOperand::Native(_)
+            | RealmOperand::Namespace(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
             RealmOperand::Fresh {
                 elems,
@@ -425,6 +449,21 @@ pub fn validate_effects(
                     ));
                 }
                 dst.validate(at)?;
+                if dst.steps.contains(&RealmSlotStep::Proto) {
+                    return Err(format!("{at}: `proto(..)` is a value, not a store destination"));
+                }
+            }
+            // `never` is the whole result: no other `returns` beside it.
+            RealmEffect::Returns(RealmOperand::Never) => {
+                let returns = effects
+                    .iter()
+                    .filter(|e| matches!(e, RealmEffect::Returns(_)))
+                    .count();
+                if returns > 1 {
+                    return Err(format!(
+                        "{at}: `returns(never)` cannot be combined with another `returns`"
+                    ));
+                }
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
@@ -464,6 +503,7 @@ pub mod emit {
             RealmSlotStep::Iterated => format!("{p}RealmSlotStep::Iterated"),
             RealmSlotStep::OwnValues => format!("{p}RealmSlotStep::OwnValues"),
             RealmSlotStep::StrKey => format!("{p}RealmSlotStep::StrKey"),
+            RealmSlotStep::Proto => format!("{p}RealmSlotStep::Proto"),
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }
@@ -484,6 +524,7 @@ pub mod emit {
             RealmOperand::Bound => format!("{p}RealmOperand::Bound"),
             RealmOperand::Json => format!("{p}RealmOperand::Json"),
             RealmOperand::Unknown => format!("{p}RealmOperand::Unknown"),
+            RealmOperand::Never => format!("{p}RealmOperand::Never"),
             RealmOperand::Fresh {
                 proto,
                 elems,
@@ -511,6 +552,9 @@ pub mod emit {
             ),
             RealmOperand::Native(path) => {
                 format!("{p}RealmOperand::Native(::std::borrow::Cow::Borrowed({path:?}))")
+            }
+            RealmOperand::Namespace(path) => {
+                format!("{p}RealmOperand::Namespace(::std::borrow::Cow::Borrowed({path:?}))")
             }
             RealmOperand::Species { of, args, elems } => format!(
                 "{p}RealmOperand::Species {{ of: {}, args: {}, elems: {} }}",
@@ -615,5 +659,23 @@ mod operand_tests {
             RealmOperand::Union(vec![RealmOperand::Json, RealmOperand::Unknown].into())
         );
         assert!(serde_json::from_str::<RealmOperand>("\"jsonn\"").is_err());
+    }
+
+    /// `fresh(null)`: OrdinaryObjectCreate(null) (ECMA-262 10.1.12), an
+    /// object with no prototype (node's `_events`); any other prototype
+    /// must be a realm node.
+    #[test]
+    fn a_fresh_object_may_have_a_null_prototype() {
+        let fresh = |proto: &'static str| {
+            RealmEffect::Returns(RealmOperand::Fresh {
+                proto: Cow::Borrowed(proto),
+                elems: Cow::Borrowed(&[]),
+                fields: Cow::Borrowed(&[]),
+                slots: Cow::Borrowed(&[]),
+            })
+        };
+        let names = |_: &str| false;
+        validate_effects("t", &[fresh("null")], &names).unwrap();
+        assert!(validate_effects("t", &[fresh("Nope.prototype")], &names).is_err());
     }
 }

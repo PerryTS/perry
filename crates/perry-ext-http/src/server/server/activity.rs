@@ -236,10 +236,32 @@ pub(crate) fn new_session_count(active: bool) -> Arc<AtomicUsize> {
 
 impl crate::server::http2_server::Http2SessionHandle {
     pub(crate) fn mark_closed(&mut self) {
+        self.mark_destroyed();
+        self.closed = true;
+    }
+
+    /// The `'close'` listeners to run, in registration order. Each
+    /// `close(cb)` callback is Node's `once('close', cb)`: its own entry is
+    /// removed before it runs, and an `on('close', cb)` of the same function
+    /// stays.
+    pub(crate) fn take_close_listeners(&mut self) -> Vec<i64> {
+        let once = std::mem::take(&mut self.close_callbacks);
+        let listeners = self.listeners.entry("close".into()).or_default();
+        let snapshot = listeners.clone();
+        for callback in once {
+            if let Some(at) = listeners.iter().position(|&l| l == callback) {
+                listeners.remove(at);
+            }
+        }
+        snapshot
+    }
+
+    /// Node's `destroy()`: `destroyed` without `closed`, which only
+    /// `close()` sets.
+    pub(crate) fn mark_destroyed(&mut self) {
         if self.session_type == 1 && !self.closed && !self.destroyed {
             self.activity_count.fetch_sub(1, Ordering::Relaxed);
         }
-        self.closed = true;
         self.destroyed = true;
     }
 }

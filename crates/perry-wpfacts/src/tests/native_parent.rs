@@ -4,8 +4,9 @@
 //! object declares under the name, the run is the native summary and the
 //! instance reaches no program code; any other value the solve finds (a
 //! program-written or unseen-module-written global, a local binding of the
-//! same name, `null`) runs as before: it escapes with the instance
-//! (three.js `class HttpError extends Error`).
+//! same name) runs as before: it escapes with the instance (three.js
+//! `class HttpError extends Error`). A `null` makes no instance
+//! (`e11_null_parent.rs`).
 use super::*;
 
 fn at<'a>(pf: &'a ProgramFacts, src: &str, marker: &str, key: &str) -> Vec<&'a SiteFacts> {
@@ -74,15 +75,6 @@ fn a_program_written_global_error_runs_as_the_parent() {
 #[test]
 fn an_unseen_modules_global_error_runs_as_the_parent() {
     let src = unseen(&program(""));
-    let pf = facts(&src);
-    assert!(!proven(&pf, &src), "{}", verdicts(&pf, &src));
-}
-
-/// Control: a global `Error` the program set to `null` is no constructor
-/// (no instance exists in Node); the model keeps the escape.
-#[test]
-fn a_null_global_error_keeps_the_escape() {
-    let src = program("(globalThis as any).Error = null;");
     let pf = facts(&src);
     assert!(!proven(&pf, &src), "{}", verdicts(&pf, &src));
 }

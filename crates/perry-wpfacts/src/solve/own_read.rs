@@ -15,7 +15,7 @@
 
 use super::*;
 use crate::model::{
-    IDX_OWN_ANY, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
+    EnumFiled, IDX_OWN_ANY, IDX_OWN_GATE, IDX_OWN_KEY, IDX_OWN_NUM, IDX_OWN_PRIM, IDX_OWN_STR,
 };
 
 impl Model {
@@ -87,18 +87,44 @@ impl Model {
         enumerable: bool,
         kept: bool,
     ) {
+        self.idx_load_from(t, idx, t, dst, shape, enumerable, kept)
+    }
+
+    /// `idx_load_tok` with receiver `origin` (rule PXRECV: a Proxy's
+    /// forward reads its target with the original receiver): the getters
+    /// the read runs have `this` = `origin`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn idx_load_from(
+        &mut self,
+        origin: Tok,
+        idx: NodeId,
+        t: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+        enumerable: bool,
+        kept: bool,
+    ) {
         if enumerable
             && t != TOP
             && (self.enum_free(t)
                 || self.enum_obj(t)
                 || builtins::enum_free_instance(self, t)
                 || builtins::enum_free_buffer(self, t))
+            && self.enum_kept(t)
         {
+            let e = EnumFiled::Idx {
+                origin,
+                idx,
+                dst,
+                shape,
+                kept,
+            };
+            self.enum_file(t, e);
             return self.enum_read_tok(idx, t, dst, shape);
         }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
         if let Some(&a) = self.key_nodes.get(&idx) {
-            self.load_from(t, t, Key::Named(a), dst);
+            self.load_from(origin, t, Key::Named(a), dst);
             return;
         }
         if t == TOP {
@@ -160,11 +186,12 @@ impl Model {
                     self.cons(len, c);
                 }
             }
-            self.plain_key(t, ChainAct::Load(dst, self.thrown));
+            self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
             self.cons(
                 idx,
                 Cons::IdxKey {
                     obj: t,
+                    origin,
                     prim: 0,
                     dst,
                     shape,
@@ -177,14 +204,15 @@ impl Model {
     /// whose built-in properties is enumerable, or on a program object
     /// (`enum_obj`): `k` is a key the program wrote on `t` or on its chain
     /// (`Cons::EnumChain`, up to the first prototype with enumerable
-    /// built-in members); a deleted key reads `undefined`. No built-in
+    /// built-in members), while no delete may have taken a key of `t`
+    /// (`enum_kept`). No built-in
     /// member of a link the rule covers, no generic member.
     pub(super) fn enum_read_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
         let key = match self.key_nodes.get(&idx) {
             Some(&a) => Key::Named(a),
             None => Key::Any(shape),
         };
-        self.enum_read_key(idx, t, key, dst);
+        self.enum_read_key_kept(idx, t, key, dst);
     }
 
     /// F-A on a primitive subject: `s[k]` inside `for (k in s)` reads an
@@ -224,9 +252,111 @@ impl Model {
         }
     }
 
-    /// The enumerable read of `key` on `t` (`enum_read_tok`, `Cons::EnumLoad`);
-    /// `idx` keys its one-time chain walk.
+    /// The enumerable read of `key` on `t` (`Cons::EnumLoad`, a primitive
+    /// subject's prototype) while no delete may have taken a key of `t`
+    /// (`enum_kept`); the ordinary read once one may.
     pub(super) fn enum_read_key(&mut self, idx: NodeId, t: Tok, key: Key, dst: NodeId) {
+        if !self.enum_kept(t) {
+            return self.load_from(t, t, key, dst);
+        }
+        self.enum_file(t, EnumFiled::Key { key, dst });
+        self.enum_read_key_kept(idx, t, key, dst)
+    }
+
+    /// B-del: does every object `t` denotes keep the own keys it had when a
+    /// for-in or an `Object.keys` walk listed them? A key the walk yields
+    /// may be deleted before `o[k]` reads it (by the body, a callee, an
+    /// alias: ECMA-262 14.7.5.9 skips a key deleted before it is processed,
+    /// not after; `Object.keys` snapshots the keys first, 20.1.2.18); the
+    /// read is then OrdinaryGet (10.1.8.1), which goes on to the prototype
+    /// and finds its NON-enumerable builtin members. So the enumerable read
+    /// holds only for an object no delete (`Hard::E7Delete`) or `with`
+    /// (`E15With`) met, and, once a delete went through ⊤, that ⊤ does not
+    /// denote: not escaped (DECISIONS 234/150) and not a builtin object (a
+    /// delete through ⊤ "changes that key of whatever it is, a builtin
+    /// prototype included", `Cons::DeleteKey`). Only turns false: the reads
+    /// it allowed are filed (`enum_file`) and run again (`enum_flush`).
+    pub(crate) fn enum_kept(&self, t: Tok) -> bool {
+        !self.enum_lost.contains(&t) && !(self.enum_top_lost && self.enum_top_reach(t))
+    }
+
+    fn enum_top_reach(&self, t: Tok) -> bool {
+        self.escaped.contains_key(&t) || self.is_builtin_proto(t)
+    }
+
+    /// Files enumerable read `e` of `t` for `enum_flush`.
+    pub(crate) fn enum_file(&mut self, t: Tok, e: EnumFiled) {
+        if self.enum_filed_seen.insert((t, e)) {
+            self.enum_filed.entry(t).or_default().push(e);
+        }
+    }
+
+    /// A delete or `with` met `t`: its enumerable reads are ordinary reads.
+    pub(crate) fn enum_lose(&mut self, t: Tok) {
+        if t != TOP && self.enum_lost.insert(t) {
+            self.enum_flush(t);
+        }
+    }
+
+    /// A delete went through ⊤: so on every token ⊤ may denote.
+    pub(crate) fn enum_top_lose(&mut self) {
+        if std::mem::replace(&mut self.enum_top_lost, true) {
+            return;
+        }
+        if std::env::var_os("PERRY_FACTS_ENUMDEL_DIAG").is_some() {
+            eprintln!("perry: wpfacts enumdel top-lost");
+        }
+        let mut ts: Vec<Tok> = self
+            .enum_filed
+            .keys()
+            .copied()
+            .filter(|&t| self.enum_top_reach(t))
+            .collect();
+        ts.sort_unstable();
+        for t in ts {
+            self.enum_flush(t);
+        }
+    }
+
+    /// `t` escaped: after a delete through ⊤ it is one ⊤ denotes.
+    pub(crate) fn enum_note_escape(&mut self, t: Tok) {
+        if self.enum_top_lost {
+            self.enum_flush(t);
+        }
+    }
+
+    /// The enumerable reads filed on `t` run again as the ordinary read.
+    fn enum_flush(&mut self, t: Tok) {
+        let Some(reads) = self.enum_filed.remove(&t) else {
+            return;
+        };
+        if std::env::var_os("PERRY_FACTS_ENUMDEL_DIAG").is_some() {
+            let why = match self.escaped.get(&t) {
+                Some(&r) if !self.enum_lost.contains(&t) => {
+                    format!("top-delete+escaped: {}", self.reasons[r as usize])
+                }
+                _ => "delete".to_string(),
+            };
+            eprintln!("perry: wpfacts enumdel tok={} reads={} {why}", self.tok_name(t), reads.len());
+        }
+        for e in reads {
+            match e {
+                EnumFiled::Idx {
+                    origin,
+                    idx,
+                    dst,
+                    shape,
+                    kept,
+                } => self.idx_load_from(origin, idx, t, dst, shape, false, kept),
+                EnumFiled::Chain { of, key, dst } => self.load_from(of, t, key, dst),
+                EnumFiled::Key { key, dst } => self.load_from(t, t, key, dst),
+            }
+        }
+    }
+
+    /// `enum_read_key` once `enum_kept(t)` holds; `idx` keys its one-time
+    /// chain walk.
+    fn enum_read_key_kept(&mut self, idx: NodeId, t: Tok, key: Key, dst: NodeId) {
         if self.enum_obj(t) {
             self.mark_use(t, crate::model::MARK_READ);
         }
@@ -404,7 +534,7 @@ impl Model {
                 .is_some_and(|v| v.iter().any(|&(_, n, store)| store && self.node_held(n)))
     }
 
-    fn node_held(&self, n: NodeId) -> bool {
+    pub(crate) fn node_held(&self, n: NodeId) -> bool {
         let nd = &self.nodes[n as usize];
         !nd.pts.is_empty() || nd.prim != 0
     }

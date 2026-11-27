@@ -138,6 +138,10 @@ pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
         return;
     }
     let notify = match get_handle_mut::<Http2SessionHandle>(session_handle) {
+        // A server session is destroyed, and emits `'close'`, from its
+        // socket's `'close'` listener (`native_server`), which runs in the
+        // close-callbacks phase.
+        Some(session) if session.session_type == 0 => false,
         Some(session) => {
             let first = !session.closed;
             session.mark_closed();

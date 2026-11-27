@@ -14,11 +14,12 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         const svc: any = new Svc();
-        class Holder {{ tag = "h"; m() {{ (globalThis as any).hostTake(svc); }} n() {{ return 1; }} }}
+        class Holder {{ tag = "h"; m() {{ external(svc); }} n() {{ return 1; }} }}
         function g(a: any) {{ return a.size; }}
-        const take = (x: any) => (globalThis as any).hostTake(x);
+        const take = (x: any) => external(x);
         const i: any = Math.floor(Math.random() * 2);
         const h: any = new Holder();
         {body}
@@ -72,9 +73,9 @@ case!(control_method_escapes, true, "take(h.m);");
 case!(
     control_unknown_string_reads_method,
     true,
-    "const s: any = (globalThis as any).hostKey(); take(h[s]);"
+    "const s: any = external(); take(h[s]);"
 );
-case!(control_native_unknown_string_reads_method, true, "const s: any = (globalThis as any).hostKey(); Array.prototype.forEach.call([h], (v: any) => take(v[s]));");
+case!(control_native_unknown_string_reads_method, true, "const s: any = external(); Array.prototype.forEach.call([h], (v: any) => take(v[s]));");
 case!(
     control_index_field_read,
     true,

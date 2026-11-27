@@ -205,6 +205,24 @@ pub(crate) unsafe fn selected_native_module_constant(
     selected_normalized_constant(module_name, property, namespace_obj, is_cjs_default_object)
 }
 
+/// Is `value` the `path` namespace object a member read came through (its
+/// `import * as` or CommonJS default form)?
+fn is_path_namespace(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let obj = v.as_pointer::<ObjectHeader>();
+    !obj.is_null()
+        && unsafe {
+            (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                && matches!(
+                    read_native_module_name(obj).as_deref(),
+                    Some("path" | "path.default")
+                )
+        }
+}
+
 /// Normalization precedes literal specialization: an out-of-line alias lookup
 /// would hide the module name from LLVM and retain every module's match arm.
 #[inline(always)]
@@ -567,6 +585,12 @@ pub(crate) unsafe fn selected_normalized_constant(
                 "path",
                 "toNamespacedPath",
             )),
+            // The host's flavor is the namespace itself (`path.posix ===
+            // path` on POSIX, `path.win32 === path` on Windows).
+            "posix" if cfg!(not(windows)) && is_path_namespace(namespace_obj) => {
+                Some(namespace_obj)
+            }
+            "win32" if cfg!(windows) && is_path_namespace(namespace_obj) => Some(namespace_obj),
             "posix" => cjs_default_export_value("path.posix"),
             "win32" => cjs_default_export_value("path.win32"),
             _ => None,
@@ -605,8 +629,10 @@ pub(crate) unsafe fn selected_normalized_constant(
         "fs.constants" => fs_const(property).or_else(|| fs_const_tail(property)),
         "buffer" => match property {
             "Buffer" => Some(buffer_constructor_value()),
-            "Blob" => Some(crate::object::builtin_value_core("Blob")),
-            "File" => Some(crate::object::builtin_value_core("File")),
+            // The realm's original constructors, not the global bindings
+            // (node keeps `%Blob%` after `globalThis.Blob = X`).
+            "Blob" => Some(crate::object::builtin_constructor_value("Blob")),
+            "File" => Some(crate::object::builtin_constructor_value("File")),
             "constants" => Some(create_sub_namespace("buffer.constants")),
             // Match Node's common 64-bit max Buffer length value. Perry won't
             // actually allocate buffers this large, but shape/value parity lets
@@ -686,8 +712,8 @@ pub(crate) unsafe fn selected_normalized_constant(
         "util" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("util"),
             "types" => Some(create_sub_namespace("util.types")),
-            "TextEncoder" => Some(crate::object::builtin_value_core("TextEncoder")),
-            "TextDecoder" => Some(crate::object::builtin_value_core("TextDecoder")),
+            "TextEncoder" => Some(crate::object::builtin_constructor_value("TextEncoder")),
+            "TextDecoder" => Some(crate::object::builtin_constructor_value("TextDecoder")),
             _ => None,
         },
         "assert" => match property {
@@ -748,9 +774,9 @@ pub(crate) unsafe fn selected_normalized_constant(
         },
         "url" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("url"),
-            "URL" => Some(crate::object::builtin_value_core("URL")),
-            "URLSearchParams" => Some(crate::object::builtin_value_core("URLSearchParams")),
-            "URLPattern" => Some(crate::object::builtin_value_core("URLPattern")),
+            "URL" => Some(crate::object::builtin_constructor_value("URL")),
+            "URLSearchParams" => Some(crate::object::builtin_constructor_value("URLSearchParams")),
+            "URLPattern" => Some(crate::object::builtin_constructor_value("URLPattern")),
             _ => None,
         },
         "net" => match property {
@@ -792,11 +818,11 @@ pub(crate) unsafe fn selected_normalized_constant(
         },
         "crypto.webcrypto" => match property {
             "subtle" => Some(subtle_crypto_namespace()),
-            "constructor" => Some(crate::object::builtin_value_core("Crypto")),
+            "constructor" => Some(crate::object::builtin_constructor_value("Crypto")),
             _ => None,
         },
         "crypto.subtle" => match property {
-            "constructor" => Some(crate::object::builtin_value_core("SubtleCrypto")),
+            "constructor" => Some(crate::object::builtin_constructor_value("SubtleCrypto")),
             _ => None,
         },
         "crypto.constants" => crypto_const(property).or_else(|| {
@@ -1280,7 +1306,7 @@ pub(crate) unsafe fn nm_const_http(
             "globalAgent" => Some(unsafe { http_global_agent_object() }),
             // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
             "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
-            "WebSocket" => Some(crate::object::builtin_value_core("WebSocket")),
+            "WebSocket" => Some(crate::object::builtin_constructor_value("WebSocket")),
             // #4974: `require('_http_server').kConnectionsCheckingInterval`
             // (the module aliases to "http" in cjs_wrap). Node exports a
             // Symbol used as `server[k]` to reach the connections-checking

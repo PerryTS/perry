@@ -173,6 +173,7 @@ impl ShapeSlab {
         record.refresh_element_kind();
         record.refresh_function_method_absence();
         record.refresh_enum_facts();
+        record.refresh_runtime_base(word);
         record.probe = 0;
         unsafe {
             crate::object::layout_probe::mint_colour_masks(&mut record);

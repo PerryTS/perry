@@ -33,7 +33,8 @@ fn recv(pf: &ProgramFacts, key: &str) -> Vec<String> {
 /// parsed track) and `h`.
 fn prog(node: &str, prop: &str, pre: &str, tail: &str) -> ProgramFacts {
     let src = format!(
-        r#"class A {{ p = 1; q = 1; }}
+        r#"
+        declare function external(x?: unknown): any;class A {{ p = 1; q = 1; }}
 class S {{ p = 2; q = 2; }}
 class Q {{ p = 3; q = 3; }}
 class W {{ p = 4; q = 4; }}
@@ -229,7 +230,7 @@ fn builtin_function_text_has_no_way() {
 #[test]
 fn unknown_code_widens_the_native_form() {
     let tail = format!(
-        "const g: any = {{ position: () => (globalThis as any).hostTake( 1 ) }}; g[ p.propertyName ](); {SUFKEY}"
+        "const g: any = {{ position: () => external( 1 ) }}; g[ p.propertyName ](); {SUFKEY}"
     );
     let v = recv(&prog(SAN, OBJ, "", &tail), "q");
     assert!(v.iter().any(|x| x == "B"), "{v:?}");

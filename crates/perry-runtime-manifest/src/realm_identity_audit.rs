@@ -12,6 +12,8 @@ use crate::realm_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+mod macros;
+
 /// The runtime's identity comparisons: SameValueZero, IsStrictlyEqual,
 /// IsLooselyEqual (`value/equality.rs`) and the Map/Set key lookup.
 pub(crate) const IDENTITY_FNS: &[&str] = &[
@@ -25,10 +27,13 @@ pub(crate) const IDENTITY_FNS: &[&str] = &[
 /// Hops from a declared body through the functions it names.
 pub(crate) const DEPTH: usize = 3;
 
-/// Every `fn name` of the sources: name -> bodies (one per definition).
+/// Every `fn name` of the sources, and of the source their `macro_rules!`
+/// invocations expand to (`macros::expansions`: `url_getter!(get_href, ..)`
+/// defines `get_href`): name -> bodies (one per definition).
 pub(crate) fn fn_bodies(files: &[String]) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for text in files {
+    let expanded = macros::expansions(files);
+    for text in files.iter().chain(&expanded) {
         let b = text.as_bytes();
         let mut at = 0;
         while let Some(i) = text[at..].find("fn ") {
@@ -98,13 +103,28 @@ pub(crate) fn fn_bodies(files: &[String]) -> BTreeMap<String, Vec<String>> {
     out
 }
 
-/// The identifiers a body calls (`name(` or `name::<..>(`).
+/// The identifiers a body calls (`name(` or `name::<..>(`), outside its
+/// comments and string literals (`// for(cur=raw; !LEAF.includes(cur);`
+/// calls nothing).
 fn callees(body: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let b = body.as_bytes();
     let mut i = 0;
     while i < b.len() {
-        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+        if b[i..].starts_with(b"//") {
+            i += body[i..].find('\n').unwrap_or(b.len() - i);
+        } else if b[i..].starts_with(b"/*") {
+            i += body[i + 2..].find("*/").map_or(b.len() - i, |k| k + 4);
+        } else if b[i] == b'"' {
+            i += 1;
+            while i < b.len() && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+        } else if b[i] == b'\'' && b.get(i + 2) == Some(&b'\'') {
+            // A char literal (`'"'`); a lifetime reads on as a word.
+            i += 3;
+        } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
             let s = i;
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
@@ -124,15 +144,22 @@ pub(crate) fn reaches_identity(
     fns: &BTreeMap<String, Vec<String>>,
     body: &str,
 ) -> Option<Vec<String>> {
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut frontier: Vec<(String, Vec<String>)> = vec![(body.to_string(), Vec::new())];
-    if !seen.insert(body.to_string()) {
-        return None;
-    }
+    reaches_identity_from(fns, body, fns.get(body).map_or(&[][..], Vec::as_slice))
+}
+
+/// [`reaches_identity`] from the body's own definitions `defs` (those of
+/// the file that declares it, where that file defines it: another crate's
+/// `fn data` is not `getter!(data, ..)`'s).
+pub(crate) fn reaches_identity_from<'a>(
+    fns: &'a BTreeMap<String, Vec<String>>,
+    body: &str,
+    defs: &'a [String],
+) -> Option<Vec<String>> {
+    let mut seen: BTreeSet<String> = BTreeSet::from([body.to_string()]);
+    let mut frontier: Vec<(&'a [String], Vec<String>)> = vec![(defs, Vec::new())];
     for _ in 0..=DEPTH {
         let mut next = Vec::new();
-        for (name, path) in frontier {
-            let Some(defs) = fns.get(&name) else { continue };
+        for (defs, path) in frontier {
             for def in defs {
                 for c in callees(def) {
                     let mut p = path.clone();
@@ -141,7 +168,9 @@ pub(crate) fn reaches_identity(
                         return Some(p);
                     }
                     if seen.insert(c.clone()) {
-                        next.push((c, p));
+                        if let Some(d) = fns.get(&c) {
+                            next.push((d.as_slice(), p));
+                        }
                     }
                 }
             }
@@ -190,6 +219,10 @@ pub(crate) fn declares_identity(d: &Value) -> bool {
 mod tests {
     use super::*;
 
+    fn crates_root() -> std::path::PathBuf {
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).to_path_buf()
+    }
+
     fn runtime() -> (Vec<Value>, BTreeMap<String, Vec<String>>) {
         let src = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../perry-runtime/src"));
         let manifest = crate::realm_source::read(src).unwrap();
@@ -198,9 +231,19 @@ mod tests {
             .and_then(Value::array)
             .unwrap()
             .to_vec();
+        // The sources of every crate a declaration comes from (its
+        // `source`: `perry-ext-net/src/classes_prototype.rs`), where its
+        // body is defined.
+        let crates: BTreeSet<&str> = ds
+            .iter()
+            .filter_map(|d| d.get("source").and_then(Value::string))
+            .filter_map(|s| s.split('/').next())
+            .chain(["perry-runtime", "perry-stdlib"])
+            .collect();
         let mut files = Vec::new();
-        read_sources(src, &mut files);
-        read_sources(&src.join("../../perry-stdlib/src"), &mut files);
+        for c in crates {
+            read_sources(&src.join("../..").join(c).join("src"), &mut files);
+        }
         (ds, fn_bodies(&files))
     }
 
@@ -222,7 +265,15 @@ mod tests {
                 unresolved.push(format!("{name} ({body})"));
                 continue;
             }
-            if let Some(path) = reaches_identity(&fns, &body) {
+            // The declaring file's own definition of the body, if it has one.
+            let own = d
+                .get("source")
+                .and_then(Value::string)
+                .and_then(|s| std::fs::read_to_string(crates_root().join(s)).ok())
+                .map(|text| fn_bodies(&[text]))
+                .and_then(|mut local| local.remove(&body));
+            let defs = own.as_deref().unwrap_or(&fns[&body]);
+            if let Some(path) = reaches_identity_from(&fns, &body, defs) {
                 found.push(name.to_string());
                 if !declares_identity(d) {
                     missing.push(format!("{name}: {body} -> {}", path.join(" -> ")));

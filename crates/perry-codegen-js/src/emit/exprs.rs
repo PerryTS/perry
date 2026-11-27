@@ -808,18 +808,18 @@ impl JsEmitter {
             }
 
             // --- Path operations ---
-            Expr::PathJoin(a, b) => {
-                self.output.push_str("__perry.path.join(");
-                self.emit_expr(a);
-                self.output.push_str(", ");
-                self.emit_expr(b);
-                self.output.push(')');
-            }
-            Expr::PathWin32Join(a, b) => {
-                self.output.push_str("__perry.path.win32.join(");
-                self.emit_expr(a);
-                self.output.push_str(", ");
-                self.emit_expr(b);
+            Expr::PathJoin(args) | Expr::PathWin32Join(args) => {
+                self.output.push_str(if matches!(expr, Expr::PathJoin(_)) {
+                    "__perry.path.join("
+                } else {
+                    "__perry.path.win32.join("
+                });
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.emit_expr(a);
+                }
                 self.output.push(')');
             }
             Expr::PathWin32 { method, args } => {

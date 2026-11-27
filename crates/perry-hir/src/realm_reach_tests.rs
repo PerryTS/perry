@@ -4,7 +4,7 @@ use crate::realm_manifest::RealmKind;
 macro_rules! entry {
     ($name:literal $(=> $($birth:literal),*)?) => {
         RealmEntry { name: $name, kind: RealmKind::Constructor,
-            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[], own: &[], proto: None }
+            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[], own: &[], proto: None, value: None }
     };
 }
 const CATALOG: &[RealmEntry] = &[
@@ -51,6 +51,7 @@ const CATALOG: &[RealmEntry] = &[
         effects: &[],
         own: &[],
         proto: None,
+        value: None,
     },
 ];
 
@@ -284,6 +285,7 @@ fn a_function_that_synthesizes_arguments_reaches_the_birth_site() {
         effects: &[],
         own: &[],
         proto: None,
+        value: None,
     }];
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)

@@ -97,10 +97,13 @@ fn env1_keep_store_object_then_read() {
 }
 
 // KEEP: `process.env` handed to unknown code: the escape stays visible.
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn env1_keep_env_escapes_to_unknown_code() {
     let src = format!(
-        "{OBJ}const env: any = process.env;\n\
+        "import \"unseen-host\";\n{OBJ}const env: any = process.env;\n\
          const g: any = globalThis;\n\
          const f: any = g[process.argv[2] ?? \"x\"];\n\
          if (typeof f === \"function\") f(env);\n\

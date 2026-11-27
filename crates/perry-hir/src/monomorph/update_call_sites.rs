@@ -393,10 +393,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(path, ctx, lookup);
             update_call_sites_in_expr(content, ctx, lookup);
         }
-        Expr::PathJoin(a, b)
-        | Expr::PathMatchesGlob(a, b)
-        | Expr::PathResolveJoin(a, b)
-        | Expr::PathWin32Join(a, b) => {
+        Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             update_call_sites_in_expr(a, ctx, lookup);
             update_call_sites_in_expr(b, ctx, lookup);
         }
@@ -408,7 +405,7 @@ fn update_call_sites_in_expr(
         | Expr::PathToNamespacedPath(p) => {
             update_call_sites_in_expr(p, ctx, lookup);
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for e in args {
                 update_call_sites_in_expr(e, ctx, lookup);
             }

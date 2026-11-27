@@ -5,13 +5,69 @@ impl Model {
         let pv = self.prov.is_some();
         match *c {
             // An observation for the value-record derive: no flow.
-            Cons::Identity { .. } => {}
-            // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
-            // `solve/proxy.rs`).
-            Cons::HasProp { .. } => {}
+            Cons::Identity { .. } | Cons::Detached => {}
+            // `k in o`: no flow on an ordinary object; OrdinaryHasProperty
+            // (10.1.7.1 step 3) goes on with parent.[[HasProperty]]: the same
+            // rule on the object's prototype closure (once per object, key
+            // and key node), where a Proxy runs its `has` trap (rule
+            // PXCHAIN, `solve/proxy.rs`). The closure holds every link, so
+            // its ordinary links add nothing.
+            Cons::HasProp { key, idx } => {
+                if !self.chain_has_nodes.contains(&n) {
+                    for &t in toks {
+                        if t != TOP && self.chain_has_done.insert((t, key, idx)) {
+                            let cp = self.cp(t);
+                            self.chain_has_nodes.insert(cp);
+                            self.cons(cp, Cons::HasProp { key, idx });
+                        }
+                    }
+                }
+            }
+            // Rule PXCHAIN: only a Proxy in the closure acts (`proxy_apply`).
+            Cons::ChainSet { .. } | Cons::ChainRecv { .. } => {}
+            // Rule PXDEFINE: an ordinary object's definition is the store
+            // itself; only a Proxy runs a trap (`proxy_apply`).
+            Cons::DefineOwn { .. } => {}
+            // Rule PXRECV: a Proxy's forward to the ordinary objects of its
+            // target, with the original receiver (a Proxy target: `proxy_apply`).
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => {
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    if idx == NO_NODE {
+                        self.load_from(recv, q, key, dst);
+                    } else {
+                        self.idx_load_from(recv, idx, q, dst, 0, false, false);
+                    }
+                }
+            }
+            Cons::FwdStore {
+                key,
+                src,
+                site,
+                region,
+                recv,
+            } => {
+                self.store_at = Some(n);
+                self.store_region = Some(region);
+                self.store_recv = Some(recv);
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    self.store_into(q, key, src, site);
+                }
+                self.store_at = None;
+                self.store_region = None;
+                self.store_recv = None;
+            }
             // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
             // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
             Cons::OwnProp { .. } => {}
+            // Rule PXINV: only a Proxy acts (`proxy_apply`).
+            Cons::DeleteIdx { .. } | Cons::Meta { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being
@@ -105,7 +161,19 @@ impl Model {
                     self.own_names_of(t, dst);
                 }
             }
-            Cons::OwnDescValues { dst } => {
+            // R1: a for-in run's one key (`key_nodes`): the descriptor of
+            // that own property only (20.1.2.8, 10.1.5.1
+            // OrdinaryGetOwnProperty), the own-only read of `key`.
+            Cons::OwnDescValues { dst, key } if self.key_nodes.contains_key(&key) => {
+                let a = self.key_nodes[&key];
+                if prim & prim::STR != 0 {
+                    self.prim_own_load(prim::STR, Key::Named(a), dst);
+                }
+                for &t in toks {
+                    self.idx_own_load_tok(key, t, dst, 0, false);
+                }
+            }
+            Cons::OwnDescValues { dst, .. } => {
                 // A String's own properties: its characters and `length`.
                 if prim & prim::STR != 0 {
                     self.add_prim(dst, prim::STR | prim::NUM);
@@ -158,6 +226,14 @@ impl Model {
                 self.store_region = None;
             }
             Cons::Call { call } => {
+                // RTREAD14: the runtime's message event is born when a value
+                // first reaches a handler field it reads by name.
+                if !self.runtime_event_born
+                    && toks.len() > 0
+                    && self.runtime_global_calls.iter().any(|&(_, c)| c == call)
+                {
+                    self.with_b(|m| builtins::runtime_global_event(m, call));
+                }
                 for &t in toks {
                     self.prov_tok(pv, t);
                     self.call_tok(call, t, None);
@@ -240,6 +316,21 @@ impl Model {
                         n,
                         "unknown code may throw in the region (an operation on ⊤)",
                     );
+                }
+            }
+            Cons::HandRaise { region } => {
+                if !toks.is_empty() {
+                    self.raise_top(
+                        region,
+                        n,
+                        "a native hands a value to unknown code, which may throw",
+                    );
+                }
+            }
+            Cons::InterpRuns { reason } => {
+                if !toks.is_empty() {
+                    let why = self.reasons[reason as usize].clone();
+                    crate::builtins::set_dyn_eval(self, &why);
                 }
             }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
@@ -419,7 +510,7 @@ impl Model {
                         Some(v) => v,
                         None => {
                             let v = self.node_named("stored", || "stored-vals".into());
-                            self.node_fn[v as usize] = f;
+                            self.set_owner(v, f);
                             self.store_flows.entry(k).or_default().vals = Some(v);
                             v
                         }
@@ -502,6 +593,7 @@ impl Model {
                         Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
                     }
                     guard::NOT_OBJECT_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Object))),
+                    guard::NOT_ERROR_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Error))),
                     _ => None,
                 };
                 // A marker beside its values is no value (DECISIONS 74):
@@ -547,6 +639,15 @@ impl Model {
                     let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim, strs);
                     self.cur_range = saved;
+                }
+            }
+            // Rule RP2-false: the array arm sees only a value the runtime
+            // may take it for (`solve/record_entry.rs`); a primitive never.
+            Cons::ArrayRecordEntry { dst } => {
+                for &t in toks {
+                    if self.array_arm_may_see(t) {
+                        self.add_tok(dst, t);
+                    }
                 }
             }
             Cons::Defined { dst }
@@ -623,6 +724,26 @@ impl Model {
             Cons::NotObjectProto { dst } => {
                 for &t in toks {
                     if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
+            // Rule NOT-ERROR (`solve/not_error.rs`): every value but the
+            // ones whose chain surely reaches `%Error.prototype%`; a dropped
+            // token is held for `settle_not_error`.
+            Cons::NotError { hook, dst } => {
+                for &t in toks {
+                    if self.not_error_drops(t, hook) {
+                        if self.not_error_seen.insert((t, hook, dst)) {
+                            self.not_error_held.push((t, hook, dst));
+                        }
+                    } else {
                         self.add_tok(dst, t);
                     }
                 }
@@ -875,6 +996,7 @@ impl Model {
                             builtins::WriteValue::Absent,
                         );
                         self.top_reshape(Some(key));
+                        self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
                     } else {
@@ -992,6 +1114,24 @@ impl Model {
                             if !ks.contains(&key) {
                                 ks.push(key);
                             }
+                        }
+                        // Defining NAMED `key` on a realm prototype
+                        // (`builtins::realm_proto_value`) writes that key of
+                        // that one object and no other (rule D1): the
+                        // lookups passing it see the write under its
+                        // identity (`intrinsic_miss_on`); its get/set are
+                        // installed by `Cons::Accessor`.
+                        _ if builtins::realm_proto_of(self, t).is_some() => {
+                            let k = Some(Key::Named(key));
+                            builtins::note_native_data_write(
+                                self,
+                                t,
+                                k,
+                                "E5 Object.defineProperty",
+                                builtins::WriteValue::Opaque,
+                            );
+                            self.virt_revoke(t, Some(key));
+                            self.reshape(Some(key));
                         }
                         // Defining `key` on an unknown object writes that key
                         // of whatever it is, a builtin prototype included,
@@ -1166,7 +1306,17 @@ impl Model {
                     self.has_instance(t, reason, arg);
                 }
             }
-            Cons::UnnamedSet { target } => {
+            // Rule PXASSIGN: on a Proxy target the copy's [[Set]] of some
+            // key is the Proxy's (10.5.9, `store_into`), once a value of an
+            // unnamed key is there.
+            Cons::UnnamedSet { target, site }
+                if matches!(self.toks[target as usize], TokKind::Proxy(_)) =>
+            {
+                if !toks.is_empty() || prim != 0 {
+                    self.store_into(target, Key::any(), n, site);
+                }
+            }
+            Cons::UnnamedSet { target, .. } => {
                 let walked = self
                     .walk_nodes
                     .contains_key(&(target, target, Key::any(), 1));
@@ -1243,7 +1393,7 @@ impl Model {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
                     } else {
-                        let up = self.cv_of(q, key, builtin);
+                        let up = self.cv_up(q, key, builtin);
                         self.edge(up, dst);
                     }
                 }
@@ -1257,16 +1407,23 @@ impl Model {
                     }
                 }
             }
-            Cons::AnyAccessors { origin, act } => {
+            Cons::AnyAccessors { origin, key, act } => {
                 for &q in toks {
                     if q != TOP {
                         self.any_walk_holders
                             .entry(q)
                             .or_default()
-                            .push((origin, act));
+                            .push((origin, key, act));
                     }
-                    if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
-                        self.accessor_hit(origin, q, Key::any(), act);
+                    // A realm prototype's setters run for a computed-key
+                    // store the key may name (`realm_setter_hit`).
+                    let realm_store = matches!(act, ChainAct::Store(..))
+                        && builtins::realm_proto_of(self, q).is_some();
+                    if q != TOP
+                        && (realm_store
+                            || self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()))
+                    {
+                        self.accessor_hit(origin, q, key, act);
                     }
                 }
             }
@@ -1371,7 +1528,33 @@ impl Model {
                         // gives: the model's object stays apart from the
                         // instance (the result is ⊤) and leaves, with what
                         // the construction put into it.
+                        // A realm constructor that declares what it does
+                        // (ECMA-262 10.1.13 OrdinaryCreateFromConstructor):
+                        // its declaration runs on the instance under
+                        // construction, whose prototype chain is NewTarget's.
+                        TokKind::BuiltinFn(Native::Member { identity, .. })
+                            if origin != TOP
+                                && !self.unit_mode
+                                && builtins::declared_super_construct(identity).is_some() =>
+                        {
+                            let e = builtins::declared_super_construct(identity).expect("guarded");
+                            self.with_native(call, |m, call| {
+                                builtins::run_super_construct(m, e, call, origin)
+                            });
+                        }
                         TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                            if origin != TOP {
+                                let what = match &self.toks[parent as usize] {
+                                    TokKind::BuiltinFn(Native::Member { identity, .. }) => {
+                                        identity.to_string()
+                                    }
+                                    _ => self.tok_name(parent),
+                                };
+                                let r = self.reason(&format!(
+                                    "E21 realm parent constructor {what} declares no construct effects"
+                                ));
+                                self.mark_hard(origin, Hard::E21NativeParent, r);
+                            }
                             let c = self.calls[call as usize].clone();
                             let made = self.node_l("super-builtin-construct");
                             let key = (crate::summary::MK_SUPER_BUILTIN, parent, 0);
@@ -1401,9 +1584,11 @@ impl Model {
                     }
                 }
             }
-            Cons::BirthField { key, src } => {
+            Cons::BirthField { key, src, tm } => {
                 for &t in toks {
-                    if t == TOP {
+                    // Only the literal's own tokens: the holder node may
+                    // also hold values from an outer source.
+                    if !matches!(self.toks[t as usize], TokKind::Obj(b, _) if b == tm) {
                         continue;
                     }
                     let f = match key {
@@ -1537,7 +1722,8 @@ impl Model {
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     self.note_array_member_write(t, Some(Key::Named(key)), None, "accessor");
-                    if t == TOP {
+                    let realm_proto = builtins::realm_proto_of(self, t).is_some();
+                    if t == TOP || realm_proto {
                         // A known function: an accessor query that may
                         // reach the install returns it (10.1.6.3).
                         builtins::note_native_accessor(self, t, Some(Key::Named(key)), f, setter);
@@ -1557,6 +1743,15 @@ impl Model {
                         let r = self.reason("accessor installed on a value from unmodeled code");
                         self.escape(f, r);
                         continue;
+                    }
+                    if realm_proto {
+                        // On a realm prototype the runtime's own reads of
+                        // the objects whose chain passes it (an emitter's,
+                        // a stream's) may run it with such a receiver: it
+                        // is the runtime's to call. The program lookups
+                        // that walk the prototype run it too (`accessors`).
+                        let r = self.reason("accessor installed on a realm prototype");
+                        self.escape(f, r);
                     }
                     if key == star && !builtins::accessor_receiver(self, t, key) {
                         // A computed-key accessor: it may answer any key, so
@@ -1582,6 +1777,9 @@ impl Model {
                             ks.push(star);
                         }
                         continue;
+                    }
+                    if !self.accessors.contains_key(&(t, key)) {
+                        builtins::note_global_holder(self, t);
                     }
                     let entry = self.accessors.entry((t, key)).or_default();
                     let list = if setter { &mut entry.1 } else { &mut entry.0 };
@@ -1806,6 +2004,7 @@ impl Model {
                                     idx,
                                     Cons::IdxKey {
                                         obj: TOP,
+                                        origin: TOP,
                                         prim: p,
                                         dst,
                                         shape,
@@ -1849,10 +2048,14 @@ impl Model {
                     // A prototype with enumerable built-in members (a host
                     // one, or one the seed of `from` does not name): its
                     // keys in full.
-                    if !self.enum_link(from, q) {
+                    // B-del: a link a delete may have taken a key from
+                    // (`enum_kept`): OrdinaryGet goes on past the deleted
+                    // key to the builtin members above it.
+                    if !self.enum_link(from, q) || !self.enum_kept(q) {
                         self.load_from(of, q, key, dst);
                         continue;
                     }
+                    self.enum_file(q, EnumFiled::Chain { of, key, dst });
                     // SKINROOT7: a typed-array link's enumerable own
                     // properties are its elements (10.4.5.1): a Number or
                     // BigInt under an index key.
@@ -1965,6 +2168,7 @@ impl Model {
                 prim: recv,
                 dst,
                 shape,
+                ..
             } => {
                 // Rule NUM-KEY-PRIM (ECMA-262 7.3.2 GetV, 7.1.19
                 // ToPropertyKey, 6.1.6.1.20 Number::toString): `p[k]` of a
@@ -2010,7 +2214,11 @@ impl Model {
                 }
             }
             Cons::IdxKey {
-                obj, dst, shape, ..
+                obj,
+                origin,
+                dst,
+                shape,
+                ..
             } => {
                 let named = index_needs_general_key(toks, prim);
                 // Rule M3: a key of string constants and known prefixes
@@ -2058,13 +2266,13 @@ impl Model {
                                     // property "1" (10.1.8.1 OrdinaryGet).
                                     false => Key::Named(a),
                                 };
-                                self.load_from(obj, obj, key, dst);
+                                self.load_from(origin, obj, key, dst);
                             }
                         }
                     }
                     None => {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
-                            self.load_from(obj, obj, Key::Any(shape), dst);
+                            self.load_from(origin, obj, Key::Any(shape), dst);
                         }
                     }
                 }
@@ -2126,7 +2334,7 @@ impl Model {
                     if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
                         for k in keys {
                             let a = self.atom(k);
-                            self.load_program_key(obj, a, dst);
+                            self.load_program_key_from(origin, obj, a, dst);
                         }
                     }
                 }
@@ -2228,16 +2436,16 @@ impl Model {
                     }
                 }
             }
-            Cons::ForInBody { obj, call } => {
+            Cons::ForInBody { obj, call, list } => {
                 for &t in toks {
                     if matches!(self.toks[t as usize], TokKind::Func(..))
                         && self.for_in_on.insert((obj, t, call))
                     {
-                        self.cons(obj, Cons::ForInKeys { ft: t, call });
+                        self.cons(obj, Cons::ForInKeys { ft: t, call, list });
                     }
                 }
             }
-            Cons::ForInKeys { ft, call } => {
+            Cons::ForInKeys { ft, call, list } => {
                 // A primitive's keys (a string's indices) are no literal's.
                 // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
                 // ForIn/OfHeadEvaluation step 6.a).
@@ -2245,7 +2453,7 @@ impl Model {
                     self.for_in_every_key(call, ft);
                 }
                 for &t in toks {
-                    self.for_in_tok(call, ft, t);
+                    self.for_in_tok(call, ft, t, list);
                 }
             }
             Cons::DefineAnyKey {
@@ -2796,29 +3004,33 @@ impl Model {
                 agg,
                 region,
             } => {
-                let fired = self.nodes[agg as usize].cons.iter().any(|c| {
-                    matches!(
-                        c,
+                // Rule R2: `%o` formats its argument with depth 4
+                // (util_format.rs:415), every other specifier under the
+                // call's limit.
+                let floor = if self.may_hold_pct_o(n) {
+                    INSPECT_PCT_O_LIMIT
+                } else {
+                    INSPECT_DEFAULT_LIMIT
+                };
+                let fired = self.nodes[agg as usize]
+                    .cons
+                    .iter()
+                    .filter_map(|c| match c {
                         Cons::Implicit {
-                            proto: Protocol::Inspect,
+                            proto: Protocol::Inspect(at),
                             ..
-                        }
-                    )
-                });
+                        } => Some(at.limit),
+                        _ => None,
+                    })
+                    .max()
+                    .is_some_and(|l| l >= floor.max(self.inspect_raised));
                 if !fired && self.may_hold_percent(n) {
                     // `PERRY_WPF_IMPLSRC=1`: the first argument that lets
                     // the specifiers consume (its tokens and String entries).
                     if crate::solve::implsrc_on() {
                         self.console_pct_why(n);
                     }
-                    self.cons(
-                        agg,
-                        Cons::Implicit {
-                            reason,
-                            proto: Protocol::Inspect,
-                            region,
-                        },
-                    );
+                    self.console_inspect(agg, reason, false, region, floor, true);
                 }
             }
             Cons::ObjTagProbe { t, key } => {
@@ -3022,6 +3234,9 @@ impl Model {
                     // Each receiver binds every call looked up through
                     // this node: solve work per call.
                     self.charge_work(calls.len() as u64);
+                    if self.past_work_bound() {
+                        break;
+                    }
                     self.this_to(t, origin, &calls);
                     self.this_calls(t, origin, &calls);
                 }
@@ -3079,6 +3294,9 @@ impl Model {
                         },
                     );
                 }
+            }
+            Cons::JsonCopy { dst, site, arr, at } => {
+                self.json_rt_apply(dst, site, arr, at, toks, prim)
             }
             Cons::SpreadFrom { src, site, from } => {
                 for &d in toks {
@@ -3185,7 +3403,16 @@ impl Model {
                 expected,
                 reason,
             } => {
-                let mut other = prim & prim::NULL != 0;
+                // Rule NULLPARENT: a `null` among the values makes no
+                // instance. ClassDefinitionEvaluation (ECMA-262 15.7.14 step
+                // 8.b) gives the class object %Function.prototype% as its
+                // [[Prototype]]; the derived [[Construct]] binds no `this`
+                // before `super()` (10.2.2), and SuperCall finds no
+                // constructor there and throws a TypeError (13.3.7.1 steps
+                // 4-5). No instance exists under the null and nothing reaches
+                // unknown code; the instances the other values make are the
+                // only ones.
+                let mut other = false;
                 let mut class_parent = false;
                 for &t in toks {
                     if t == expected {
@@ -3295,6 +3522,7 @@ impl Model {
             && !self.native_given.contains(&(t, given))
         {
             self.native_given.push((t, given));
+            builtins::note_global_holder(self, t);
             self.census_given(t, given);
             // GP1: setting a built-in's [[Prototype]] reads and calls
             // nothing (ECMA-262 10.1.2); a later [[Get]] on it continues at

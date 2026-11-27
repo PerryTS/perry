@@ -46,6 +46,8 @@ mod record;
 mod symbols;
 #[path = "realm_throws.rs"]
 mod throws;
+#[path = "realm_global_reads.rs"]
+pub mod global_reads;
 #[path = "realm_typed_info.rs"]
 mod typed_info;
 

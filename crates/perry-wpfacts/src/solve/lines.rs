@@ -6,8 +6,11 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
+            Cons::Detached => format!("detached {n}"),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
+            Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
+            Cons::Meta { op, .. } => format!("meta {n} {op:?}"),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
@@ -15,7 +18,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
             Cons::OwnNames { dst } => format!("ownnames {n} {dst}"),
-            Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
+            Cons::OwnDescValues { dst, key } => format!("owndescvalues {n} {dst} {key}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
             Cons::IndexKept => format!("indexkept {n}"),
@@ -43,7 +46,9 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::InterpRuns { reason } => format!("interpruns {n} {reason}"),
             Cons::Raise { region } => format!("raise {n} {region}"),
+            Cons::HandRaise { region } => format!("handraise {n} {region}"),
             Cons::RuntimeStore { reason, retained } => {
                 format!("runtimestore {n} {retained} {reason}")
             }
@@ -87,10 +92,12 @@ impl Model {
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::NotNull { dst } => format!("notnull {n} {dst}"),
             Cons::RecordEntry { dst } => format!("recordentry {n} {dst}"),
+            Cons::ArrayRecordEntry { dst } => format!("arrayrecordentry {n} {dst}"),
             Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),
             Cons::NotObjectProto { dst } => format!("notobjectproto {n} {dst}"),
+            Cons::NotError { hook, dst } => format!("noterror {n} {hook} {dst}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
@@ -157,9 +164,34 @@ impl Model {
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
             }
-            Cons::AnyAccessors { origin, act } => format!("anyaccessors {n} {origin} {act:?}"),
-            Cons::UnnamedSet { target } => format!("unnamedset {n} {target}"),
+            Cons::AnyAccessors { origin, key, act } => {
+                format!("anyaccessors {n} {origin} {} {act:?}", self.key_name(*key))
+            }
+            Cons::UnnamedSet { target, site } => format!("unnamedset {n} {target} {site}"),
             Cons::StoreTopProto { origin, src } => format!("storetopproto {n} {origin} {src}"),
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!("chainset {n} {origin} {key:?} {src} {region}"),
+            Cons::ChainRecv { origin } => format!("chainrecv {n} {origin}"),
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!("fwdload {n} {key:?} {idx} {dst} {recv}"),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!("fwdstore {n} {key:?} {src} {region} {recv}"),
+            Cons::DefineOwn { key, value, region } => {
+                format!("defineown {n} {key:?} {value} {region}")
+            }
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }
@@ -195,8 +227,8 @@ impl Model {
                 )
             }
             Cons::ProtoFrom { src } => format!("protofrom {n} {src}"),
-            Cons::BirthField { key, src } => {
-                format!("birthfield {n} {} {src}", self.key_name(*key))
+            Cons::BirthField { key, src, tm } => {
+                format!("birthfield {n} {} {src} {tm}", self.key_name(*key))
             }
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
             Cons::ProtoValues { dst } => format!("protovalues {n} {dst}"),
@@ -253,8 +285,8 @@ impl Model {
             Cons::IdxKeyCall {
                 obj, prim, call, ..
             } => format!("idxkeycall {n} {obj} {prim} {call}"),
-            Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
-            Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
+            Cons::ForInBody { obj, call, list } => format!("forinbody {n} {obj} {call} {list:?}"),
+            Cons::ForInKeys { ft, call, list } => format!("forinkeys {n} {ft} {call} {list:?}"),
             Cons::DefineKeyed {
                 o,
                 reason,
@@ -292,6 +324,7 @@ impl Model {
             Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),
             Cons::ArgInto { call, run, i } => format!("arginto {n} {call} {run} {i}"),
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
+            Cons::JsonCopy { dst, site, arr, at } => format!("jsoncopy {n} {dst} {site} {arr} {at}"),
             Cons::SpreadFrom { src, site, .. } => format!("spreadfrom {n} {src} {site}"),
             Cons::OwnComputedKey { key, val } => format!("owncomputedkey {n} {key} {val}"),
             Cons::ProtoKeySet { target, val, site } => {

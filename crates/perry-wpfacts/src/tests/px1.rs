@@ -87,16 +87,18 @@ console.log(p.a, p.b);
     assert!(!e9(&tops) && !held, "{tops:?}");
 }
 
-// K3: Proxy.revocable keeps the old path (E9).
+// K3: the Proxy of Proxy.revocable is a modeled Proxy (rule PXESC: its
+// escape runs its traps; after revoke() each operation throws a TypeError
+// first, which the traps over-run). No part is held (E9).
 #[test]
-fn px1_k3_revocable_keeps_old_path() {
+fn px1_k3_revocable_is_a_modeled_proxy() {
     let (tops, _) = solve(
         r#"const { proxy, revoke } = Proxy.revocable({ a: 1 } as any, {});
 console.log((proxy as any).a, process.argv[2]);
 revoke();
 "#,
     );
-    assert!(e9(&tops), "revocable stays E9: {tops:?}");
+    assert!(!e9(&tops), "revocable holds E9: {tops:?}");
 }
 
 /// PROXY3: the verdicts of the sites under `key` (reads, calls, stores).
@@ -195,25 +197,24 @@ console.log(outer.a, outer.b, outer.c, process.argv[2]);
     assert!(!v.is_empty() && v.iter().all(|v| v == "ProxyTrap"), "{v:?}");
 }
 
-// K9: an operation the hook does not model (a call of the proxy: [[Call]],
-// twice) keeps the old path: E9, and no trap verdict.
+// K9 (rule PXAPPLY): a call of the proxy is its [[Call]] (10.5.12): over a
+// non-callable target no trap runs and the read keeps its trap verdict;
+// over a function the `apply` trap runs. No E9 either way.
 #[test]
-fn px3_k9_unmodeled_operation_keeps_old_path() {
+fn px3_k9_call_of_the_proxy_is_exact() {
     let src = r#"const p: any = new Proxy({ a: 1 } as any, { get: (_t: any, k: any) => "g:" + String(k) });
 try { p(); } catch (x) {}
 console.log(p.a, process.argv[2]);
 "#;
-    let (tops, _) = solve(src);
-    assert!(e9(&tops), "{tops:?}");
-    let v = verdicts(src, "a");
-    assert!(v.iter().all(|v| v != "ProxyTrap"), "{v:?}");
+    let (tops, held) = solve(src);
+    assert!(!e9(&tops) && !held, "{tops:?}");
     let (tops, _) = solve(
         r#"const f = function (a: number): number { return a + 1; };
 const p: any = new Proxy(f, { apply(t: any, _th: any, args: any[]) { return t(...args) * 10; } });
 console.log(p(Number(process.argv[2])));
 "#,
     );
-    assert!(e9(&tops), "{tops:?}");
+    assert!(!e9(&tops), "{tops:?}");
 }
 
 // PROXY4 R2 (RED on 115fc8fab3: the `=== null` test of a field that holds
@@ -731,15 +732,15 @@ fn pxcall_non_callable_target_has_no_call() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: a callable target gives the Proxy a [[Call]] (the `apply` trap or
-// the forward, 10.5.12), not modeled: the old path (an "E9 Proxy target"
-// degrade). Also when the target node holds an object literal first and a
+// Rule PXAPPLY: a callable target gives the Proxy a [[Call]] (the `apply`
+// trap or the forward, 10.5.12), modeled exactly: no E9 hold, the realm is
+// not held. Also when the target node holds an object literal first and a
 // function stored after the call (one birth site in a loop: the rule is
 // the target node's, re-made as its tokens grow), and through a Proxy of a
 // Proxy (callable when its target is). The Proxies are made in functions:
 // a call of a `new Proxy` binding is its own HIR form (`ProxyApply`).
 #[test]
-fn pxcall_keep_callable_target_stays_e9() {
+fn pxcall_callable_target_is_exact() {
     let wraps = "function wrap1(t: any): any { return new Proxy(t, {}); }\nfunction wrap2(t: any): any { return new Proxy(t, {}); }\n";
     let late = PROXY_CALL.replace(
         "const p = mk();",
@@ -750,11 +751,9 @@ fn pxcall_keep_callable_target_stays_e9() {
         &format!("{wraps}const p = mk();\nconst q: any = wrap1(wrap2(function (): string {{ return N; }}));\ntry {{ q(); }} catch (e) {{}}"),
     );
     for src in [late, nested] {
-        let (tops, _) = solve(&src);
-        assert!(
-            tops.iter().any(|t| t.starts_with("E9 Proxy target")),
-            "callable target: {tops:?}"
-        );
+        let (tops, held) = solve(&src);
+        assert!(!e9(&tops), "callable target, no E9: {tops:?}");
+        assert!(!held, "callable target, realm not held: {tops:?}");
     }
     // A Proxy of a Proxy over an object literal: no [[Call]] either.
     let plain = PROXY_CALL.replace(
@@ -795,19 +794,17 @@ fn pxcallr_method_of_non_callable_proxy_has_no_call() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: a Proxy over a function found as a method has a [[Call]] (10.5.12),
-// not modeled: the old path ("E9 Proxy target"), as for a plain call.
+// Rule PXAPPLY: a Proxy over a function found as a method has a [[Call]]
+// (10.5.12), modeled exactly as for a plain call: no E9 hold.
 #[test]
-fn pxcallr_keep_callable_method_stays_e9() {
+fn pxcallr_callable_method_is_exact() {
     let src = PROXY_CALLR.replace(
         "console.log(p.n);",
         "function wrap1(t: any): any { return new Proxy(t, {}); }\nconst f: any = { m: wrap1((): string => N) };\nconsole.log(f.m(), p.n);",
     );
-    let (tops, _) = solve(&src);
-    assert!(
-        tops.iter().any(|t| t.starts_with("E9 Proxy target")),
-        "callable target: {tops:?}"
-    );
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "callable method, no E9: {tops:?}");
+    assert!(!held, "callable method, realm not held: {tops:?}");
 }
 
 // PERFNOW53 rule PXVAL: the Array-only and value-only rules on a Proxy (c09:

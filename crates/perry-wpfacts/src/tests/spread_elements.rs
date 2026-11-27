@@ -51,8 +51,9 @@ fn mm9_reads(src: &str, key: &str) -> (Vec<String>, bool, bool) {
 fn mm9_src(body: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
 class Svc {{ run() {{ return 1; }} }}
-const j: any = JSON.parse((globalThis as any).host);
+const j: any = JSON.parse(external());
 {body}
 "#
     )
@@ -91,7 +92,7 @@ fn mm9_a_wrapper_store_is_copied() {
 /// node (`sink = w => { w.svc = 7 }`): throws (7 has no `run`).
 #[test]
 fn mm9_an_escaped_wrapper_copies_unknown() {
-    let body = "const w: any = Object(5); (globalThis as any).sink(w); const o: any = { svc: new Svc(), ...w }; console.log(o.svc.run());";
+    let body = "const w: any = Object(5); external(w); const o: any = { svc: new Svc(), ...w }; console.log(o.svc.run());";
     let (got, top, _) = mm9_reads(&mm9_src(body), "run");
     assert!(top, "{got:?}");
 }

@@ -21,6 +21,14 @@
 //!
 //! Once one of them fails, `settle_record_entry` passes the token
 //! (monotone: a released token stays released).
+//!
+//! Rule RP2-false: the array arm (`arrayRecordNeedsIterator(s)` false) sees
+//! `s` only as a value the runtime answers false for
+//! (`Cons::ArrayRecordEntry`). `array_record_enter` answers false only for
+//! an object whose header is an array (`GC_TYPE_ARRAY`: an Array, an
+//! `arguments` object, an instance a native `Array` parent allocates) or a
+//! lazy JSON array; it refuses every other value (a primitive, a function,
+//! a Proxy, a Map or Set, an ordinary object) and the protocol arm runs.
 use crate::model::*;
 
 impl Model {
@@ -80,5 +88,61 @@ impl Model {
         }
         self.record_entry_held = kept;
         !self.wl.is_empty()
+    }
+
+    /// Rule RP2-false: may the array arm of a guarded record see `t`
+    /// (`array_record_enter` answer false for it)? ⊤ and markers (values of
+    /// other units) may be Arrays; so may an Array or `arguments` birth, a
+    /// builtin value whose kind may be an array (`builtins::bobj_may_be_array`,
+    /// `builtins::ns_may_be_array`), an instance of a class whose chain
+    /// reaches a native parent or a value parent (`class A extends Array`),
+    /// and `ObjectProto`, which stands for `%Array.prototype%` too (an Array
+    /// exotic object, ECMA-262 23.1.3). No function, Proxy, prototype object,
+    /// module namespace, ordinary object or plain class instance is.
+    pub(crate) fn array_arm_may_see(&self, t: Tok) -> bool {
+        if t == TOP || self.is_marker(t) {
+            return true;
+        }
+        match &self.toks[t as usize] {
+            TokKind::Top | TokKind::ObjectProto => true,
+            TokKind::Obj(tm, _) => match &self.tmpls[*tm as usize].kind {
+                TmplKind::Arr { .. } | TmplKind::Args { .. } => true,
+                TmplKind::BObj { what, .. } => crate::builtins::bobj_may_be_array(what),
+                TmplKind::Class { .. } => !self.plain_class_chain(*tm),
+                TmplKind::Lit { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => {
+                    false
+                }
+            },
+            TokKind::Builtin(ns) => crate::builtins::ns_may_be_array(*ns),
+            TokKind::Func(..)
+            | TokKind::Bound(_)
+            | TokKind::Proxy(_)
+            | TokKind::ClassObj(_)
+            | TokKind::Proto(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::ModNs(_)
+            | TokKind::NativeProto(..) => false,
+        }
+    }
+
+    /// Is every link of class `c`'s `extends` chain a program class with
+    /// neither a native parent nor a value parent? Its instances are then
+    /// ordinary objects the program allocates.
+    fn plain_class_chain(&self, mut c: TmplId) -> bool {
+        let mut seen = 0usize;
+        loop {
+            let tp = &self.tmpls[c as usize];
+            if tp.native_parent.is_some() || tp.parent_value.is_some() {
+                return false;
+            }
+            match tp.parent {
+                None => return true,
+                Some(p) if p != c && seen < self.tmpls.len() => {
+                    c = p;
+                    seen += 1;
+                }
+                Some(_) => return false,
+            }
+        }
     }
 }

@@ -10,6 +10,10 @@
 //! edge enters (workers and the like). Static imports, re-exports and the
 //! hoisted requires of CommonJS stay live edges.
 //!
+//! When the static edges alone reach every module, no module can leave the
+//! graph, so no activation pass runs: the facts take their activation from
+//! their own final solve (D2, owner 11-24 C1).
+//!
 //! `PERRY_DYNAMIC_REACH=off` keeps every module (A/B measurement);
 //! `PERRY_DYNAMIC_REACH_REPORT=<path>` lists the modules dropped.
 
@@ -41,38 +45,12 @@ pub(super) fn prune(
         return Ok(None);
     }
     let started = std::time::Instant::now();
-    let dynamic_code = perry_hir::has_deferred_dynamic_code_sites()
-        || ctx.native_module_imports.contains("vm")
-        || ctx.uses_data_url_dynamic_import;
-    // DECISIONS 235: a real eval-like source site.
-    let interpreted_sources = !perry_hir::interpreted_source_sites().is_empty()
-        || ctx.native_module_imports.contains("vm")
-        || ctx.uses_data_url_dynamic_import;
-    let Some(activation) = super::program_facts::activation(
-        &ctx.native_modules,
-        super::program_facts::export_sources(ctx),
-        dynamic_code,
-        interpreted_sources,
-        &ctx.patched_builtins.dynamic_code_reach,
-        roots.iter().map(|p| p.display().to_string()).collect(),
-    ) else {
-        return Ok(None);
-    };
-    let Some(live) = activation.live_dynamic_imports() else {
-        eprintln!(
-            "perry: dynamic reach: the activation pass ran past its bounds, nothing dropped ({:.1}s)",
-            started.elapsed().as_secs_f64()
-        );
-        return Ok(Some(activation));
-    };
-    let report = std::env::var_os("PERRY_DYNAMIC_REACH_REPORT");
-    let mut lines: Vec<String> = Vec::new();
     let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
     let key_set: HashSet<PathBuf> = paths.iter().cloned().collect();
-    // Edges: (target, live).
-    let mut edges: HashMap<PathBuf, Vec<(PathBuf, bool)>> = HashMap::new();
+    // Edges: (target, the synthesized `import()` site's (module, specifier)
+    // for a dynamic edge, `None` for a static one).
+    let mut edges: HashMap<PathBuf, Vec<(PathBuf, Option<(String, String)>)>> = HashMap::new();
     let mut entered: HashSet<PathBuf> = HashSet::new();
-    let (mut dynamic_edges, mut dead_edges) = (0usize, 0usize);
     for p in &paths {
         let (imports, exports) = {
             let m = &ctx.native_modules[p];
@@ -93,22 +71,8 @@ pub(super) fn prune(
             ) else {
                 continue;
             };
-            // A synthesized `import()` edge lives when a site a body that
-            // can run holds names its specifier.
-            let alive = !i.is_dynamic || live.contains(&(name.clone(), i.source.clone()));
-            if i.is_dynamic {
-                dynamic_edges += 1;
-                dead_edges += !alive as usize;
-                if report.is_some() {
-                    lines.push(format!(
-                        "edge {} {name} -> {}",
-                        if alive { "live" } else { "dead" },
-                        i.source
-                    ));
-                }
-            }
             entered.insert(t.clone());
-            out.push((t, alive));
+            out.push((t, i.is_dynamic.then(|| (name.clone(), i.source.clone()))));
         }
         for e in &exports {
             let source = match e {
@@ -119,26 +83,88 @@ pub(super) fn prune(
             };
             if let Some(t) = super::reachability::resolve_edge(ctx, p, None, source, &key_set) {
                 entered.insert(t.clone());
-                out.push((t, true));
+                out.push((t, None));
             }
         }
         edges.insert(p.clone(), out);
     }
-    let mut reached: HashSet<PathBuf> = HashSet::new();
-    let mut work: VecDeque<PathBuf> = VecDeque::new();
-    for p in &paths {
-        if roots.contains(p) || !entered.contains(p) {
-            reached.insert(p.clone());
-            work.push_back(p.clone());
-        }
-    }
-    while let Some(p) = work.pop_front() {
-        for (t, alive) in edges.get(&p).into_iter().flatten() {
-            if *alive && reached.insert(t.clone()) {
-                work.push_back(t.clone());
+    let starts: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| roots.contains(*p) || !entered.contains(*p))
+        .cloned()
+        .collect();
+    // The modules reached from the roots over the static edges and the
+    // dynamic edges `alive` keeps.
+    let reach = |alive: &dyn Fn(&(String, String)) -> bool| -> HashSet<PathBuf> {
+        let mut reached: HashSet<PathBuf> = starts.iter().cloned().collect();
+        let mut work: VecDeque<PathBuf> = starts.iter().cloned().collect();
+        while let Some(p) = work.pop_front() {
+            for (t, site) in edges.get(&p).into_iter().flatten() {
+                if site.as_ref().is_none_or(alive) && reached.insert(t.clone()) {
+                    work.push_back(t.clone());
+                }
             }
         }
+        reached
+    };
+    let dynamic_edges = edges
+        .values()
+        .flatten()
+        .filter(|(_, s)| s.is_some())
+        .count();
+    // Every dynamic edge dead still leaves no module behind: nothing can
+    // leave the graph, whatever the pass would find (exact: the pass only
+    // turns dynamic edges dead, and the modules dropped are those the live
+    // edges miss).
+    if reach(&|_| false).len() == paths.len() {
+        eprintln!(
+            "perry: dynamic reach: {dynamic_edges} dynamic edges, every module reached through static edges; nothing to drop, no activation pass ({:.1}s)",
+            started.elapsed().as_secs_f64()
+        );
+        return Ok(None);
     }
+    let dynamic_code = perry_hir::has_deferred_dynamic_code_sites()
+        || ctx.native_module_imports.contains("vm")
+        || ctx.uses_data_url_dynamic_import;
+    // A computed data-URL import runs interpreted code at no site of the
+    // facts model; every other source site runs it where its body runs.
+    let data_url_import = ctx.uses_data_url_dynamic_import;
+    let Some(activation) = super::program_facts::activation(
+        &ctx.native_modules,
+        super::program_facts::export_sources(ctx),
+        dynamic_code,
+        data_url_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        roots.iter().map(|p| p.display().to_string()).collect(),
+    ) else {
+        return Ok(None);
+    };
+    let Some(live) = activation.live_dynamic_imports() else {
+        eprintln!(
+            "perry: dynamic reach: the activation pass ran past its bounds, nothing dropped ({:.1}s)",
+            started.elapsed().as_secs_f64()
+        );
+        return Ok(Some(activation));
+    };
+    let report = std::env::var_os("PERRY_DYNAMIC_REACH_REPORT");
+    let mut lines: Vec<String> = Vec::new();
+    // A synthesized `import()` edge lives when a site a body that can run
+    // holds names its specifier.
+    let mut dead_edges = 0usize;
+    for (_, site) in edges.values().flatten() {
+        let Some(site) = site else { continue };
+        let alive = live.contains(site);
+        dead_edges += !alive as usize;
+        if report.is_some() {
+            lines.push(format!(
+                "edge {} {} -> {}",
+                if alive { "live" } else { "dead" },
+                site.0,
+                site.1
+            ));
+        }
+    }
+    let reached = reach(&|site| live.contains(site));
     let pruned: HashSet<PathBuf> = paths
         .iter()
         .filter(|p| !reached.contains(*p))

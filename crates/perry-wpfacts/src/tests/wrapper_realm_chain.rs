@@ -29,6 +29,7 @@ fn no_unknown_call(pf: &crate::ProgramFacts) -> bool {
 fn converted(prelude: &str, wrapper: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         {prelude}
         class R {{ y = 1; }}
         const o: any = {{ m(a: any) {{ return a.y; }} }};
@@ -59,7 +60,7 @@ fn an_object_on_a_wrapper_has_no_to_primitive() {
 #[test]
 fn a_written_to_primitive_is_read() {
     let pf = converted(
-        "(Object.prototype as any)[Symbol.toPrimitive] = (globalThis as any).hostFn();",
+        "(Object.prototype as any)[Symbol.toPrimitive] = external();",
         "Object(Symbol(\"s\"))",
         SET,
     );
@@ -73,6 +74,7 @@ fn date_and_symbol_wrapper_operands() {
     for operand in ["new Date(0)", "Object(Symbol(\"s\"))"] {
         let pf = facts(&format!(
             r#"
+        declare function external(x?: unknown): any;
             class R {{ y = 1; }}
             const o: any = {{ m(a: any) {{ return a.y; }} }};
             const t: any = {operand};

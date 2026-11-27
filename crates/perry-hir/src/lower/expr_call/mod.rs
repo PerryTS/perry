@@ -167,6 +167,9 @@ mod post_args_dispatch;
 mod prescans;
 mod reflect_args;
 mod regex_string;
+mod sequence_callee;
+#[cfg(test)]
+mod sequence_callee_tests;
 #[cfg(test)]
 mod server_response_call_tests;
 mod static_and_instance;
@@ -313,6 +316,10 @@ fn lower_call_inner(
     // before the callee tail (which lowers a Member, not a Call), so it never
     // clobbers an in-flight memo for the call currently being lowered.
     ctx.prelowered_member_receiver = None;
+    // `(0, ns.m)(args)` on a node-core module namespace lowers as `ns.m(args)`.
+    if let Some(expr) = sequence_callee::try_sequence_member_callee(ctx, call)? {
+        return Ok(expr);
+    }
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 
@@ -663,7 +670,9 @@ fn lower_call_inner(
                         byte_offset: crate::lower::call_token(call),
                     });
                 }
-                if native_module::namespace_call_needs_esm_binding(ctx, expr) {
+                if native_module::namespace_call_needs_esm_binding(ctx, expr)
+                    || native_module::node_namespace_call_patched(ctx, expr)
+                {
                     return Ok(Expr::Call {
                         callee: Box::new(lower_expr(ctx, expr)?),
                         args,

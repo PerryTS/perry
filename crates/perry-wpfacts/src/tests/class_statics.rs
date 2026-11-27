@@ -68,7 +68,7 @@ fn a_static_method_stored_after_its_definition_is_not_constant() {
 
 #[test]
 fn a_class_reaching_unknown_code_or_deleted_from_has_no_constant_statics() {
-    for extra in ["(globalThis as any).hook?.(Pk);", "delete (Pk as any).x;"] {
+    for extra in ["external(Pk);", "delete (Pk as any).x;"] {
         let src = PK.replace(
             "console.log(useIt(Pk));",
             &format!("{extra} console.log(useIt(Pk));"),
@@ -151,6 +151,7 @@ fn a_static_method_named_like_a_written_instance_field_is_constant() {
 fn tracker(extra: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
     class Tracker {{
       items: number[] = [];
       static with(cb: (t: Tracker) => void): number {{ const t = new Tracker(); cb(t); return t.items.length; }}

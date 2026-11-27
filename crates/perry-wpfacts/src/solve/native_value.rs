@@ -27,6 +27,15 @@ impl Model {
         let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
+        // The Worker global's own native (`builtins::worker_global_call`),
+        // whatever `this`.
+        if let Some(n) = identity.strip_prefix(builtins::WORKER_GLOBAL_PREFIX) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::worker_global_call(m, n, call));
+            }
+            return true;
+        }
         // A module member whose effects the runtime declares at the body
         // its dispatch arm calls: the declaration runs, whatever `this`.
         if let Some(e) = builtins::declared_member(identity) {
@@ -70,8 +79,11 @@ impl Model {
             return true;
         }
 
+        // No family model: a prototype method whose effects the runtime
+        // declares without naming `this` runs its declaration, whatever the
+        // receiver (`Performance.prototype.toJSON` as JSON's protocol call).
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
-            return false;
+            return self.declared_proto_call(call, t, identity, this_tok);
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {
@@ -89,6 +101,7 @@ impl Model {
                         fam,
                         Family::Object
                             | Family::Array
+                            | Family::Function
                             | Family::Str
                             | Family::Num
                             | Family::Bool
@@ -98,7 +111,7 @@ impl Model {
             {
                 return self.method_undefined_this(call, t, fam, name);
             }
-            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
+            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity, None),
         };
         if !builtins::native_receiver(self, fam, what, r) {
             if fam == Family::Str {
@@ -107,10 +120,21 @@ impl Model {
             if fam == Family::Function && builtins::never_callable(self, r) {
                 return self.function_this_not_callable(call, t, r, key);
             }
+            if matches!(self.toks[r as usize], TokKind::Proxy(_))
+                && Self::proxy_this_model(fam, name)
+            {
+                if self.bind_done.insert((call, t, r)) {
+                    self.diagnostic_callee(call, t);
+                    self.with_native(call, |m, call| {
+                        builtins::native_prototype_call(m, fam, r, key, call)
+                    });
+                }
+                return true;
+            }
             if builtins::no_this_value(self, fam, what, r) {
                 return self.this_value_throws(call, t, r);
             }
-            return self.declared_proto_call(call, t, identity);
+            return self.declared_proto_call(call, t, identity, Some(r));
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
@@ -131,7 +155,11 @@ impl Model {
     /// `RequireObjectCoercible(this)` or `thisStringValue` (22.1.3) or
     /// `thisNumberValue` / `thisBooleanValue` / `thisSymbolValue` /
     /// `thisBigIntValue` (21.1.3, 20.3.3, 20.4.3, 21.2.3): a TypeError before
-    /// any argument is used. No argument reaches other code. (The three
+    /// any argument is used. `Function.prototype`'s `call`, `apply`, `bind`
+    /// and `toString` throw a TypeError first too (IsCallable(this) is false:
+    /// 20.2.3.3 step 2, 20.2.3.1 step 2, 20.2.3.2 step 2, 20.2.3.5 step 3);
+    /// its `@@hasInstance` is OrdinaryHasInstance, false for a non-callable
+    /// `this` (20.2.3.6, 7.3.21 step 1). No argument reaches other code. (The three
     /// receiver-independent `Object.prototype` methods are `ObjectProtoOwn`;
     /// a method whose effects the runtime declares ran as `declared_member`.)
     fn method_undefined_this(&mut self, call: CallId, t: Tok, fam: Family, name: &str) -> bool {
@@ -140,6 +168,10 @@ impl Model {
             if fam == Family::Object && name == "toString" {
                 let ret = self.calls[call as usize].ret;
                 self.add_prim(ret, prim::STR);
+            }
+            if fam == Family::Function && name == "@@hasInstance" {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::BOOL);
             }
         }
         true
@@ -151,13 +183,50 @@ impl Model {
     /// naming `this`: the declaration runs, whatever the receiver (one of
     /// another brand throws before any of it: the declaration is a
     /// superset). `false`: no such declaration, the unknown callee's arm.
-    fn declared_proto_call(&mut self, call: CallId, t: Tok, identity: &str) -> bool {
-        let Some(e) = builtins::declared_proto_method(identity) else {
+    ///
+    /// A declaration that names `this` (`EventTarget.prototype.addEventListener`
+    /// keeps its listener in an internal slot of the receiver) runs per
+    /// receiver token `this_tok` (else the call's own `this`; each value of
+    /// a receiver node on its own, `Cons::NativeThis`). A ⊤ receiver is
+    /// unknown code's object: the unknown callee's arm. With `this`
+    /// undefined the receiver slot holds nothing (a receiver of another
+    /// brand throws a realm TypeError before any of it: a superset).
+    fn declared_proto_call(
+        &mut self,
+        call: CallId,
+        t: Tok,
+        identity: &str,
+        this_tok: Option<Tok>,
+    ) -> bool {
+        if let Some(e) = builtins::declared_proto_method(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+        let Some(e) = builtins::declared_receiver_method(identity) else {
             return false;
         };
-        if self.bind_done.insert((call, t, u32::MAX - 7)) {
+        let r = match (this_tok, &self.calls[call as usize].this) {
+            (Some(r), _) | (None, &ThisArg::Tok(r)) => Some(r),
+            (None, &ThisArg::Node(n)) => {
+                if self.bind_done.insert((call, t, u32::MAX - 5)) {
+                    self.cons(n, Cons::NativeThis { call, f: t });
+                }
+                return true;
+            }
+            (None, ThisArg::Undef) => None,
+        };
+        if r == Some(TOP) {
+            return false;
+        }
+        if self.bind_done.insert((call, t, r.unwrap_or(u32::MAX - 8))) {
             self.diagnostic_callee(call, t);
-            self.with_native(call, |m, call| builtins::run_function(m, e, call));
+            self.with_native(call, |m, call| match r {
+                Some(r) => builtins::run_native(m, e, r, call),
+                None => builtins::run_function(m, e, call),
+            });
         }
         true
     }
@@ -194,6 +263,25 @@ impl Model {
             }
         }
         true
+    }
+
+    /// A native (family `fam`, member `name`) whose model holds for a Proxy
+    /// `this` (`function_method`), so the receiver rules hand it the Proxy
+    /// (`native_call`; `Cons::NativeThis` in `proxy_apply`). Only these
+    /// `Function.prototype` methods: `toString` tests IsCallable only, fixed at
+    /// ProxyCreate from the target (ECMA-262 20.2.3.5 steps 2-4, 10.5.15
+    /// step 7): a String, else the realm's TypeError; no trap runs (the
+    /// runtime's `function_prototype_to_string_thunk`: `proxy_wraps_callable`).
+    /// `call` and `apply` are Call(func, thisArg, args) after IsCallable
+    /// (20.2.3.3, 20.2.3.1): the Proxy's [[Call]] (`call_tok`, rule PXAPPLY:
+    /// the apply trap or the forward once the target is callable), else the
+    /// TypeError. `@@hasInstance` is OrdinaryHasInstance (20.2.3.6, 7.3.22):
+    /// false on a non-callable `this`, else the Proxy's [[Get]] of
+    /// `prototype` (its `get` trap) and the walk of the argument's chain.
+    /// Not `bind` (BoundFunctionCreate's [[GetPrototypeOf]], HasOwnProperty
+    /// and Get of `length`/`name` run the traps: no model yet).
+    pub(super) fn proxy_this_model(fam: Family, name: &str) -> bool {
+        fam == Family::Function && matches!(name, "call" | "apply" | "toString" | "@@hasInstance")
     }
 
     /// A `String.prototype` method called with a receiver `r` of another

@@ -394,12 +394,14 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
         }
         _ => match super::effects::declared_ctor(name) {
             // The realm's constructor, while the global holds it: what its
-            // declaration says. A write under the name (now, or later in the
-            // solve: the replay) is the unknown constructor again.
+            // declaration says. A write of a value under the name (now, or
+            // later in the solve: the replay) is the unknown constructor
+            // again; a delete only makes the binding absent, whose `new`
+            // throws the realm's ReferenceError (`native_value_written`).
             Some(e) if !m.unit_mode => {
                 let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                 let a = m.atom(name);
-                if native_written(m, g, a) {
+                if super::native_protocol::native_value_written(m, g, a) {
                     unknown_method(m, call, &format!("argument of written constructor {name}"));
                 } else {
                     m.native_missing.push((g, a, NativeMiss::New(call)));

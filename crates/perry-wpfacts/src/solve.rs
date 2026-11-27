@@ -13,15 +13,13 @@ mod copy;
 mod define;
 mod lookup;
 pub(crate) mod map_vals;
+mod not_error;
 mod own_read;
 mod range_inputs;
 mod record_entry;
 pub(crate) use range_inputs::{grow_crange, grow_range, grow_rule_range};
 
 use crate::builtins;
-
-/// Work between two checks of the time budget (beside every 1024 pops).
-const BUDGET_WORK_STEP: u64 = 1 << 22;
 
 mod call_and_construct;
 mod native_value;
@@ -42,15 +40,18 @@ mod store;
 mod escape;
 mod fields;
 mod json_pos;
+pub(crate) mod json_rt;
 mod shaped_keys;
 pub(crate) mod strs;
 mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
 // computed reads and calls on the same partition of ToPropertyKey's inputs.
-/// An escaped value (unknown code holds it) that is no parameter or
+/// An escaped value that code no contract describes holds (it may write
+/// any key of it, `Model::is_escaped_writer`) and that is no parameter or
 /// argument marker: beside ⊤ it is that ⊤, since every rule does to ⊤ at
-/// least what it does to the value. The one predicate of the arrival rule
+/// least what it does to the value. A value handed only by contract is not:
+/// a program store through ⊤ beside it must still write it. The one predicate of the arrival rule
 /// (`add_tokens_s`, with the markers that read as ⊤, DECISIONS 42), of ⊤'s
 /// arrival at a node that lists the value, and of a ⊤ node's pop.
 pub(crate) fn escaped_beside_top<V>(
@@ -75,7 +76,12 @@ fn index_has_numeric_key(prim: u16) -> bool {
 /// How many times the work bound a widened solve may use before it stops.
 const WIDENED_WORK: u64 = 1000;
 
+mod fixpoint;
+mod implicit;
+pub(crate) use implicit::implsrc_on;
 mod lines;
+mod markers;
+mod profile;
 
 impl Model {
     // ---------------------------------------------------------------- nodes
@@ -212,7 +218,7 @@ impl Model {
             // is an escaped value (`Model::top_beside`): unknown code holds
             // it, so beside ⊤ it is that ⊤.
             if marker_top_bit(&self.marker_top, t)
-                || escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                || escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
             {
                 later.push(t);
                 continue;
@@ -231,7 +237,7 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
-                if self.ledger.is_some() {
+                if self.ledger.is_some() || self.k3_held.is_some() {
                     ledger_gone = std::mem::take(&mut later);
                 }
             } else {
@@ -254,19 +260,19 @@ impl Model {
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
         // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 let gone: Vec<Tok> = self.nodes[n as usize]
                     .pts
                     .to_sorted()
                     .into_iter()
                     .filter(|&t| {
-                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                        escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
                     })
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
             let node = &mut self.nodes[n as usize];
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
             node.pts = self
@@ -279,7 +285,7 @@ impl Model {
                 self.charge_work(before as u64);
             }
         }
-        if !ledger_gone.is_empty() {
+        if !ledger_gone.is_empty() && (self.ledger.is_some() || self.k3_held.is_some()) {
             self.ledger_again_beside_top(n, &ledger_gone);
         }
         if self.prov.is_some() && !fresh.is_empty() {
@@ -364,6 +370,7 @@ impl Model {
         !matches!(
             c,
             Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
@@ -373,10 +380,12 @@ impl Model {
                 | Cons::Falsy { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
+                | Cons::ArrayRecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
@@ -428,285 +437,6 @@ impl Model {
         (self.cur_src, self.cur_why) = saved;
     }
 
-    /// Charge the work since the last mark to what it was spent for, and
-    /// from now on to `n` (a popped node) or, with `NO_NODE`, to `phase`
-    /// (PERRY_FACTS_PROFILE only).
-    pub fn prof_mark(&mut self, n: NodeId, phase: &'static str) {
-        if let Some(s) = self.stop_top.as_mut() {
-            s.phase = phase;
-        }
-        let Some(p) = self.prof.as_mut() else { return };
-        let (at, w0, ph) = p.at;
-        let w = self.work.get() - w0;
-        if w != 0 {
-            if at == NO_NODE {
-                *p.phase.entry(ph).or_default() += w;
-            } else {
-                *p.node.entry(at).or_default() += w;
-            }
-        }
-        p.at = (n, self.work.get(), phase);
-        if self.work.get() >= p.next_curve {
-            p.next_curve = (self.work.get() / WorkProfile::STEP + 1) * WorkProfile::STEP;
-            let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
-            let succ: usize = self.nodes.iter().map(|n| n.succ.len()).sum();
-            let stored_entries = self
-                .native_writes
-                .values()
-                .filter(|w| !w.stored.is_empty())
-                .count();
-            let stored_values: usize = self.native_writes.values().map(|w| w.stored.len()).sum();
-            eprintln!(
-                "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={} succ={succ} answered={} answer_keys={} stored_entries={stored_entries} stored_values={stored_values} replays={} fed={}",
-                self.work.get(),
-                self.pops,
-                self.nodes.len(),
-                self.pts_entries,
-                cons,
-                self.toks.len(),
-                self.sum.insts.len(),
-                self.wl.len(),
-                self.native_answered.len(),
-                self.native_answer_nodes.len(),
-                self.native_replays,
-                self.native_fed
-            );
-        }
-    }
-
-    /// The work profile (PERRY_FACTS_PROFILE): phases, steps, rule kinds and
-    /// the 20 nodes the most work was spent for.
-    pub fn prof_report(&mut self) {
-        let Some(p) = self.prof.take() else { return };
-        let mut ph: Vec<_> = p.phase.iter().collect();
-        ph.sort_by(|a, b| b.1.cmp(a.1));
-        let in_pops: u64 = p.node.values().sum();
-        eprintln!(
-            "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
-            self.work.get(), p.step[0], p.step[1], p.step[2], p.step[3]
-        );
-        let [sites, shaped, no_ctor] = self.key_shape_census;
-        eprintln!(
-            "perry: wpfacts key shapes sites={sites} shaped={shaped} no_constructor={no_ctor} distinct={}",
-            self.key_shapes.len().saturating_sub(1)
-        );
-        let [own, gated, obj_key] = self.own_read_census;
-        eprintln!("perry: wpfacts own reads generated={own} gated={gated} object_key={obj_key}");
-        let (logical, stored, distinct) = self.pts_storage();
-        eprintln!(
-            "perry: wpfacts sets logical={logical} stored={stored} distinct={distinct} copies={}",
-            self.sets.copies
-        );
-        let mut natives: Vec<_> = p.natives.iter().collect();
-        natives.sort_by(|a, b| a.0.cmp(b.0));
-        for (name, (runs, sites)) in natives {
-            eprintln!(
-                "perry: wpfacts native-effects {name} runs={runs} sites={}",
-                sites.len()
-            );
-        }
-        if self.optimistic_json_key {
-            let stores = self.json_key_fired.iter().filter(|f| f.0).count();
-            eprintln!(
-                "perry: wpfacts # optimistic json-key sites={} reads={} stores={stores}",
-                self.json_key_fired.len(),
-                self.json_key_fired.len() - stores
-            );
-            let mut at: std::collections::BTreeMap<String, usize> = Default::default();
-            for &(st, n) in &self.json_key_fired {
-                let name = self
-                    .node_names
-                    .get(n as usize)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{}#{n}", self.labels[n as usize]));
-                *at.entry(format!("{} {name}", if st { "S" } else { "L" }))
-                    .or_default() += 1;
-            }
-            let mut at: Vec<_> = at.into_iter().collect();
-            at.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            for (k, c) in at.iter().take(40) {
-                eprintln!("perry: wpfacts # optimistic json-key at {c} {k}");
-            }
-        }
-        let mut ks: Vec<_> = p.kind.iter().collect();
-        ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
-        for (k, (n, w, rn, rw)) in ks.iter().take(25) {
-            eprintln!(
-                "perry: wpfacts kindwork {k} applies={n} work={w} attach={rn} attachwork={rw}"
-            );
-        }
-        let mut ns: Vec<_> = p.node.iter().map(|(n, w)| (*w, *n)).collect();
-        ns.sort_unstable_by(|a, b| b.cmp(a));
-        for (w, n) in ns.into_iter().take(20) {
-            let node = &self.nodes[n as usize];
-            let mut kinds: crate::pts::FxHashMap<&'static str, u32> = Default::default();
-            for c in &node.cons {
-                *kinds.entry(c.kind_name()).or_default() += 1;
-            }
-            let mut kinds: Vec<_> = kinds.into_iter().collect();
-            kinds.sort_by(|a, b| b.1.cmp(&a.1));
-            kinds.truncate(6);
-            let some: Vec<String> = node
-                .pts
-                .to_sorted()
-                .iter()
-                .take(8)
-                .map(|&t| self.tok_name(t))
-                .collect();
-            eprintln!(
-                "perry: wpfacts nodework #{n} {} work={w} pts={} top={} succ={} cons={} kinds={kinds:?} some={some:?}",
-                self.labels[n as usize],
-                node.pts.len(),
-                node.pts.contains_tok(TOP) as u8,
-                node.succ.len(),
-                node.cons.len()
-            );
-        }
-    }
-
-    /// Sizes of the solver's structures (progress diagnostics).
-    pub fn size_line(&self) -> String {
-        let visits: usize = self.visits.values().map(|v| v.len()).sum();
-        let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
-        let succ: usize = self.nodes.iter().map(|n| n.succ.len()).sum();
-        let pts: usize = self.nodes.iter().map(|n| n.pts.len()).sum();
-        let delta: usize = self.nodes.iter().map(|n| n.delta.len()).sum();
-        let rss_mb = std::fs::read_to_string("/proc/self/statm")
-            .ok()
-            .and_then(|t| t.split_whitespace().nth(1)?.parse::<u64>().ok())
-            .map(|p| p * 4096 / (1 << 20))
-            .unwrap_or(0);
-        let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
-        let delta_cap = self.pending.retained_bytes() / std::mem::size_of::<u32>();
-        let big: usize = self.nodes.iter().filter(|n| n.pts.is_hashed()).count();
-        let mut hubs: Vec<(usize, usize)> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.succ.len(), i))
-            .filter(|x| x.0 > 100_000)
-            .collect();
-        hubs.sort_unstable_by(|a, b| b.cmp(a));
-        let max_succ: Vec<String> = hubs
-            .iter()
-            .take(6)
-            .map(|&(l, i)| {
-                let n = &self.nodes[i];
-                format!(
-                    "{}#{i}:{l}:p{}:n{}:top{}",
-                    self.labels[i],
-                    n.prim,
-                    n.pts.len(),
-                    n.pts.contains_tok(TOP) as u8
-                )
-            })
-            .collect();
-        let max_succ = max_succ.join(",");
-        let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
-        let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
-        format!(
-            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} escaped={} entries={}",
-            self.walk_nodes.len(),
-            self.relays.len(),
-            self.pops,
-            self.wl.len(),
-            self.nodes.len(),
-            cons,
-            succ,
-            pts,
-            delta,
-            self.calls.len(),
-            self.stores.len(),
-            self.toks.len(),
-            self.tmpls.len(),
-            self.bind_done.len(),
-            self.chain_done.len(),
-            self.callthis_done.len(),
-            visits,
-            self.any_walks.len(),
-            self.cv_nodes.len(),
-            self.cp_nodes.len(),
-            self.escaped.len(),
-            self.pts_entries
-        )
-    }
-
-    /// Provenance of the generic builtin function value (`builtin-fn:Any`,
-    /// the one token `builtin_fn` interns) under `PERRY_FACTS_RELATIONS`:
-    /// each new arrival writes `A addbf <node> <tok> src=<cur_src>
-    /// @<file>:<line>` (a propagation names its source node; diagnostic only).
-    #[track_caller]
-    fn rel_generic_fn_arrival(&mut self, n: NodeId, toks: &Tokens<'_>) {
-        let Some(&bf) = self.tok_index.get(&TokKind::BuiltinFn(Native::Any)) else {
-            return;
-        };
-        if !toks.iter().any(|&t| t == bf) || self.nodes[n as usize].pts.contains_tok(bf) {
-            return;
-        }
-        let at = std::panic::Location::caller();
-        let f = at.file();
-        let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
-        let line = format!("A addbf {n} {bf} src={} @{f}:{}", self.cur_src, at.line());
-        if let Some(r) = self.relations.as_mut() {
-            r.push(line);
-        }
-    }
-
-    /// `PERRY_WPF_FILTER_CHECK`: a token new at the output of a
-    /// `Cons::FieldTruthy` (not ⊤, not a marker) must be in one of its
-    /// hosts' sets now; the first 5 that are not are printed.
-    fn filter_check(&mut self, n: NodeId, toks: Tokens<'_>) {
-        let Some(hosts) = self.ft_check.as_ref().and_then(|m| m.get(&n)) else {
-            return;
-        };
-        let mut bad = Vec::new();
-        for &t in toks.iter() {
-            if t == TOP || self.is_marker(t) || self.nodes[n as usize].pts.contains_tok(t) {
-                continue;
-            }
-            if !hosts
-                .iter()
-                .any(|&h| self.nodes[h as usize].pts.contains_tok(t))
-            {
-                bad.push((t, hosts.clone()));
-            }
-        }
-        for (t, hosts) in bad {
-            self.ft_violations += 1;
-            if self.ft_violations > 5 {
-                continue;
-            }
-            let body = |m: &Self, x: NodeId| {
-                let f = m.node_fn.get(x as usize).copied().unwrap_or(u32::MAX);
-                m.funcs
-                    .get(f as usize)
-                    .map_or("-".to_string(), |fi| fi.name.clone())
-            };
-            let mut rules = Vec::new();
-            for &h in &hosts {
-                for c in &self.nodes[h as usize].cons {
-                    if let Cons::FieldTruthy { key, test, dst } = *c {
-                        if dst == n {
-                            rules.push(format!(
-                                "fieldtruthy host {h} key {} test {test} (body {})",
-                                self.key_name(key),
-                                body(self, h)
-                            ));
-                        }
-                    }
-                }
-            }
-            eprintln!(
-                "FILTER-CHECK violation #{}: dst {n} (body {}) tok {t} kind {} src {} rules [{}]",
-                self.ft_violations,
-                body(self, n),
-                self.tok_kind_word(t),
-                self.cur_src,
-                rules.join("; ")
-            );
-        }
-    }
-
     /// Seed a token (an input fact outside the solver rules: logged).
     #[track_caller]
     /// `hold_ledger` (LEDG3): escaped tokens `toks` leave `n` beside its ⊤
@@ -715,6 +445,10 @@ impl Model {
     /// records that, so it does not depend on whether ⊤ or the token reached
     /// `n` first.
     fn ledger_again_beside_top(&mut self, n: NodeId, toks: &[Tok]) {
+        if let Some(h) = self.k3_held.as_mut() {
+            let fs = toks.iter().copied().filter(|&t| matches!(self.toks[t as usize], TokKind::Func(..)));
+            h.entry(n).or_default().extend(fs);
+        }
         let sinks: Vec<(u32, Option<Tok>)> = self.nodes[n as usize]
             .cons
             .iter()
@@ -731,7 +465,7 @@ impl Model {
             let root = l.enter_sink(n);
             for &t in toks {
                 if retained != Some(t)
-                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                    && escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
                 {
                     l.again(t, reason, std::panic::Location::caller());
                 }
@@ -1030,6 +764,8 @@ impl Model {
                 Cons::Identity { .. }
                     | Cons::HasProp { .. }
                     | Cons::OwnProp { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::Meta { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
@@ -1091,6 +827,12 @@ impl Model {
         if self.aborted {
             return;
         }
+        if self.foreign_rule(n) {
+            let f = self.cur_fn;
+            let a = self.act.as_mut().unwrap();
+            a.foreign.entry(f).or_default().push(crate::model::Foreign::Cons(n, ci, c, false));
+            return;
+        }
         self.own_refuted_cons(n, c);
         if defer {
             // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
@@ -1102,6 +844,9 @@ impl Model {
 
     /// Apply the attached constraint `c` of `n` to what `n` holds now.
     pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
+        if matches!(c, Cons::Detached) || self.inert_node(n) {
+            return;
+        }
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -1111,6 +856,10 @@ impl Model {
         self.nodes[n as usize].pts.sorted_into(&mut toks);
         // The replay is solve work: the bound covers it.
         self.charge_work(toks.len() as u64 + 1);
+        if self.past_work_bound() {
+            self.bufs.push(toks);
+            return;
+        }
         if let Some(p) = self.prof.as_mut() {
             let e = p.kind.entry(c.kind_name()).or_default();
             e.2 += 1;
@@ -1140,279 +889,6 @@ impl Model {
         self.bufs.push(toks);
     }
 
-    /// Work no solve has run yet: what was added since the last one (a
-    /// contract check's escapes and the instances they make) is part of
-    /// the unit's facts only once solved.
-    pub(crate) fn unsolved(&self) -> bool {
-        !self.wl.is_empty() || !self.sum.pending.is_empty() || !self.marker_links.is_empty()
-    }
-
-    pub fn solve(&mut self) {
-        self.solve_fixpoint();
-        // The interned sets stay with their nodes; their index is the solve's.
-        self.sets.clear();
-    }
-
-    /// R-ESCLATE (DECISIONS 42, `Model::top_beside`): an escaped value
-    /// beside ⊤ is that ⊤. A node that held ⊤ and a value before the value
-    /// escaped drops the value, as it does when ⊤ arrives after the escape
-    /// (`add_tokens_s`) or the escaped value after ⊤. The prune visits every
-    /// node, so it runs once the work since the last one reaches the node
-    /// count: it costs at most the work it follows. A dropped member leaves
-    /// the node's delta too. One that escapes between two prunes may still
-    /// be delivered: the node delivered ⊤ beside it, so the receiver holds
-    /// ⊤ and drops it on arrival (`add_tokens_s`).
-    fn prune_late_escaped(&mut self) {
-        let late = std::mem::take(&mut self.late_esc);
-        self.late_esc_at = self.work.get();
-        let mut members = Vec::new();
-        for n in 0..self.nodes.len() {
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
-            let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
-            let node = &mut self.nodes[n];
-            if !node.pts.contains_tok(TOP) {
-                continue;
-            }
-            // Every other member that escaped before this prune left at an
-            // earlier one, or when it or ⊤ arrived.
-            let holds = if late.len() < node.pts.len() {
-                late.iter().any(|&t| cover(t) && node.pts.contains_tok(t))
-            } else {
-                members.clear();
-                node.pts.sorted_into(&mut members);
-                members.iter().any(|&t| cover(t))
-            };
-            if !holds {
-                continue;
-            }
-            if self.ledger.is_some() {
-                members.clear();
-                node.pts.sorted_into(&mut members);
-                let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
-                self.ledger_again_beside_top(n as NodeId, &gone);
-            }
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
-            let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
-            let node = &mut self.nodes[n];
-            let old = std::mem::take(&mut node.pts);
-            let before = old.len() as u64;
-            node.pts = self.sets.retain(old, |t| !cover(t));
-            let pending = node.delta.len() as u64;
-            self.pending.retain(&mut node.delta, |t| !cover(t));
-            node.dropped = true;
-            self.charge_work(before + pending);
-        }
-    }
-
-    fn solve_fixpoint(&mut self) {
-        self.rel_phase = b'S';
-        self.spelled_atoms.get_or_insert(self.atoms.len());
-        self.mark_params();
-        self.members_settled.get_mut().clear();
-        let mut delta = crate::delta::Delta::default();
-        loop {
-            self.prof_mark(NO_NODE, "instances");
-            self.fill_instances();
-            self.prof_mark(NO_NODE, "marker links");
-            self.replay_marker_links();
-            self.prof_mark(NO_NODE, "settle");
-            if !self.late_esc.is_empty()
-                && self.work.get() >= self.late_esc_at.saturating_add(self.nodes.len() as u64)
-            {
-                self.prof_mark(NO_NODE, "late escapes");
-                self.prune_late_escaped();
-            }
-            let Some(n) = self.wl.pop_front() else {
-                if self.sum.pending.is_empty()
-                    && self.marker_links.is_empty()
-                    && !self.settle_for_in()
-                    && !self.settle_val_runs()
-                    && !self.settle_define()
-                    && !self.settle_proto_first()
-                    && !self.settle_record_entry()
-                    && !self.settle_ta_len()
-                    && !crate::builtins::settle_native_given(self)
-                {
-                    break;
-                }
-                continue;
-            };
-            self.pops += 1;
-            self.prof_mark(n, "");
-            if self.aborted {
-                return;
-            }
-            if self.profile.is_some() && self.pops & 0x3ffff == 0 {
-                eprintln!("perry: wpfacts progress {}", self.size_line());
-            }
-            // The time budget is checked every 1024 pops, and also once the
-            // work counter has advanced by `BUDGET_WORK_STEP` since the last
-            // check: a pop can cost millions of work units, and then 1024
-            // pops outlast any budget.
-            if self.pops & 0x3ff == 0
-                || self.work.get() >= self.budget_work_at.saturating_add(BUDGET_WORK_STEP)
-            {
-                self.budget_work_at = self.work.get();
-                let over_time = self
-                    .budget
-                    .is_some_and(|(start, limit)| start.elapsed() > limit);
-                if over_time || (self.max_pts != 0 && self.pts_entries > self.max_pts) {
-                    self.aborted = true;
-                    return;
-                }
-            }
-            let (dprim, dstrs, drange) = {
-                let node = &mut self.nodes[n as usize];
-                node.in_wl = false;
-                self.pending.take(&mut node.delta, &mut delta);
-                (
-                    std::mem::take(&mut node.dprim),
-                    std::mem::take(&mut node.dstrs),
-                    std::mem::take(&mut node.drange) && node.prim & (prim::NUM | prim::STR) != 0,
-                )
-            };
-            if delta.is_empty() && dprim == 0 && !dstrs && !drange {
-                continue;
-            }
-            if self.nodes[n as usize].front_watch && !delta.is_empty() {
-                let ts: Vec<Tok> = delta.iter().copied().collect();
-                self.rest_front_arrived(n, &ts);
-            }
-            // Only a node's string constants (`Node::strs`) and/or its
-            // intervals (`model::range`: a Number's, a String's code) grew:
-            // re-deliver them along the edges (STR with the constants, the
-            // interval's kinds with it) and re-run only the rules that read
-            // them (`Cons::carries_strs`, `Cons::carries_range`). Each lattice
-            // keeps its own predicate.
-            let meta_only = delta.is_empty() && dprim == 0;
-            let rprim = if drange {
-                self.nodes[n as usize].prim & (prim::NUM | prim::STR)
-            } else {
-                0
-            };
-            let sprim = dprim | rprim | if dstrs { prim::STR } else { 0 };
-            let sstrs = self.nodes[n as usize].strs;
-            // Sets change interned (`SetTable::extend`); one made outside
-            // this solve (an earlier solve, whose index is gone) is interned
-            // here, so covering below stays a pointer test.
-            let own = std::mem::take(&mut self.nodes[n as usize].pts);
-            self.nodes[n as usize].pts = self.sets.intern(own);
-            delta.prepare();
-            let delivery_overhead = delta.delivery_overhead();
-            // Index loops (no clone of the lists): successors and
-            // constraints appended while this runs already saw the full set.
-            self.cur_src = n;
-            self.cur_why = u32::MAX;
-            let ncons0 = self.nodes[n as usize].cons.len();
-            self.charge_work((delta.len() as u64 + 1) * ncons0 as u64);
-            if let Some(p) = self.prof.as_mut() {
-                p.step[0] += (delta.len() as u64 + 1) * ncons0 as u64;
-            }
-            if self.profile.is_some() {
-                let e = self.label_work.entry(self.labels[n as usize]).or_default();
-                e.1 += delta.len() as u64 * ncons0 as u64;
-                e.2 += 1;
-            }
-            if self.past_work_bound() {
-                return;
-            }
-            // A value-copy edge delivers the source's Numbers with their
-            // interval (`add_tokens`).
-            self.cur_range = Some(self.rg(n));
-            if self.prov.is_some() {
-                (self.prov_mode, self.prov_rule) = (crate::provenance::PM_COPY, None);
-                self.prov_in_set(0);
-            }
-            let mut i = 0;
-            while i < self.nodes[n as usize].succ.len() {
-                let s = self.nodes[n as usize].succ[i];
-                if self.try_copy_delivery(n, s, i as u32, &delta, sprim, sstrs) {
-                    self.charge_work(1 + delivery_overhead);
-                    if let Some(p) = self.prof.as_mut() {
-                        p.step[1] += 1 + delivery_overhead;
-                    }
-                    if self.past_work_bound() {
-                        return;
-                    }
-                    i += 1;
-                    continue;
-                }
-                let (covered, checks) = if delta.is_empty() {
-                    (true, 1)
-                } else {
-                    self.copy_coverage(n, s, Tokens::Delivery(&delta, i as u32))
-                };
-                let toks = if covered {
-                    Tokens::Slice(&[])
-                } else {
-                    Tokens::Delivery(&delta, i as u32)
-                };
-                let visits = toks.len() as u64;
-                self.charge_work(visits + checks + delivery_overhead);
-                if let Some(p) = self.prof.as_mut() {
-                    p.step[2] += visits + checks + delivery_overhead;
-                }
-                if self.profile.is_some() {
-                    self.label_work
-                        .entry(self.labels[n as usize])
-                        .or_default()
-                        .0 += visits;
-                }
-                if self.past_work_bound() {
-                    return;
-                }
-                if covered {
-                    self.add_tokens_s(s, toks, sprim, sstrs);
-                } else {
-                    let extra = self.copy_to(n, s, toks, sprim, sstrs);
-                    self.charge_work(extra);
-                    if let Some(p) = self.prof.as_mut() {
-                        p.step[3] += extra;
-                    }
-                    if self.past_work_bound() {
-                        return;
-                    }
-                }
-                i += 1;
-            }
-            self.cur_range = None;
-            let ncons = self.nodes[n as usize].cons.len();
-            for i in 0..ncons {
-                let c = self.nodes[n as usize].cons[i];
-                let mut p = dprim;
-                if !meta_only || c.carries_range() {
-                    p |= rprim;
-                }
-                if dstrs && c.carries_strs() {
-                    p |= prim::STR;
-                }
-                if meta_only && p == 0 {
-                    continue;
-                }
-                self.cur_src = n;
-                self.cur_why = u32::MAX;
-                if self.prov.is_some() {
-                    (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
-                    self.prov_in_set(0);
-                }
-                let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, i as u32));
-                self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
-                if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
-                    s.leave_rule(r0);
-                }
-            }
-            delta.clear();
-        }
-        self.cur_src = NO_NODE;
-        self.cur_why = u32::MAX;
-        (self.prov_mode, self.prov_rule) = (crate::provenance::PM_ADD, None);
-        if self.prov.is_some() {
-            self.prov_in_set(0);
-        }
-        #[cfg(debug_assertions)]
-        self.assert_shadowed_complete();
-    }
-
     // --------------------------------------------------------------- fields
 
     /// The node holding the prototype objects of `t`.
@@ -1435,6 +911,11 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
         self.rel(|| format!("protonode {n} {t}"));
+        // Rule PXNEWT: an object made with a Proxy new target has the
+        // prototype its `prototype` [[Get]] gives (`proxy_nt_inst`) only.
+        if self.proxy_nt_toks.contains(&t) {
+            return n;
+        }
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {
@@ -1592,6 +1073,12 @@ impl Model {
         for t in toks.iter() {
             match self.toks[*t as usize] {
                 TokKind::ObjectProto => return None,
+                // A realm prototype taken as a value
+                // (`builtins::realm_proto_value`) is one object of its own:
+                // an operation through it is on it alone, and the lookups
+                // that pass it ask it under its identity
+                // (`builtins::intrinsic_miss_on`).
+                TokKind::NativeProto(..) if builtins::realm_proto_of(self, *t).is_some() => {}
                 TokKind::NativeProto(..) => native = true,
                 _ => {}
             }
@@ -1621,12 +1108,53 @@ impl Model {
             }
             return self.apply_tokens(n, c, Tokens::Slice(&rest), prim);
         }
+        // GUARDS1: a receiver-only operation (a store, a definition, a
+        // delete) through the alias changes the builtin prototype it holds,
+        // not `%Object.prototype%` (`Model::objproto_direct`); every other
+        // operation keeps counting as one on `%Object.prototype%`.
+        let saved = self.objproto_alias;
         if let Some(v) = self.native_proto_alias(c, toks) {
-            return self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
+            self.objproto_alias = matches!(
+                c,
+                Cons::Store { .. }
+                    | Cons::DeleteKey { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::DefineKey { .. }
+                    | Cons::DefineAll { .. }
+                    | Cons::DefineDesc { .. }
+            );
+            self.apply_tokens_on(n, c, Tokens::Slice(&v), prim);
+            self.objproto_alias = saved;
+            return;
         }
+        self.objproto_alias = false;
         self.apply_tokens_on(n, c, toks, prim);
+        self.objproto_alias = saved;
     }
     fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if crate::hold_ledger::blast()
+            && self.ledger.as_ref().is_some_and(|l| l.cur == u32::MAX)
+            && toks.iter().any(|&t| t == crate::model::TOP)
+        {
+            let k = self.top_origin_id(n);
+            let rest: Vec<Tok> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != crate::model::TOP)
+                .collect();
+            if !rest.is_empty() || prim != 0 {
+                self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
+            }
+            let saved = self.ledger.as_mut().unwrap().enter_top(k);
+            self.apply_tokens_on_b(n, c, Tokens::Slice(&[crate::model::TOP]), 0);
+            if let Some(l) = self.ledger.as_mut() {
+                l.leave(saved);
+            }
+            return;
+        }
+        self.apply_tokens_on_b(n, c, toks, prim);
+    }
+    fn apply_tokens_on_b(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if let Some(d) = self.diagnostic.as_mut() {
             let saved = (d.cur_call.take(), d.cause_node.replace(n));
             self.apply_tokens_in(n, c, toks, prim);
@@ -1693,6 +1221,51 @@ impl Model {
                 },
                 _ => None,
             };
+            // One realm constructor (ECMA-262 13.3.7.1): the chain is the
+            // class's prototype, then the realm prototype; `super()` runs
+            // the constructor's declared construct effects on the instance
+            // (`run_super_construct`), else the instance is E21.
+            let realm = match toks.as_slice() {
+                [t] if !null && one.is_none() => match &self.toks[*t as usize] {
+                    TokKind::BuiltinFn(crate::model::Native::Member { identity, .. }) => {
+                        Some(identity.to_string())
+                    }
+                    TokKind::Builtin(_) => Some(self.tok_name(*t)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // A class linked to a realm parent by name (`Model::realm_parent`):
+            // the evaluated `extends` is exactly that constructor, else the
+            // layout the solve used is not the instances' (E11, as for a
+            // program parent linked by name).
+            if let Some(&want) = self.realm_parent.get(&tm) {
+                if realm.as_deref() != Some(want) {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let what = format!(
+                        "E11 class whose evaluated `extends` is not its linked realm constructor {want} ({} tokens{}{})",
+                        toks.len(),
+                        if toks.contains(&TOP) { ", ⊤" } else { "" },
+                        if null { ", null" } else { "" }
+                    );
+                    let r = self.reason(&what);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
+                    continue;
+                }
+            }
+            if let Some(identity) = realm {
+                self.parent_unsettled.insert(tm);
+                if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()
+                {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let r = self.reason(&format!(
+                        "E21 realm parent constructor {identity} declares no construct effects"
+                    ));
+                    self.mark_hard(inst, Hard::E21NativeParent, r);
+                }
+                continue;
+            }
             match one {
                 Some(p) => self.tmpls[tm as usize].parent = Some(p),
                 None => {
@@ -1734,588 +1307,6 @@ impl Model {
             }
         }
     }
-
-    /// DECISIONS 118: what an argument marker's stores and `StoreOut`s do
-    /// to each marker that linked in since (`link_marker`).
-    fn replay_marker_links(&mut self) {
-        while let Some((m, r)) = self.marker_links.pop() {
-            if self.aborted {
-                self.marker_links.clear();
-                return;
-            }
-            // DECISIONS 193: `r` and the argument markers above it stand for
-            // the readers `m` brings; the stores made on them reach those.
-            let zs = self.arg_readers_of(m);
-            if !zs.is_empty() {
-                self.arg_readers_add(r, zs);
-            }
-            // DECISIONS 136: a flow whose stored value `r`'s members stand for.
-            // Only `m` is new below `r`: the walk from `r`'s base has seen
-            // the rest, and what it found is recorded (XUC-3).
-            for (t, flow, reason, own) in self.arg_src_flows.get(&r).cloned().unwrap_or_default() {
-                self.store_out_arg_reach(t, flow, reason, own, Some(m));
-            }
-            for (f, j, reason) in self.arg_src_watch.get(&r).cloned().unwrap_or_default() {
-                if self.marker_of.get(&(f, j)) != Some(&m) {
-                    self.escape(m, reason);
-                }
-            }
-            for reason in self.handover_watch.get(&r).cloned().unwrap_or_default() {
-                self.hand_over_marker(m, reason);
-            }
-        }
-    }
-
-    /// DECISIONS 152: marker `t` handed to a closed class's constructor
-    /// (`Cons::HandOver`). A parameter's own marker is its function's: that
-    /// function's contract hands it over, and each caller's unit passes
-    /// what it holds to the constructor itself. What a parameter reaches
-    /// is not the parameter (its keyed reach marker shares the parameter's
-    /// entry, §18.4). An argument marker stands
-    /// for its members, also those that link in later
-    /// (`replay_marker_links`). DECISIONS 155: a reach with values beside
-    /// it (a published method's receivers, DECISIONS 107; a closed
-    /// function's described parameter, 74) stands for no value of its own:
-    /// the values beside it reach the constructor themselves, path by path,
-    /// and its argument contract reads it as them (142). Any other marker
-    /// (the receiver itself, a bare reach, an argument marker's reach)
-    /// escapes, as a value no contract describes does.
-    fn hand_over_marker(&mut self, t: Tok, reason: u32) {
-        if self.is_arg_marker(t) && !self.reach_marker.contains(&t) {
-            let w = self.handover_watch.entry(t).or_default();
-            if w.contains(&reason) {
-                return;
-            }
-            w.push(reason);
-            for m in self.arg_members.get(&t).cloned().unwrap_or_default() {
-                self.hand_over_marker(m, reason);
-            }
-            return;
-        }
-        let own = self
-            .param_marker
-            .get(&t)
-            .is_some_and(|&(f, j)| j != u32::MAX && self.marker_of.get(&(f, j)) == Some(&t));
-        let beside = self.reach_marker.contains(&t) && self.beside_values(t);
-        if !own && !beside {
-            self.escape(t, reason);
-        }
-    }
-
-    /// The key `t` is the keyed reach of parameter `j` of `f` under, if
-    /// it is one (`None`: its reach through any key).
-    fn param_reach_key(&self, f: FnIdx, j: u32, t: Tok) -> Option<Atom> {
-        self.marker_of
-            .get(&(f, j))
-            .and_then(|mk| self.keyed_reach.get(mk))
-            .and_then(|v| v.iter().find(|&&(_, r)| r == self.path_root(t)))
-            .map(|&(k, _)| k)
-    }
-
-    /// DECISIONS 136: stored value `t`, an argument marker or its reach
-    /// (under a key, or any), stands for each member or that reach of it:
-    /// `f`'s own parameter, or its reach, is a source of the flow (the
-    /// reader stores its own value), any other member's escapes. The
-    /// members that link in later are replayed (`replay_marker_links`).
-    ///
-    /// `from`: a member that linked in under a marker this flow already
-    /// walked (`replay_marker_links`); the walk covers what is new, `from`
-    /// and below (XUC-3). Each marker visited is solve work (113-CWL3).
-    /// DECISIONS 151: a member is a source as a value stored directly is:
-    /// in a store into the receiver's reach marker it met (`own`), a value
-    /// of this unit takes the path of that store (`Cons::StoreOut`,
-    /// DECISIONS 149), not an escape.
-    fn store_out_arg_reach(
-        &mut self,
-        t: Tok,
-        flow: StoreFlowKey,
-        reason: u32,
-        own: Option<Tok>,
-        from: Option<Tok>,
-    ) {
-        let (f, dst, reach, ..) = flow;
-        // `None`: the members themselves; `Some(k)`: their reach under key
-        // `k`, or any key.
-        let (base, k) = match self.keyed_parent.get(&t).copied() {
-            Some((p, k)) => (p, Some(Some(k))),
-            None => match self.arg_reach_base.get(&t).copied() {
-                Some(p) => (p, Some(None)),
-                None => (t, None),
-            },
-        };
-        let mut st = vec![from.unwrap_or(base)];
-        let mut seen = crate::pts::FxHashSet::default();
-        let mut srcs = Vec::new();
-        while let Some(x) = st.pop() {
-            if !seen.insert(x) {
-                continue;
-            }
-            self.charge_work(1);
-            if self.past_work_bound() {
-                return;
-            }
-            match self.arg_members.get(&x).cloned() {
-                Some(ms) => {
-                    if self.arg_src_flow_done.insert((x, t, flow, reason, own)) {
-                        self.arg_src_flows
-                            .entry(x)
-                            .or_default()
-                            .push((t, flow, reason, own));
-                    }
-                    st.extend(ms);
-                }
-                // A reach marker reaches itself under every key.
-                None if self.reach_marker.contains(&x) => srcs.push(x),
-                None => srcs.push(match k {
-                    None => x,
-                    Some(Some(k)) => self.keyed_reach_of(x, k),
-                    Some(None) => match self.marker_reach.get(&x) {
-                        Some(&r) => r,
-                        None => x,
-                    },
-                }),
-            }
-        }
-        let (mut from, mut from_reach) = (Vec::new(), Vec::new());
-        let mut top = false;
-        for s in srcs {
-            match self.param_marker.get(&s).copied() {
-                // DECISIONS 179: as in `Cons::StoreOut`.
-                Some((g, u32::MAX)) if g == f && dst == u32::MAX && !reach => {
-                    match self.reach_marker.contains(&s) {
-                        true => from_reach.push((u32::MAX, self.param_reach_key(f, u32::MAX, s))),
-                        false => from.push(u32::MAX),
-                    }
-                }
-                Some((g, j)) if g == f && j != u32::MAX && self.reach_marker.contains(&s) => {
-                    from_reach.push((j, self.param_reach_key(f, j, s)));
-                }
-                Some((g, j)) if g == f && j != u32::MAX => from.push(j),
-                _ => match own {
-                    Some(at) => {
-                        self.mark_escape_why(at, &|_| "store: flow of another value".into())
-                    }
-                    None => {
-                        top = true;
-                        self.escape(s, reason);
-                    }
-                },
-            }
-        }
-        let fl = self.store_flows.entry(flow).or_default();
-        for j in from {
-            if !fl.from.contains(&j) {
-                fl.from.push(j);
-            }
-        }
-        for r in from_reach {
-            if !fl.from_reach.contains(&r) {
-                fl.from_reach.push(r);
-            }
-        }
-        fl.top |= top;
-    }
-
-    /// The parameter of `f` whose node argument marker `t` is the marker of.
-    fn arg_param_of(&self, t: Tok, f: FnIdx) -> Option<u32> {
-        let n = *self.arg_marker_node.get(&t)?;
-        match self.param_at.get(&n) {
-            Some(&(g, j)) if g == f => Some(j),
-            _ => None,
-        }
-    }
-
-    /// Every function's parameter nodes hold their argument marker
-    /// (DECISIONS 44), from before the first binding reaches them: the
-    /// queued bindings run when the summaries exist, before the solve.
-    pub(crate) fn mark_params(&mut self) {
-        for f in 0..self.funcs.len() {
-            for i in 0..self.funcs[f].params.len() {
-                let p = self.funcs[f].params[i];
-                if p != NO_NODE {
-                    self.nodes[p as usize].param = true;
-                    self.param_at.insert(p, (f as FnIdx, i as u32));
-                }
-            }
-        }
-    }
-
-    /// Everything that reaches `n` escapes (once per node: no sink nodes).
-    #[track_caller]
-    pub fn sink_node(&mut self, n: NodeId, reason: u32) {
-        if let Some(l) = self.ledger.as_mut() {
-            if l.dropped(std::panic::Location::caller(), n, false) {
-                return;
-            }
-            l.sink(n, reason, std::panic::Location::caller());
-        }
-        if let Some(d) = &mut self.diagnostic {
-            if let Some(c) = d.cause_node.filter(|&c| c != n) {
-                d.store_top.entry(n).or_insert(c);
-            }
-        }
-        if let Some(c) = self.cur_native_call {
-            let region = self.calls[c as usize].region;
-            self.raise_top(
-                region,
-                n,
-                "a native hands a value to unknown code, which may throw",
-            );
-        }
-        if self.sunk_nodes.insert(n) {
-            self.cons(n, Cons::TopSink { reason });
-        }
-    }
-
-    // ---------------------------------------------------------------- calls
-
-    /// InstanceofOperator on `t` with left-hand side `lhs`: the protocol
-    /// touch, its method called with `lhs`. Where the method is not
-    /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
-    /// passed to unknown code: it escapes.
-    pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
-        let unknown =
-            t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
-        if unknown {
-            self.sink_node(lhs, reason);
-            match self.toks[t as usize] {
-                // `instanceof` a bound function runs its target's.
-                TokKind::Bound(_) => self.escape(t, reason),
-                _ => self.implicit(t, reason, Protocol::HasInstance, self.thrown),
-            }
-            return;
-        }
-        let arg = self.has_instance_node(t);
-        self.edge(lhs, arg);
-        self.implicit(t, reason, Protocol::HasInstance, self.thrown);
-    }
-
-    /// The argument node of the `@@hasInstance` call on `t`, one per token.
-    fn has_instance_node(&mut self, t: Tok) -> NodeId {
-        if let Some(&a) = self.has_instance_arg.get(&t) {
-            return a;
-        }
-        let a = self.node_l("hasinstance-arg");
-        self.nodes[a as usize].frame = self.fam_home(t);
-        self.has_instance_arg.insert(t, a);
-        a
-    }
-
-    /// JSON's touch of `t` reads its own values only (`implicit`): a callable
-    /// (never descended) or an object whose own properties the solver
-    /// models (`own_props_modelled`); any other keeps the any-key read.
-    fn json_reads_own(&self, t: Tok) -> bool {
-        t != TOP && (self.is_callable_tok(t) || self.own_props_modelled(t))
-    }
-
-    /// `t` is callable (IsCallable, 7.2.3): a function, class, bound or
-    /// builtin function value.
-    fn is_callable_tok(&self, t: Tok) -> bool {
-        matches!(
-            self.toks[t as usize],
-            TokKind::Func(..) | TokKind::ClassObj(_) | TokKind::Bound(_) | TokKind::BuiltinFn(_)
-        )
-    }
-
-    /// The throw region of touch `proto` on `t`, fed into `region`: `None`
-    /// when the touch is already made (its region then feeds `region` too),
-    /// else the new region its calls and nested touches throw into.
-    pub(crate) fn implicit_throw(
-        &mut self,
-        t: Tok,
-        proto: Protocol,
-        region: NodeId,
-    ) -> Option<NodeId> {
-        if self.stop_top.is_some() {
-            let p = self.stop_top.as_ref().unwrap().cur_pos();
-            if p == crate::topstop::NOPOS {
-                self.note_nopos(std::panic::Location::caller(), "implicit-request");
-            }
-            let what = || format!("{proto:?} touch on {}", self.tok_words(t));
-            let w = if self
-                .stop_top
-                .as_ref()
-                .unwrap()
-                .shared_key
-                .contains_key(&(t, proto))
-            {
-                String::new()
-            } else {
-                what()
-            };
-            let s = self.stop_top.as_mut().unwrap();
-            let id = s.shared_call((t, proto), || w, p);
-            if !self.implicit_done.contains_key(&(t, proto)) {
-                // `implicit` builds the touch's nodes and rules under it.
-                s.shared_pos = (crate::topstop::SHARED, id);
-            }
-        }
-        if let Some(&throw) = self.implicit_done.get(&(t, proto)) {
-            self.edge(throw, region);
-            return None;
-        }
-        let throw = self.node_l("implicit-throw");
-        self.implicit_done.insert((t, proto), throw);
-        self.edge(throw, region);
-        Some(throw)
-    }
-
-    /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
-    /// inspect …): every function reachable as a property of `t` or its
-    /// chain runs with `this` = `t` and unknown primitive arguments, or for
-    /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
-    /// What those calls throw completes the operation that asked for the
-    /// touch (the runtime catches nothing: a throw from a console
-    /// argument's `toJSON` or `[util.inspect.custom]` completes that
-    /// `console.log`), so it reaches `region`: one `implicit-throw` node per
-    /// `(t, proto)` is the region of the touch's calls and of the touches it
-    /// runs in turn, and feeds the region of every request.
-    #[track_caller]
-    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
-        self.shared_scope(|m| m.implicit_touch(t, reason, proto, region));
-    }
-
-    #[track_caller]
-    fn implicit_touch(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
-        // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
-        // the formatter shows it running no trap (`proxy_inspect_shown`),
-        // JSON serializes it through its internal methods (`proxy_json`).
-        if let TokKind::Proxy(p) = self.toks[t as usize] {
-            match proto {
-                Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
-                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason, region),
-                Protocol::Json => return self.proxy_json(p, reason, region),
-                Protocol::Inspect => return self.proxy_inspect(p, reason, region),
-                _ => {}
-            }
-        }
-        // I32 at rest (PR B): a protocol touch reads elements undecoded.
-        self.rest_used(t);
-        // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,
-        // 25.5.2.1): its own values are serialized by that touch's own
-        // reads, never a value only the formatter shows (a chain member,
-        // a class's `prototype`).
-        if proto == Protocol::Inspect {
-            self.implicit(t, reason, Protocol::Json, region);
-        }
-        // The touch looks up and calls the protocol's keys and reads its
-        // values, nothing else.
-        let keys: Option<Vec<Atom>> = proto
-            .keys()
-            .map(|ks| ks.iter().map(|k| self.atom(k)).collect());
-        let mut reads: Vec<Key> = proto
-            .reads()
-            .iter()
-            .map(|k| Key::Named(self.atom(k)))
-            .collect();
-        // JSON (25.5.2.2 SerializeJSONProperty): after the `toJSON` lookup
-        // (a chain [[Get]], `keys`), a callable value serializes as
-        // `undefined` and is never descended (step 10); any other object
-        // serializes its ENUMERABLE OWN properties (25.5.2.5 / 25.5.2.6 via
-        // EnumerableOwnProperties, 7.3.23): never its chain (`constructor`,
-        // methods) nor a non-enumerable own one (a function's `prototype`).
-        // `json_own`: those values (`Cons::OwnValues`, getters of own
-        // accessors run) where the solver models the own properties.
-        let mut json_own = false;
-        if proto.reads_all() {
-            if proto == Protocol::Json && self.json_reads_own(t) {
-                json_own = !self.is_callable_tok(t);
-            } else {
-                reads.push(Key::any());
-            }
-        }
-        let calls = keys.as_ref().is_none_or(|k| !k.is_empty());
-        if !calls && reads.is_empty() && !json_own {
-            return;
-        }
-        // `PERRY_WPF_IMPLSRC=1`: one stderr line per protocol request on `t`
-        // (`keys` `None`: any method may run), naming the requesting rule
-        // (the escape ledger's reason), the protocol, the token and its
-        // kind; a second line names the implicit call the request opens.
-        if implsrc_on() {
-            let kind = format!("{:?}", self.toks[t as usize]);
-            eprintln!(
-                "perry: wpfacts implsrc: tok={t} marker={} done={} proto={proto:?} reason={:?} name={:?} kind={}",
-                self.is_marker(t),
-                self.implicit_done.contains_key(&(t, proto)),
-                self.reasons[reason as usize],
-                self.tok_name(t),
-                &kind[..kind.len().min(80)]
-            );
-        }
-        self.mark_use(t, proto.touch_bit());
-        // A marker: the protocol runs on the values beside it; on the
-        // marker it calls what the marker reaches under the protocol's
-        // keys, an escape of that (`method_on`, DECISIONS 111). It has no
-        // accessors, so its reads run nothing; what JSON serializes in turn
-        // is what it reaches, touched (DECISIONS 45).
-        if self.is_marker(t) {
-            match &keys {
-                None => {
-                    let r = self.reach_of(t);
-                    self.mark_escape_why(r, &|_| "protocol: on a marker".into());
-                }
-                Some(ks) => {
-                    let inst: Vec<Atom> = proto
-                        .instance_of_reads()
-                        .iter()
-                        .map(|k| self.atom(k))
-                        .collect();
-                    for &a in ks.iter().chain(&inst) {
-                        let m = self.marker_load(t, Some(a));
-                        self.mark_escape_why(m, &|_| "protocol: on a marker".into());
-                    }
-                }
-            }
-            if proto.reads_all() {
-                let r = self.reach_of(t);
-                self.mark_use(r, crate::model::MARK_TOUCH);
-            }
-            return;
-        }
-        if t == TOP {
-            return;
-        }
-        let Some(throw) = self.implicit_throw(t, proto, region) else {
-            return;
-        };
-        // The protocol calls on a marker family's token are of its run
-        // (`call_run`): what they find on it is the family's.
-        let home = self.fam_home(t);
-        // The values the protocol reads (getters run in the load) and, for
-        // JSON, serializes in turn.
-        for key in reads {
-            let recv = self.node_l("implicit-recv");
-            let dst = self.node_l("implicit-read");
-            self.nodes[recv as usize].frame = home;
-            self.nodes[dst as usize].frame = home;
-            self.nodes[dst as usize].sink = true;
-            self.cons(recv, Cons::Load { key, dst });
-            for &proto in proto.read_touches() {
-                self.cons(
-                    dst,
-                    Cons::Implicit {
-                        reason,
-                        proto,
-                        region: throw,
-                    },
-                );
-            }
-            self.add_tok(recv, t);
-        }
-        if json_own {
-            let recv = self.node_l("implicit-recv");
-            let dst = self.node_l("implicit-read");
-            self.nodes[recv as usize].frame = home;
-            self.nodes[dst as usize].frame = home;
-            self.nodes[dst as usize].sink = true;
-            self.cons(recv, Cons::OwnValues { dst });
-            for &proto in proto.read_touches() {
-                self.cons(
-                    dst,
-                    Cons::Implicit {
-                        reason,
-                        proto,
-                        region: throw,
-                    },
-                );
-            }
-            self.add_tok(recv, t);
-        }
-        // `t instanceof C` for the constructors on its chain: `C`'s
-        // `@@hasInstance` runs with `t` (`has_instance`).
-        for k in proto.instance_of_reads() {
-            let key = Key::Named(self.atom(k));
-            let recv = self.node_l("implicit-recv");
-            let dst = self.node_l("implicit-ctor");
-            let lhs = self.node_l("implicit-lhs");
-            for n in [recv, dst, lhs] {
-                self.nodes[n as usize].frame = home;
-            }
-            self.nodes[dst as usize].sink = true;
-            self.cons(recv, Cons::Load { key, dst });
-            self.cons(dst, Cons::HasInstance { reason, arg: lhs });
-            self.add_tok(lhs, t);
-            self.add_tok(recv, t);
-        }
-        if !calls {
-            return;
-        }
-        let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
-        if proto == Protocol::ToPrimitive {
-            self.to_prim_ret.insert(t, ret);
-            self.to_prim_ret_nodes.insert(ret);
-        }
-        // Protocol results go back to the runtime only (touched below);
-        // an awaited one is adopted first (below).
-        self.nodes[ret as usize].sink = !proto.awaits_result();
-        self.nodes[ret as usize].frame = home;
-        // Protocol arguments are primitives (hints, keys), except
-        // `@@hasInstance`'s, the `instanceof` left-hand sides. The
-        // one protocol that hands user code runtime functions,
-        // `then(resolve, reject)`, is modeled where it happens
-        // (`builtins::adopt`): the resolvers there are synthetic functions
-        // whose argument reaches the result.
-        let args = match proto {
-            Protocol::HasInstance => vec![self.has_instance_node(t)],
-            _ => {
-                let arg = self.node_l("implicit-arg");
-                self.nodes[arg as usize].frame = home;
-                self.add_prim(arg, prim::ALL);
-                vec![arg; 4]
-            }
-        };
-        let arg = args[0];
-        let call = self.calls.len() as CallId;
-        self.calls.push(CallSite {
-            first_arg_fixed: false,
-            this: ThisArg::Tok(t),
-            args,
-            spread: vec![],
-            ret,
-            site: 0,
-            region: throw,
-        });
-        self.protocol_calls.insert(call);
-        self.why_mint(call, Some(t), reason);
-        self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
-        if implsrc_on() {
-            eprintln!(
-                "perry: wpfacts implsrc-call: call={call} tok={t} proto={proto:?} reason={:?}",
-                self.reasons[reason as usize]
-            );
-        }
-        match keys {
-            None => self.method_on(t, Key::any(), call),
-            Some(ks) => {
-                for a in ks {
-                    self.method_on(t, Key::Named(a), call);
-                }
-            }
-        }
-        // Results of protocol methods flow back to the runtime: what the
-        // protocol runs on them (an iterator's `next`, a result's `value`,
-        // what `toJSON` returns) is a touch of its own.
-        if let Some(next) = proto.of_result() {
-            let settled = if proto.awaits_result() {
-                let dst = self.node_l("implicit-settled");
-                self.nodes[dst as usize].sink = true;
-                self.nodes[dst as usize].frame = home;
-                crate::builtins::adopt(self, call, ret, dst);
-                dst
-            } else {
-                ret
-            };
-            self.cons(
-                settled,
-                Cons::Implicit {
-                    reason,
-                    proto: next,
-                    region: throw,
-                },
-            );
-        }
-    }
 }
 
 /// May key `name` be ToString of a Number (an index, `1.5`, `-1`, `1e+21`,
@@ -2323,10 +1314,4 @@ impl Model {
 /// is safe: such a key reads the elements as well.
 pub(crate) fn numeric_key(name: &str) -> bool {
     name.parse::<f64>().is_ok() || matches!(name, "NaN" | "Infinity" | "-Infinity")
-}
-
-/// `PERRY_WPF_IMPLSRC=1` (`Model::implicit`).
-pub(crate) fn implsrc_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_IMPLSRC").is_some())
 }

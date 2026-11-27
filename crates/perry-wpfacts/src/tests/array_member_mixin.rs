@@ -13,7 +13,7 @@ fn verdict(base: &str) -> Verdict {
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare function opaque(): any; const unknown: any = opaque();
         const take = (x: any) => {{ unknown.take(x); }};
         function Base(): any {{ {base} }}
         class P extends Base() {{ q() {{ return 2; }} }}

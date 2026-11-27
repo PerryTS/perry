@@ -1,4 +1,5 @@
-// Run the Node oracle with --expose-gc: absence of collection is a failure.
+// parity-node-argv: --expose-gc
+// The oracle needs gc(): absence of collection is a failure.
 declare function gc(): void;
 const ephemeronMap: any = new WeakMap();
 const liveKey: any = {};

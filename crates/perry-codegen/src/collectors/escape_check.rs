@@ -755,8 +755,6 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
         Expr::MathPow(a, b)
-        | Expr::PathJoin(a, b)
-        | Expr::PathWin32Join(a, b)
         | Expr::ObjectIs(a, b)
         | Expr::ObjectHasOwn(a, b) => {
             check_escapes_in_expr(a, candidates, classes, escaped);
@@ -767,7 +765,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(v, candidates, classes, escaped);
             }
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for v in args {
                 check_escapes_in_expr(v, candidates, classes, escaped);
             }

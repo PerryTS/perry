@@ -57,8 +57,11 @@ fn f2_a_dom_exception_runs_its_declared_chain_methods() {
 
 /// K1, the named control: a store under a computed key on
 /// `Response.prototype` may add any key, `f` included, so `v.f(h)` stays a
-/// call of what may have been stored there (an unknown method): `h`
-/// escapes. A rule that took the realm's key set as final would prove it.
+/// call of what may have been stored there: the site is not proven. A rule
+/// that took the realm's key set as final would prove it. Owner 11-24 (the
+/// E20 realm hold dropped): the stored value is a member of
+/// `Response.prototype` (PSTORE), the program's function: the call runs it
+/// (or throws), so `h` reaches no unknown code.
 #[test]
 fn k1_a_computed_write_on_the_prototype_keeps_the_call() {
     let pf = facts(
@@ -71,5 +74,8 @@ fn k1_a_computed_write_on_the_prototype_keeps_the_call() {
         export const keep = 1;
     "#,
     );
-    assert!(esc(&pf, "H"), "{}", pf.dump_text());
+    let d = pf.dump_text();
+    let f = pf.sites.iter().find(|s| s.key == "f").expect("site .f");
+    assert!(matches!(f.verdict, Verdict::No(_)), "{d}");
+    assert!(!esc(&pf, "H"), "{d}");
 }

@@ -42,6 +42,9 @@ use swc_ecma_visit::{Visit, VisitWith};
 #[path = "proto_census.rs"]
 pub mod proto_census;
 
+#[path = "patched_builtins_node.rs"]
+mod node_ns;
+
 /// Member wildcard: a dynamic-key write, or the whole namespace replaced.
 pub const ANY_MEMBER: &str = "*";
 
@@ -291,6 +294,12 @@ struct Scanner<'a> {
     /// by name for the same reason: a write through one is a store into the
     /// global object.
     global_aliases: BTreeSet<String>,
+    /// The module binds the name `process` somewhere (any declaration,
+    /// parameter or import): `global.process = process` may then store a
+    /// different value.
+    binds_process: bool,
+    /// Identifiers bound to a node-core module namespace (NXCALL3).
+    node_bindings: node_ns::NodeBindings,
 }
 
 /// Collects `const AP = Array.prototype`-style aliases ahead of the scan, so a
@@ -330,6 +339,14 @@ impl Scanner<'_> {
         if matches!(member.as_deref(), None | Some("@@iterator" | "__proto__")) {
             self.out.insert((ARRAY_ITERATION.into(), "write".into()));
         }
+        // NXCALL3: a write into a node-core namespace (`path.join = f`).
+        // A static key stored onto a target the scan does not resolve is
+        // kept by name: it may reach a namespace the program handed on
+        // (`patched_builtins_node` module docs).
+        if let Some(ns) = node_ns::resolve(target, &self.node_bindings) {
+            self.out.insert(node_ns::entry(&ns, member.as_deref()));
+            return;
+        }
         if let Some(ns) = namespace_receiver(target).or_else(|| match peel(target) {
             ast::Expr::Ident(id) => self.ns_aliases.get(id.sym.as_ref()).cloned(),
             _ => None,
@@ -357,6 +374,8 @@ impl Scanner<'_> {
             match member {
                 Some(n) if is_builtin_namespace(&n) => self.add(n, None),
                 Some(n) if is_global_function(&n) => self.add(GLOBAL_FUNCTION.into(), Some(n)),
+                // `globalThis.process = {…}` replaces node:process.
+                Some(n) if n == "process" => self.add("node:process".into(), None),
                 Some(_) => {}
                 None => self.add(GLOBAL_ANY_KEY.into(), None),
             }
@@ -399,6 +418,15 @@ impl Scanner<'_> {
     /// `console = {…}`: the bare name rebinds the global (sloppy: a property
     /// set on the global object; strict: the existing-global store).
     fn record_ident_target(&mut self, id: &ast::Ident) {
+        // `path = other` rebinds a name the native calls read as the module.
+        let node_ns = self
+            .node_bindings
+            .get(id.sym.as_ref())
+            .cloned()
+            .or_else(|| (id.sym == "process").then(|| ("node:process".to_string(), String::new())));
+        if let Some(ns) = node_ns {
+            self.out.insert(node_ns::entry(&ns, None));
+        }
         if is_builtin_namespace(id.sym.as_ref()) {
             self.add(id.sym.to_string(), None);
         } else if is_global_function(id.sym.as_ref()) {
@@ -507,8 +535,26 @@ impl Visit for Scanner<'_> {
         name.visit_children_with(self);
     }
 
+    fn visit_unary_expr(&mut self, u: &ast::UnaryExpr) {
+        // `delete console.log` / `delete path.join` removes the member.
+        if u.op == ast::UnaryOp::Delete {
+            if let ast::Expr::Member(m) = peel(&u.arg) {
+                self.record_member_target(m);
+            }
+        }
+        u.visit_children_with(self);
+    }
+
     fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
         match &a.left {
+            // `global.process = process` with the global `process` (no binding
+            // of that name in the module) stores the value the slot holds.
+            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m))
+                if a.op == ast::AssignOp::Assign
+                    && !self.binds_process
+                    && is_global_object(&m.obj)
+                    && static_member_name(&m.prop).as_deref() == Some("process")
+                    && matches!(peel(&a.right), ast::Expr::Ident(id) if id.sym == "process") => {}
             ast::AssignTarget::Simple(t) => self.record_simple_target(t),
             ast::AssignTarget::Pat(p) => match p {
                 ast::AssignTargetPat::Array(a) => {
@@ -569,6 +615,9 @@ impl Visit for Scanner<'_> {
         match (owner.as_str(), method.as_str()) {
             ("Object" | "Reflect", "setPrototypeOf") => {
                 self.out.insert((ARRAY_ITERATION.into(), "write".into()));
+                if let Some(ns) = node_ns::resolve(target, &self.node_bindings) {
+                    self.out.insert(node_ns::entry(&ns, None));
+                }
             }
             // The only way to name `%ArrayIteratorPrototype%` (and so to
             // replace its `next`) is to ask an iterator for its prototype.
@@ -608,11 +657,52 @@ impl Visit for Scanner<'_> {
     }
 }
 
+/// Does the module bind `name` anywhere (by name, not by scope)?
+struct BindsName {
+    name: &'static str,
+    found: bool,
+}
+
+impl Visit for BindsName {
+    fn visit_binding_ident(&mut self, b: &ast::BindingIdent) {
+        self.found |= b.id.sym == self.name;
+    }
+    fn visit_fn_decl(&mut self, f: &ast::FnDecl) {
+        self.found |= f.ident.sym == self.name;
+        f.visit_children_with(self);
+    }
+    fn visit_fn_expr(&mut self, f: &ast::FnExpr) {
+        self.found |= f.ident.as_ref().is_some_and(|i| i.sym == self.name);
+        f.visit_children_with(self);
+    }
+    fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
+        self.found |= c.ident.sym == self.name;
+        c.visit_children_with(self);
+    }
+    fn visit_class_expr(&mut self, c: &ast::ClassExpr) {
+        self.found |= c.ident.as_ref().is_some_and(|i| i.sym == self.name);
+        c.visit_children_with(self);
+    }
+    fn visit_import_default_specifier(&mut self, s: &ast::ImportDefaultSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+    fn visit_import_star_as_specifier(&mut self, s: &ast::ImportStarAsSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+    fn visit_import_named_specifier(&mut self, s: &ast::ImportNamedSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+}
+
 /// Collect every built-in member write in `module`.
 pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
     let mut proto_aliases = BTreeMap::new();
     let mut ns_aliases = BTreeMap::new();
     let mut global_aliases = BTreeSet::new();
+    let mut node_bindings = node_ns::NodeBindings::new();
+    module.visit_with(&mut node_ns::BindingCollector {
+        bindings: &mut node_bindings,
+    });
     module.visit_with(&mut AliasCollector {
         aliases: &mut proto_aliases,
         ns_aliases: &mut ns_aliases,
@@ -623,6 +713,15 @@ pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
         proto_aliases,
         ns_aliases,
         global_aliases,
+        node_bindings,
+        binds_process: {
+            let mut b = BindsName {
+                name: "process",
+                found: false,
+            };
+            module.visit_with(&mut b);
+            b.found
+        },
     });
     let mut escaped = BTreeSet::new();
     module.visit_with(&mut EscapeScan { out: &mut escaped });
@@ -734,6 +833,20 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
             || (!s.namespace_pairs && s.contains(&(NS_ESCAPED.to_string(), ns.to_string())))
     })
     .unwrap_or(false)
+}
+
+/// NXCALL3: may the program replace member path `path` of node-core module
+/// `module` (the lowering's module name: `"path"`, `"node:fs"`,
+/// `"process.namespace"`) or a namespace on the way to it? A direct native
+/// call of it then lowers as the generic member get plus call.
+pub fn node_member_patched(module: &str, path: &[&str]) -> bool {
+    with_set(|s| node_ns::member_patched(s, module, path)).unwrap_or(false)
+}
+
+/// The recorded program write behind [`node_member_patched`] (for
+/// `PERRY_NODE_NS_REPORT`).
+pub fn node_member_patch_entry(module: &str, path: &[&str]) -> Option<(String, String)> {
+    with_set(|s| node_ns::patch_entry(s, module, path)).flatten()
 }
 
 /// May the program rebind the global function `name` ([`GLOBAL_FUNCTIONS`])?

@@ -78,9 +78,11 @@ pub(crate) fn enum_image_sites(module: &ast::Module) -> EnumImageSites {
             .copied()
             .unwrap_or(0);
         let is_var = scope.is_some_and(|s| s.vars.contains(&c.object));
+        // tsc's `var E;` holds `undefined`; an initialized declarator does not.
+        let preset = c.plan.assigns && scope.is_some_and(|s| s.initialized.contains(&c.object));
         if writes.dynamic_scope {
             *out.refused.entry("eval_or_with").or_default() += 1;
-        } else if !is_var || count != c.expected {
+        } else if !is_var || preset || count != c.expected {
             *out.refused.entry("not_fresh").or_default() += 1;
             not_fresh.push(c.object);
         } else if out.sites.insert(c.span, c.plan).is_some() {
@@ -129,6 +131,8 @@ struct ScopeWrites {
     writes: HashMap<String, u32>,
     /// Names declared by `var` in the scope itself.
     vars: std::collections::HashSet<String>,
+    /// Of those, the ones a declarator gives an initializer.
+    initialized: std::collections::HashSet<String>,
 }
 
 /// Counts writes in the subtree of each needed scope.
@@ -187,10 +191,13 @@ impl Visit for Writes {
     fn visit_var_decl(&mut self, decl: &ast::VarDecl) {
         if decl.kind == ast::VarDeclKind::Var {
             if let Some(&(scope, true)) = self.stack.last() {
-                let vars = &mut self.scopes.get_mut(&scope).unwrap().vars;
+                let writes = self.scopes.get_mut(&scope).unwrap();
                 for d in &decl.decls {
                     if let ast::Pat::Ident(id) = &d.name {
-                        vars.insert(id.id.sym.to_string());
+                        writes.vars.insert(id.id.sym.to_string());
+                        if d.init.is_some() {
+                            writes.initialized.insert(id.id.sym.to_string());
+                        }
                     }
                 }
             }

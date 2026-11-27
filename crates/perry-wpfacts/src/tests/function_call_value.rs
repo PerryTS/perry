@@ -112,3 +112,114 @@ console.log(o.pa + 1);
     );
     assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
 }
+
+// A realm namespace object as `this` (perry-web events.ts
+// `handler.call(target._self(), event)`, the receiver holding the global
+// object, the handler `Function.prototype.toString`): the namespaces whose
+// [[Prototype]] the realm describes as `Object.prototype` are ordinary
+// objects, never callable, so each of the four methods throws the realm's
+// TypeError. Red on 54c419f480: the namespace was the receiver of an
+// unknown callee, handed to unknown code, which may throw (the caught
+// value ⊤).
+#[test]
+fn function_method_on_a_realm_namespace_throws_a_realm_error() {
+    for m in ["call", "apply", "bind", "toString"] {
+        for recv in ["globalThis", "Math", "JSON", "Reflect", "process"] {
+            let src = format!(
+                r#"
+class H {{ v: any = 0; }}
+const h = new H();
+const f: any = Function.prototype.{m};
+const arg = {{ pb: 2 }};
+try {{ f.call({recv}, arg); }} catch (e) {{ h.v = e; }}
+console.log(h.v, arg.pb + 1);
+"#
+            );
+            let pf = whole(&src);
+            let k = field(tmpl(&pf, "H"), "v").kind.clone();
+            assert!(!k.top, "{m} on {recv}: {k:?}\n{}", pf.dump_text());
+            assert_eq!(
+                escape_with_field(&pf, "pb"),
+                None,
+                "{m} on {recv}\n{}",
+                pf.dump_text()
+            );
+        }
+    }
+}
+
+// HUB11 (perry-web dom/events.ts:340 `handler.call(target._self(), event)`
+// with `handler` Function.prototype.toString and the receiver a Proxy):
+// on a Proxy `this`, `toString` is a String (a callable Proxy) or the
+// realm's TypeError (ECMA-262 20.2.3.5 steps 3-4: IsCallable only, the
+// Proxy's [[Call]] is fixed at ProxyCreate, 10.5.15; no trap runs), and
+// `call`/`apply` are the Proxy's [[Call]] (20.2.3.3, 20.2.3.1: Call(func,
+// ...), rule PXAPPLY) or the TypeError. Red on cd66ceaff2: the Proxy was
+// the receiver of an opaque builtin call, which may throw anything (the
+// caught value ⊤) and is handed the arguments. `@@hasInstance` is
+// OrdinaryHasInstance (20.2.3.6): false on a non-callable Proxy, else the
+// Proxy's [[Get]] of `prototype` (its `get` trap) and the walk of the
+// argument's chain.
+#[test]
+fn function_method_on_a_proxy_over_an_object_throws_a_realm_error() {
+    for m in [".call", ".apply", ".toString", "[Symbol.hasInstance]"] {
+        let src = format!(
+            r#"
+class H {{ v: any = 0; }}
+const h = new H();
+const p: any = new Proxy({{ q: 1 }}, {{ get(t: any, k: any) {{ return t[k]; }} }});
+const f: any = Function.prototype{m};
+const arg = {{ pb: 2 }};
+try {{ f.call(p, arg); }} catch (e) {{ h.v = e; }}
+console.log(h.v, arg.pb + 1);
+"#
+        );
+        let pf = whole(&src);
+        let k = field(tmpl(&pf, "H"), "v").kind.clone();
+        assert!(!k.top, "{m} on a Proxy: {k:?}\n{}", pf.dump_text());
+        assert_eq!(
+            escape_with_field(&pf, "pb"),
+            None,
+            "{m}\n{}",
+            pf.dump_text()
+        );
+    }
+}
+
+#[test]
+fn function_method_on_a_proxy_over_a_function_runs_its_call() {
+    for (m, args) in [
+        (".call", "null, arg"),
+        (".apply", "null, [arg]"),
+        (".toString", ""),
+        ("[Symbol.hasInstance]", "arg"),
+    ] {
+        let src = format!(
+            r#"
+class H {{ v: any = 0; r: any = 0; }}
+const h = new H();
+const p: any = new Proxy(function (x: any) {{ return x.pb; }}, {{}});
+const f: any = Function.prototype{m};
+const arg = {{ pb: 2 }};
+try {{ h.r = f.call(p, {args}); }} catch (e) {{ h.v = e; }}
+console.log(h.v, h.r, arg.pb + 1);
+"#
+        );
+        let pf = whole(&src);
+        let h = tmpl(&pf, "H");
+        let k = field(h, "v").kind.clone();
+        assert!(!k.top, "{m} on a callable Proxy: {k:?}\n{}", pf.dump_text());
+        let r = field(h, "r").kind.clone();
+        assert!(
+            !r.top,
+            "{m} on a callable Proxy, result: {r:?}\n{}",
+            pf.dump_text()
+        );
+        assert_eq!(
+            escape_with_field(&pf, "pb"),
+            None,
+            "{m}\n{}",
+            pf.dump_text()
+        );
+    }
+}

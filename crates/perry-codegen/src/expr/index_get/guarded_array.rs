@@ -249,8 +249,7 @@ fn emit_array_guard_word_typed(blk: &mut crate::block::LlBlock, word: &str) -> S
 /// The confined guard's second half (see [`emit_confined_array_guard_word_ok`]):
 /// the default prototype chain was never modified.
 fn emit_confined_chain_pristine(blk: &mut crate::block::LlBlock) -> String {
-    let chain = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    blk.icmp_eq(crate::types::I8, &chain, "0")
+    crate::expr::array_proto_guard::emit_default_chain_pristine(blk)
 }
 
 /// The guard for a CONFINED receiver (`collectors::definite_init::confined`):
@@ -265,8 +264,7 @@ fn emit_confined_chain_pristine(blk: &mut crate::block::LlBlock) -> String {
 fn emit_confined_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> String {
     let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
     let word_ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
-    let chain = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let pristine = blk.icmp_eq(crate::types::I8, &chain, "0");
+    let pristine = crate::expr::array_proto_guard::emit_default_chain_pristine(blk);
     blk.and(crate::types::I1, &word_ok, &pristine)
 }
 

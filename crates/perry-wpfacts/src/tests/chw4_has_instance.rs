@@ -37,7 +37,7 @@ fn probe_call(pf: &crate::ProgramFacts) -> Verdict {
 /// unknown code, and a store through an unknown key into
 /// `globalThis.globalThis`, which unknown code may have written (a store
 /// into ⊤).
-const WRITERS: &str = r#"const unknown: any = (globalThis as any)[process.argv[2]];
+const WRITERS: &str = r#"const unknown: any = new Function(process.argv[2])();
 unknown.take2(globalThis);
 const G: any = (globalThis as any).globalThis;
 G[process.argv[3]] = unknown.v;
@@ -123,7 +123,7 @@ fn chw4_keep_sunk_class_escapes() {
 fn chw4_keep_set_prototype_of_unknown_escapes() {
     let pf = run(
         &format!(
-            "{VALUE_EXTENDS}\nObject.setPrototypeOf(A, (globalThis as any)[process.argv[4]]);"
+            "{VALUE_EXTENDS}\nObject.setPrototypeOf(A, unknown.p);"
         ),
         "A",
     );
@@ -138,7 +138,7 @@ fn chw4_keep_set_prototype_of_unknown_escapes() {
 #[test]
 fn chw4_keep_unknown_parent_escapes() {
     let pf = run(
-        "const P: any = (globalThis as any)[process.argv[4]];\nclass A extends P {}",
+        "const P: any = unknown.p;\nclass A extends P {}",
         "A",
     );
     assert!(

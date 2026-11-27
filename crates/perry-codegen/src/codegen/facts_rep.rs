@@ -106,6 +106,8 @@ fn claimed_call(
         _ if direct_number_calls() => call_offset?,
         _ => return None,
     };
+    // offset 0: a call codegen builds after facts (class_field_push.rs:128,
+    // call_spread.rs:316) names no site.
     let usable = typed_params()
         && !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard

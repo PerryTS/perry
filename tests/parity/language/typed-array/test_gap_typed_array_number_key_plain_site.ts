@@ -57,7 +57,7 @@ function detached(): string {
 }
 function protoSetter(): string {
   let hits = 0;
-  Object.defineProperty(Object.prototype, "6", { set(_v) { hits++; }, configurable: true });
+  try { Object.defineProperty(Object.prototype, "6", { set(_v) { hits++; }, configurable: true }); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
   const o = new Float64Array(2); store(o, 6, 1); store(o, 1, 2);
   const plain: number[] = [0]; store(plain, 6, 1);
   delete (Object.prototype as any)["6"];

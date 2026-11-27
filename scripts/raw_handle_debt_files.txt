@@ -134,7 +134,6 @@
 2 crates/perry-runtime/src/string/append.rs
 1 crates/perry-runtime/src/string/mod.rs
 6 crates/perry-runtime/src/string/split.rs
-2 crates/perry-runtime/src/symbol/iterator.rs
 20 crates/perry-runtime/src/thread.rs
 2 crates/perry-runtime/src/timer.rs
 1 crates/perry-runtime/src/typed_feedback.rs

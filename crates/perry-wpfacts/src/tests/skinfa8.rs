@@ -14,19 +14,17 @@
 use super::*;
 
 fn with_index<T>(f: impl FnOnce() -> T) -> T {
-    std::env::set_var("PERRY_FACTS_PROMISE_ALL_INDEX", "1");
-    let v = f();
-    std::env::remove_var("PERRY_FACTS_PROMISE_ALL_INDEX");
-    v
+    crate::provenance::with_env(&[("PERRY_FACTS_PROMISE_ALL_INDEX", "1")], f)
 }
 
 fn src(tail: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const h: any = (globalThis as any).hostFn();
+        const h: any = external();
         {tail}
         "#
     )

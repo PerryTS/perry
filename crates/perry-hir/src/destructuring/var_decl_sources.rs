@@ -254,6 +254,11 @@ pub(super) fn register_destructured_stream_ctors(
                     // runtime-binding path (it reads the reified module object).
                     _ => continue,
                 };
+                // NXCALL3: a member the program may replace is read off the
+                // runtime `require(...)` result when the destructuring runs.
+                if crate::patched_builtins::node_member_patched(&module, &[key.as_str()]) {
+                    continue;
+                }
                 ctx.register_native_module(binding.clone(), module.clone(), Some(key));
                 // #5364 interaction: the module-level forward-declaration pass
                 // now pre-registers destructuring leaves as module-var locals.
@@ -301,7 +306,9 @@ pub(super) fn register_destructured_stream_ctors(
             }
             _ => continue,
         };
-        if allowed.contains(&key.as_str()) {
+        if allowed.contains(&key.as_str())
+            && !crate::patched_builtins::node_member_patched(&module, &[key.as_str()])
+        {
             ctx.register_native_module(binding.clone(), module.clone(), Some(key));
             if module == "net" {
                 // Same #5364 interaction as the generic native branch above:

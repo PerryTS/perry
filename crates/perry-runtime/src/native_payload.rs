@@ -565,10 +565,13 @@ pub unsafe fn payload_cell_of_object(obj: *const ObjectHeader) -> Option<*mut Na
 }
 
 /// The inline slot of `[[NativePayload]]` on the runtime layout `word`
-/// names, for the layouts that list it (`http_instances.rs`).
+/// names, for the layouts that list it (`http_instances.rs`), and on a
+/// shape that descends from one of them by key adds (its runtime base,
+/// `shapes::runtime_base_of_word`): the add kept the slot.
 #[inline(always)]
 fn layout_payload_slot(word: u32) -> Option<u32> {
     use crate::object::runtime_layouts as rl;
+    let word = crate::object::shapes::runtime_base_of_word(word);
     if word == rl::INCOMING_MESSAGE::WORD {
         Some(rl::incoming_slot::PAYLOAD)
     } else if word == rl::SERVER_RESPONSE::WORD {

@@ -166,7 +166,11 @@ pub use layout_desc::create_families::{
     name_computed_class_fields, program_proto_exports, program_proto_exports_key,
     set_program_proto_exports,
 };
-pub use proto_constants::{program_proto_census_key, set_program_proto_census};
+pub use expr::array_proto_guard::{program_array_chain_facts_key, set_program_array_chain_facts};
+pub use proto_constants::{
+    program_proto_census_key, program_shadow_writes_key, set_program_proto_census,
+    set_program_shadow_writes, ClassShadowWrites,
+};
 // #11394: whole-program set of methods written onto a builtin prototype.
 pub use lower_call::property_get::patched_proto::{
     program_patched_proto_methods, set_program_patched_proto_methods,
