@@ -144,7 +144,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo
         if: steps.relevance.outputs.run == 'true'
@@ -379,7 +379,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
@@ -607,7 +607,7 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
@@ -1098,7 +1098,7 @@ jobs:
       - name: Immovable-source exemptions must still hold
         run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1265,7 +1265,7 @@ jobs:
       - name: Install the npm dependencies the dep corpus compiles
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo
         uses: ./.github/actions/perry/actions/cache
@@ -1611,7 +1611,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
       - uses: ./.github/actions/perry-rust-cache
@@ -1736,7 +1736,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
       - uses: ./.github/actions/perry-rust-cache

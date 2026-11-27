@@ -63,7 +63,7 @@ jobs:
           fi
       - name: Install Rust with the WASI target
         if: steps.profile.outputs.enabled == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
       - uses: ./.github/actions/perry/Swatinem/rust-cache
         if: steps.profile.outputs.enabled == 'true'
         with:

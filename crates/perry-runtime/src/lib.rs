@@ -15,8 +15,6 @@
 #![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
 #![feature(stmt_expr_attributes)]
-// Keep the cold class-cache publisher compact without outlining hot reads.
-#![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.
 #![feature(thread_local)]
 // `js_closure_call{N}` jumps to a plain body with `become` (a guaranteed tail
