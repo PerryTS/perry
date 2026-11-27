@@ -106,10 +106,15 @@ fn family_owner(owner: *mut ObjectHeader) -> bool {
     unsafe {
         crate::value::addr_class::try_read_tracked_gc_header(owner as usize).is_some_and(|h| {
             let h = h.as_ref();
-            h.obj_type == crate::gc::GC_TYPE_OBJECT && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            h.obj_type == crate::gc::GC_TYPE_OBJECT
+                && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         }) && matches!(
             (*owner).class_id,
-            ids::ABORT_SIGNAL | ids::ABORT_CONTROLLER | ids::EVENT_TARGET | ids::EVENT | ids::CUSTOM_EVENT
+            ids::ABORT_SIGNAL
+                | ids::ABORT_CONTROLLER
+                | ids::EVENT_TARGET
+                | ids::EVENT
+                | ids::CUSTOM_EVENT
         )
     }
 }
