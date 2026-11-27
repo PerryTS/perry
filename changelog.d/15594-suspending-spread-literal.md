@@ -1,0 +1,1 @@
+An object literal with a spread whose parts hold a `yield` or `await` evaluates its parts in source order again: `{ a: f(), ...(await p) }` runs `f()` before the await, and a generator literal with computed keys no longer runs its first `yield` ahead of the earlier properties.
