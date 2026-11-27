@@ -1,0 +1,1 @@
+- **`process.exit()` and queued fs writes.** `process.exit()` performs the async `fs` writes, appends and unlinks already queued (`fs.promises.appendFile`, `fs.writeFile`, …) before the process ends, as Node does when libuv drains its threadpool. Their callbacks and promises still never settle, and pending timers still never run.
