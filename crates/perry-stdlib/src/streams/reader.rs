@@ -7,9 +7,11 @@ use super::{
     js_promise_new, js_promise_reason, js_promise_reject, js_promise_resolve, js_promise_state,
     js_promise_then, js_promise_value, js_readable_stream_cancel_inner,
     js_readable_stream_get_reader, js_stream_unwrap_handle, js_string_from_bytes,
-    js_value_is_promise, maybe_pull, reader_rec, reject_type_error, rs_rec, stream_id,
-    stream_value, transform, ClosureHeader, JSValue, JsFunctionInfo, Promise, ReadableState,
-    ReaderRef, RsRef, TAG_UNDEFINED,
+    js_value_is_promise, maybe_pull, provider_js_ffi_root_get_nanbox,
+    provider_js_ffi_root_push_nanbox, provider_js_ffi_root_scope_enter,
+    provider_js_ffi_root_scope_exit, reader_rec, reject_type_error, rs_rec, stream_id,
+    stream_value, transform, ArrayHeader, ClosureHeader, JSValue, JsFunctionInfo, ObjectHeader,
+    Promise, ReadableState, ReaderRef, RsRef, POINTER_MASK, TAG_UNDEFINED,
 };
 
 pub(super) extern "C" fn readable_from_chunk_fulfilled(
@@ -221,8 +223,13 @@ pub(super) fn resolved_done_promise() -> f64 {
 }
 
 pub(super) fn closure_capture_value(info: *const JsFunctionInfo, value: f64) -> *mut ClosureHeader {
+    // The closure allocation can collect: root the captured value across it.
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let slot = provider_call!(provider_js_ffi_root_push_nanbox(value.to_bits()));
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, value.to_bits() as i64);
+    let value = provider_call!(provider_js_ffi_root_get_nanbox(slot));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
+    js_closure_set_capture_ptr(closure, 0, value as i64);
     closure
 }
 
@@ -267,42 +274,63 @@ pub(super) extern "C" fn readable_stream_iterator_self(
 
 pub(super) unsafe fn build_readable_stream_iterator(stream_handle: f64) -> f64 {
     let reader = js_readable_stream_get_reader(stream_handle);
+    // Every allocation and store below can collect: the iterator object, its
+    // key list and the key strings live in root slots and are re-read from
+    // them after each such call.
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let root = |bits: u64| provider_call!(provider_js_ffi_root_push_nanbox(bits));
+    let read = |slot: usize| provider_call!(provider_js_ffi_root_get_nanbox(slot));
+    let ptr = |slot: usize| (read(slot) & POINTER_MASK) as usize;
     let obj = js_object_alloc(0, 2);
+    let obj_slot = root(JSValue::object_ptr(obj as *mut u8).bits());
     let keys = js_array_alloc(2);
-    let k_next = js_string_from_bytes(b"next".as_ptr(), 4);
-    let k_return = js_string_from_bytes(b"return".as_ptr(), 6);
-    js_array_push(keys, JSValue::string_ptr(k_next));
-    js_array_push(keys, JSValue::string_ptr(k_return));
-    js_object_set_field(
-        obj,
-        0,
-        JSValue::pointer(closure_capture_value(
-            perry_runtime::fn_info!(readable_stream_iterator_next, 0; with_declared(0)),
-            reader,
-        ) as *const u8),
+    let keys_slot = root(JSValue::pointer(keys as *const u8).bits());
+    let next = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_slot = root(JSValue::string_ptr(next).bits());
+    let ret = js_string_from_bytes(b"return".as_ptr(), 6);
+    let return_slot = root(JSValue::string_ptr(ret).bits());
+    for key_slot in [next_slot, return_slot] {
+        js_array_push(
+            ptr(keys_slot) as *mut ArrayHeader,
+            JSValue::from_bits(read(key_slot)),
+        );
+    }
+    for (index, info) in [
+        perry_runtime::fn_info!(readable_stream_iterator_next, 0; with_declared(0)),
+        perry_runtime::fn_info!(readable_stream_iterator_return, 0; with_declared(0)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let closure = closure_capture_value(info, reader);
+        js_object_set_field(
+            ptr(obj_slot) as *mut ObjectHeader,
+            index as u32,
+            JSValue::pointer(closure as *const u8),
+        );
+    }
+    js_object_set_keys(
+        ptr(obj_slot) as *mut ObjectHeader,
+        ptr(keys_slot) as *mut ArrayHeader,
     );
-    js_object_set_field(
-        obj,
-        1,
-        JSValue::pointer(closure_capture_value(
-            perry_runtime::fn_info!(readable_stream_iterator_return, 0; with_declared(0)),
-            reader,
-        ) as *const u8),
-    );
-    js_object_set_keys(obj, keys);
-    let iterator = f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits());
 
     let async_iterator = perry_runtime::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
+        let symbol_slot = root(JSValue::pointer(async_iterator as *const u8).bits());
         let self_closure = closure_capture_value(
             perry_runtime::fn_info!(readable_stream_iterator_self, 0; with_declared(0)),
-            iterator,
+            f64::from_bits(read(obj_slot)),
         );
-        let symbol_value = f64::from_bits(JSValue::pointer(async_iterator as *const u8).bits());
         let closure_value = f64::from_bits(JSValue::pointer(self_closure as *const u8).bits());
-        perry_runtime::symbol::js_object_set_symbol_property(iterator, symbol_value, closure_value);
+        perry_runtime::symbol::js_object_set_symbol_property(
+            f64::from_bits(read(obj_slot)),
+            f64::from_bits(read(symbol_slot)),
+            closure_value,
+        );
     }
 
+    let iterator = f64::from_bits(read(obj_slot));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
     iterator
 }
 

@@ -320,8 +320,13 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
 /// rendered HTML node directly (degraded but usable).
 #[no_mangle]
 pub unsafe extern "C" fn js_jsx_render_stream_from_value(html_value: f64) -> f64 {
-    let mut arr = js_array_alloc(1);
-    arr = js_array_push_f64(arr, html_value);
+    // The array allocation can collect: root the HTML string across it.
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let slot = provider_call!(provider_js_ffi_root_push_nanbox(html_value.to_bits()));
+    let empty = js_array_alloc(1);
+    let html_value = f64::from_bits(provider_call!(provider_js_ffi_root_get_nanbox(slot)));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
+    let arr = js_array_push_f64(empty, html_value);
     let arr_f64 = f64::from_bits(perry_runtime::JSValue::pointer(arr as *const u8).bits());
     js_readable_stream_from_iterable(arr_f64)
 }

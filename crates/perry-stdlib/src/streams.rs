@@ -330,10 +330,22 @@ unsafe fn settle_stream_action_promise(promise: *mut Promise, actions: &[*mut Pr
         [] => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
         [action] => js_promise_resolve_with_promise(promise, *action),
         _ => {
-            let values = js_array_alloc(actions.len() as u32);
+            // Each push can collect: the array lives in a root slot and is
+            // re-read before every use. Its capacity covers every push, so it
+            // never reallocates away from the rooted object.
+            let base = provider_call!(provider_js_ffi_root_scope_enter());
+            let array = js_array_alloc(actions.len() as u32);
+            let slot = provider_call!(provider_js_ffi_root_push_nanbox(
+                JSValue::pointer(array as *const u8).bits()
+            ));
             for action in actions {
+                let values = (provider_call!(provider_js_ffi_root_get_nanbox(slot)) & POINTER_MASK)
+                    as *mut ArrayHeader;
                 js_array_push(values, JSValue::pointer(*action as *const u8));
             }
+            let values = (provider_call!(provider_js_ffi_root_get_nanbox(slot)) & POINTER_MASK)
+                as *mut ArrayHeader;
+            provider_call!(provider_js_ffi_root_scope_exit(base));
             let all = js_promise_all(values);
             js_promise_resolve_with_promise(promise, all);
         }
@@ -660,11 +672,16 @@ unsafe fn stream_object_field(object: f64, name: &[u8]) -> f64 {
     if !value.is_pointer() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
-    if obj.is_null() {
+    if js_nanbox_get_pointer(object) == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // The key allocation can collect: root the object across it and re-read.
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let slot = provider_call!(provider_js_ffi_root_push_nanbox(object.to_bits()));
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let object = f64::from_bits(provider_call!(provider_js_ffi_root_get_nanbox(slot)));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
+    let obj = js_nanbox_get_pointer(object) as *const ObjectHeader;
     f64::from_bits(js_object_get_field_by_name(obj, key).bits())
 }
 
@@ -913,19 +930,27 @@ mod handle_boundary_tests {
             for (receiver, key_name, value) in
                 [(id as u64, "raw", 1.0), (stream.to_bits(), "tagged", 2.0)]
             {
-                let key =
-                    perry_runtime::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
+                // The store can collect: the key lives in a root slot.
+                let base = provider_js_ffi_root_scope_enter();
+                let slot = provider_js_ffi_root_push_nanbox(
+                    perry_runtime::value::js_nanbox_string(perry_runtime::js_string_from_bytes(
+                        key_name.as_ptr(),
+                        key_name.len() as u32,
+                    ) as i64)
+                    .to_bits(),
+                );
+                let property = f64::from_bits(provider_js_ffi_root_get_nanbox(slot));
                 if receiver == id as u64 {
                     perry_runtime::object::js_object_set_field_by_name(
                         receiver as *mut perry_runtime::object::ObjectHeader,
-                        key,
+                        (property.to_bits() & POINTER_MASK) as *const StringHeader,
                         value,
                     );
                 } else {
                     let object = f64::from_bits(receiver);
-                    let property = perry_runtime::value::js_nanbox_string(key as i64);
                     perry_runtime::proxy::js_put_value_set(object, property, value, object, 0);
                 }
+                provider_js_ffi_root_scope_exit(base);
                 assert_eq!(stream_expando_get(id, key_name), Some(value));
             }
         }
