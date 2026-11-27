@@ -531,7 +531,10 @@ mod layout_tests {
                     (*desc).layout_id,
                     "accessor installation must not mint another shape"
                 );
-                assert_eq!(crate::object::object_inline_capacity(ptr), fields.len() as u32);
+                assert_eq!(
+                    crate::object::object_inline_capacity(ptr),
+                    fields.len() as u32
+                );
             }
             for name in fields {
                 let attrs = crate::object::get_property_attrs(ptr as usize, name).unwrap();

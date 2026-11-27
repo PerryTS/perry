@@ -250,7 +250,12 @@ extern "C" fn im_destroy(
         );
         let tick = destroy_tick(
             crate::fn_info!(im_destroy_socket_finished, 0),
-            &[r(), err.get_nanbox_f64(), cb.get_nanbox_f64(), socket.get_nanbox_f64()],
+            &[
+                r(),
+                err.get_nanbox_f64(),
+                cb.get_nanbox_f64(),
+                socket.get_nanbox_f64(),
+            ],
         );
         crate::builtins::js_queue_next_tick(tick as i64);
     } else {
@@ -268,10 +273,7 @@ fn boxed_closure(c: *mut ClosureHeader) -> f64 {
 }
 
 /// A tick closure carrying `values` (rooted across its allocation).
-fn destroy_tick(
-    info: *const crate::closure::JsFunctionInfo,
-    values: &[f64],
-) -> *mut ClosureHeader {
+fn destroy_tick(info: *const crate::closure::JsFunctionInfo, values: &[f64]) -> *mut ClosureHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let rooted: Vec<_> = values.iter().map(|v| scope.root_nanbox_f64(*v)).collect();
     let tick = js_closure_alloc(info, rooted.len() as u32);

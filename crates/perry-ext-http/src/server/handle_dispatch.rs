@@ -273,7 +273,13 @@ unsafe fn event_arg(args: &[f64]) -> String {
 /// persistent listeners, then the one-shot ones (detached when `take_once`,
 /// as `emit` does before it calls them); the `createServer` handler is the
 /// first `'request'` listener.
-fn server_listeners(handle: i64, is_https: bool, is_h2: bool, event: &str, take_once: bool) -> Vec<i64> {
+fn server_listeners(
+    handle: i64,
+    is_https: bool,
+    is_h2: bool,
+    event: &str,
+    take_once: bool,
+) -> Vec<i64> {
     let mut listeners = crate::server::server::with_base_server_mut(handle, |server| {
         let mut listeners = server.listeners.get(event).cloned().unwrap_or_default();
         let once = if take_once {
@@ -510,7 +516,11 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             let listeners = server_listeners(handle, is_https, is_h2, &event, true);
             if listeners.is_empty() {
                 if event == "error" {
-                    js_throw(rest.first().copied().unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+                    js_throw(
+                        rest.first()
+                            .copied()
+                            .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+                    );
                 }
                 return f64::from_bits(JsValue::FALSE.bits());
             }

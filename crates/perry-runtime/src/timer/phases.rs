@@ -40,7 +40,6 @@
 //! loops terminate: without it, a `setTimeout(f, 0)` scheduled from a timer
 //! callback could be due at the phase's own clock read.
 
-
 use super::store::{self, Class, Entry};
 use super::{
     call_timer_callback_entry, enter_timer_callback_dispatch, in_timer_callback_dispatch,

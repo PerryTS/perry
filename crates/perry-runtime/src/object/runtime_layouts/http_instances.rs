@@ -188,10 +188,18 @@ runtime_atom!(
     "httpVersionMinor",
     "6874747056657273696f6e4d696e6f72"
 );
-runtime_atom!(HI_ATOM_HTTP_VERSION, "httpVersion", "6874747056657273696f6e");
+runtime_atom!(
+    HI_ATOM_HTTP_VERSION,
+    "httpVersion",
+    "6874747056657273696f6e"
+);
 runtime_atom!(HI_ATOM_COMPLETE, "complete", "636f6d706c657465");
 runtime_atom!(HI_ATOM_RAW_HEADERS, "rawHeaders", "72617748656164657273");
-runtime_atom!(HI_ATOM_RAW_TRAILERS, "rawTrailers", "726177547261696c657273");
+runtime_atom!(
+    HI_ATOM_RAW_TRAILERS,
+    "rawTrailers",
+    "726177547261696c657273"
+);
 runtime_atom!(
     HI_ATOM_JOIN_DUPLICATE_HEADERS,
     "joinDuplicateHeaders",
