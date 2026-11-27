@@ -1674,10 +1674,22 @@ impl Model {
                 }));
                 self.add_tok(n, p);
             }
-            TokKind::Func(_, _)
-            | TokKind::Bound(_)
-            | TokKind::BuiltinFn(_)
-            | TokKind::Builtin(_) => self.add_tok(n, objproto),
+            // BoundFunctionCreate (ECMA-262 10.4.1.3 step 1): a bound
+            // value's [[Prototype]] is `target.[[GetPrototypeOf]]()`, a
+            // bound target's its own target's: the root target's
+            // prototypes, or what a Proxy root's `getPrototypeOf` trap
+            // returns (10.5.1).
+            TokKind::Bound(b) => {
+                let root = self.bound_root[b as usize];
+                let rn = match self.toks[root as usize] {
+                    TokKind::Proxy(p) => self.proxy_proto_trap(p),
+                    _ => self.proto_node(root),
+                };
+                self.edge(rn, n);
+            }
+            TokKind::Func(_, _) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                self.add_tok(n, objproto)
+            }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));

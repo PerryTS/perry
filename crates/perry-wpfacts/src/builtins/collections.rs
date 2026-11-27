@@ -10,22 +10,20 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
     // One bound value per (birth site, target): a bound value is a
     // birth, so every instance's copy of the bind call makes the
-    // same one. Every bound target of a site shares one (`f =
-    // f.bind(x)` in a loop rebinds its own result: per target that
-    // would mint a new value each round). Its parts (target, bound
-    // `this`, bound arguments) are its own nodes, and every bind
-    // call that makes it copies its operands into them: the first
-    // maker may be a summarized body's shared observation node,
-    // which feeds no effect, while each instance's call carries
-    // its caller's values.
-    let key = (
-        m.birth_ctx(call),
-        if matches!(m.toks[t as usize], TokKind::Bound(_)) {
-            u32::MAX
-        } else {
-            t
-        },
-    );
+    // same one. Every bound target of a site with one root target
+    // shares one (`f = f.bind(x)` in a loop rebinds its own result:
+    // per target that would mint a new value each round); the root
+    // is what its chain is (BoundFunctionCreate, ECMA-262 10.4.1.3
+    // step 1: `target.[[GetPrototypeOf]]()`, a bound target's being
+    // its own target's), so it stays exact per root. Its parts
+    // (target, bound `this`, bound arguments) are its own nodes, and
+    // every bind call that makes it copies its operands into them:
+    // the first maker may be a summarized body's shared observation
+    // node, which feeds no effect, while each instance's call
+    // carries its caller's values.
+    let rebind = matches!(m.toks[t as usize], TokKind::Bound(_));
+    let root = super::bound_root(m, t);
+    let key = (m.birth_ctx(call), root, rebind);
     let b = match m.bound_index.get(&key) {
         Some(&b) => b,
         None => {
@@ -36,6 +34,7 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
                 .collect();
             let b = m.bound.len() as u32;
             m.bound.push((target, bthis, bargs));
+            m.bound_root.push(root);
             if let Some(source) = m.diagnostic_source_call(call) {
                 m.diagnostic
                     .as_mut()
@@ -61,6 +60,12 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
         }
     }
     let bt = m.tok(TokKind::Bound(b));
+    // A Proxy target's [[GetPrototypeOf]] runs its `getPrototypeOf` trap
+    // at the bind (10.4.1.3 step 1, 10.5.1): the bound value's prototype
+    // node, which holds the trap's result, is made with the value.
+    if matches!(m.toks[root as usize], TokKind::Proxy(_)) {
+        m.proto_node(bt);
+    }
     m.add_tok(c.ret, bt);
     // bind(...spread), or more bound args than the bound value's
     // first maker had (a call the solver made for the site): the
