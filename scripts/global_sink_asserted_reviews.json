@@ -50,9 +50,9 @@
     }
   },
   "crates/perry-runtime/src/exception.rs::ON": {
-    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local. Re-pinned 2026-11-03 (RPX): the only change to exception.rs since the previous pin is an #[optimize(size)] attribute; the OnceLock flag is still initialized once and only read. Re-audited 2026-11-15 against bbe2ebc12b and later: trace_throw gains a ThrowKind argument; ON is still the OnceLock that trace_throw_enabled initializes once from PERRY_TRACE_THROW and only reads. Re-audited 2026-11-16 against 0ff5a4b19a: catch_generator_resume is deleted; ON is untouched and still initialized once and only read.",
+    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local. Re-pinned 2026-11-03 (RPX): the only change to exception.rs since the previous pin is an #[optimize(size)] attribute; the OnceLock flag is still initialized once and only read. Re-audited 2026-11-15 against bbe2ebc12b and later: trace_throw gains a ThrowKind argument; ON is still the OnceLock that trace_throw_enabled initializes once from PERRY_TRACE_THROW and only reads. Re-audited 2026-11-16 against 0ff5a4b19a: catch_generator_resume is deleted; ON is untouched and still initialized once and only read. Re-audited 2026-11-27 against 121c2278d4: #15532 and #15533 change Node error diagnostics; ON is untouched and still the OnceLock trace_throw_enabled initializes once from PERRY_TRACE_THROW and only reads.",
     "source_sha256": {
-      "crates/perry-runtime/src/exception.rs": "a02bd9cee245e8ddd6fd316dd1b44d1b787eb050890bfc9e1231538c11cd756c"
+      "crates/perry-runtime/src/exception.rs": "b5dd773775a3527e25ef08c5594046946b8c0ddf11e40aba0c9b6b89485ca2b8"
     }
   },
   "crates/perry-runtime/src/tls/roots/macos.rs::API": {

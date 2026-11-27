@@ -777,7 +777,7 @@ fn emit_attempt(route: u8, link: OwnerLink, kind: u64, addr: SocketAddr, err: Op
     );
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The last link plan's incarnation; a reconnect's plan never reuses one.
     static PLANS: Cell<u64> = const { Cell::new(0) };
 }
