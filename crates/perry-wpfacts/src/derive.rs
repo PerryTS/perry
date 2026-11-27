@@ -3659,7 +3659,7 @@ fn proto_data_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             if !seen.insert(p) {
                 continue;
             }
-            if p == op {
+            if p == op || m.collapsed_end(h, p) {
                 ends = true;
                 continue;
             }
@@ -3854,7 +3854,7 @@ fn known_object_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), Strin
             if p == TOP {
                 return Err("a prototype from unmodeled code".into());
             }
-            if m.toks[p as usize] == TokKind::ObjectProto {
+            if m.collapsed_end(h, p) {
                 ends = true;
             } else {
                 todo.push(p);
@@ -4059,7 +4059,7 @@ fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
             if !seen.insert(p) {
                 continue;
             }
-            if p == op {
+            if p == op || m.collapsed_end(h, p) {
                 ends = true;
                 continue;
             }

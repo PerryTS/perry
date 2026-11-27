@@ -2285,6 +2285,10 @@ pub struct Model {
     /// `Model::num_fields`: the fields a number key may name.
     pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
+    /// Rule OPROTO (M1): the intrinsic prototypes `Model::proto_node` seeded
+    /// the chain of a token with at its birth (`Model::seed_chain`; for an
+    /// intrinsic prototype, the [[Prototype]] the realm declares for it).
+    pub birth_protos: FxHashMap<Tok, Vec<Tok>>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
     pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,

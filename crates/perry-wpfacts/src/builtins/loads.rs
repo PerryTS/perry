@@ -238,11 +238,61 @@ pub(super) fn family_member(
 /// (`Model::native_proto_alias`).
 pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>, dst: NodeId) {
     let op = m.tok(TokKind::ObjectProto);
-    let ns = match fam {
+    match fam {
         Family::Object => return m.add_tok(dst, op),
         Family::Box => match what.map(members::box_chain) {
             Some(members::BoxChain::Object) => return m.add_tok(dst, op),
             Some(members::BoxChain::Null) => return m.add_prim(dst, prim::NULL),
+            _ => {}
+        },
+        _ => {}
+    }
+    let p = match family_ns(fam, what).and_then(|ns| builtin_proto_tok(m, ns)) {
+        Some(p) => p,
+        // One object, one token: a realm prototype under its
+        // constructor's name (`realm_proto_value`).
+        None => native_proto(
+            m,
+            what.map_or("%UnknownPrototype%", |w| {
+                w.strip_suffix(".prototype").unwrap_or(w)
+            }),
+        ),
+    };
+    m.add_tok(dst, p);
+}
+
+/// Rule OPROTO (M1): the token of family `fam`'s intrinsic prototype
+/// (`what`: its kind) when the model reads it exactly: a described
+/// builtin's (`builtin_proto_tok`) or a realm-born one (every link of its
+/// chain declared, `realm_proto_named`). `None` for the Object family
+/// (`ObjectProto` is that prototype) and for a prototype the model does
+/// not describe, whose chain keeps the family read (`seed_family`).
+pub(crate) fn family_proto_tok(m: &mut Model, fam: Family, what: Option<&str>) -> Option<Tok> {
+    match fam {
+        Family::Object => return None,
+        Family::Box
+            if !matches!(
+                what.map(members::box_chain),
+                Some(members::BoxChain::Array)
+            ) =>
+        {
+            return None
+        }
+        _ => {}
+    }
+    if let Some(p) = family_ns(fam, what).and_then(|ns| builtin_proto_tok(m, ns)) {
+        return Some(p);
+    }
+    let w = what?;
+    super::realm_proto_named(w)?;
+    Some(native_proto(m, w.strip_suffix(".prototype").unwrap_or(w)))
+}
+
+/// The builtin whose prototype is family `fam`'s (`what`: its kind).
+fn family_ns(fam: Family, what: Option<&str>) -> Option<BuiltinNs> {
+    match fam {
+        Family::Object => None,
+        Family::Box => match what.map(members::box_chain) {
             Some(members::BoxChain::Array) => Some(BuiltinNs::Array),
             _ => None,
         },
@@ -260,19 +310,7 @@ pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>,
             Some(w) => ns_by_name(w),
             None => None,
         },
-    };
-    let p = match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
-        Some(p) => p,
-        // One object, one token: a realm prototype under its
-        // constructor's name (`realm_proto_value`).
-        None => native_proto(
-            m,
-            what.map_or("%UnknownPrototype%", |w| {
-                w.strip_suffix(".prototype").unwrap_or(w)
-            }),
-        ),
-    };
-    m.add_tok(dst, p);
+    }
 }
 
 /// `dst` ⊇ member `name` of a primitive or a primitive wrapper whose
@@ -1879,6 +1917,7 @@ fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
 /// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
 /// under a computed key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    let q = super::chain_link(m, of, q);
     crate::family_reach::chain(m, of, q, key);
     if let (TokKind::Builtin(ns), Key::Named(a)) = (m.toks[q as usize].clone(), key) {
         if namespace_getter_load(m, of, q, ns, a, dst) {

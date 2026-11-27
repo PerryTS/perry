@@ -2511,39 +2511,190 @@ fn born_realm_proto(m: &Model, t: Tok) -> Option<&'static str> {
     }
 }
 
-/// Rule OPROTO: `dst` ⊇ the intrinsic prototype values `Model::proto_value`
-/// adds for `t` beside its chain seed: the realm prototype `t` is born with
-/// (`born_realm_proto`), and for a realm-declared prototype token itself
-/// (`%ArrayIteratorPrototype%`, `%GeneratorPrototype%`) the [[Prototype]] the
-/// realm declares for it (`%IteratorPrototype%`; `null` for none), each by
-/// its own token (`loads::realm_proto_tok`).
-pub(crate) fn intrinsic_proto_values(m: &mut Model, t: Tok, dst: NodeId) {
+pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
+    let fi = &m.funcs[f as usize];
+    fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
+}
+
+/// Rule OPROTO (M1): the [[Prototype]] a builtin-made receiver `t` is born
+/// with, as the exact token of that prototype object (a function's
+/// `Function.prototype`, an array's `Array.prototype`, a builtin object's
+/// its builtin's or its realm declaration's), which `proto_node` seeds its
+/// chain with; that token's own chain is the realm's (`Object.prototype`).
+/// `None`: the receiver's chain starts at %Object.prototype% itself
+/// (`ObjectProto`), or at a prototype the model does not describe, which
+/// keeps the family read of its kind (`seed_family`).
+pub(crate) fn intrinsic_proto_seeds(m: &mut Model, t: Tok) -> Vec<Tok> {
     if let Some(name) = born_realm_proto(m, t) {
-        let p = loads::realm_proto_tok(m, name);
-        m.add_tok(dst, p);
+        return vec![loads::realm_proto_tok(m, name)];
     }
-    let TokKind::NativeProto(n, _) = &m.toks[t as usize] else {
-        return;
+    if any_iterator(m, t) {
+        // An iterator of unknown kind is one of the realm's iterators: its
+        // prototype is one the realm declares to inherit %IteratorPrototype%
+        // (ECMA-262 27.1.2: every built-in iterator prototype does).
+        let names: Vec<&'static str> = crate::native_effects::realm()
+            .iter()
+            .filter(|e| {
+                e.kind == perry_hir::realm_manifest::RealmKind::Prototype
+                    && e.proto == Some("%IteratorPrototype%")
+            })
+            .map(|e| e.name)
+            .collect();
+        return names.into_iter().map(|n| loads::realm_proto_tok(m, n)).collect();
+    }
+    intrinsic_proto_seed(m, t).into_iter().collect()
+}
+
+/// Is `t` an iterator a builtin made whose kind the model does not know
+/// (`members::ANY_ITERATOR`)?
+fn any_iterator(m: &Model, t: Tok) -> bool {
+    match &m.toks[t as usize] {
+        TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => false,
+        TokKind::Obj(tm, _) => matches!(
+            &m.tmpls[*tm as usize].kind,
+            TmplKind::BObj { what, .. } if *what == members::ANY_ITERATOR
+        ),
+        _ => false,
+    }
+}
+
+/// Rule OPROTO (M1): the [[Prototype]] the realm declares for intrinsic
+/// prototype `p` (`NativeProto` with a realm `Prototype` declaration): its
+/// token, `Ok(None)` for null; `Err(())` where the realm declares none.
+pub(crate) fn declared_proto(m: &mut Model, p: Tok) -> Result<Option<Tok>, ()> {
+    let TokKind::NativeProto(n, _) = &m.toks[p as usize] else {
+        return Err(());
     };
     let e = match n.starts_with('%') {
         true => members::realm_entry(n),
         false => members::realm_entry(&format!("{n}.prototype")),
     };
-    let Some(e) = e.filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype) else {
-        return;
-    };
-    match e.proto {
-        Some(p) => {
-            let pt = loads::realm_proto_tok(m, p);
-            m.add_tok(dst, pt);
-        }
-        None => m.add_prim(dst, prim::NULL),
+    match e.filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype) {
+        Some(e) => Ok(e.proto.map(|q| loads::realm_proto_tok(m, q))),
+        None => Err(()),
     }
 }
 
-pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
-    let fi = &m.funcs[f as usize];
-    fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
+/// Rule OPROTO (M1): is `q` one of the intrinsic prototypes `t` is born
+/// inheriting from (its seeds, `intrinsic_proto_seeds`, and up their
+/// declared chains, `declared_proto`, short of `Object.prototype`), or of a
+/// generator object's? A lookup on `t` at such a link reads what the
+/// collapsed chain read there (`chain_link`).
+fn born_chain_link(m: &mut Model, t: Tok, q: Tok) -> bool {
+    let op = m.tok(TokKind::ObjectProto);
+    let mut todo = match &m.toks[t as usize] {
+        TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => {
+            let name = match m.funcs[*f as usize].gen_async {
+                true => "%AsyncGeneratorPrototype%",
+                false => "%GeneratorPrototype%",
+            };
+            vec![loads::realm_proto_tok(m, name)]
+        }
+        _ => birth_links(m, t),
+    };
+    let mut seen = Vec::new();
+    while let Some(p) = todo.pop() {
+        if p == q {
+            return true;
+        }
+        if p == op || seen.contains(&p) {
+            continue;
+        }
+        seen.push(p);
+        todo.extend(birth_links(m, p));
+    }
+    false
+}
+
+/// The intrinsic prototypes `t`'s chain was seeded with at its birth
+/// (`Model::birth_protos`, filled where `Model::proto_node` seeds it; for
+/// an intrinsic prototype whose chain was not made yet, its declared
+/// [[Prototype]]).
+fn birth_links(m: &mut Model, t: Tok) -> Vec<Tok> {
+    if let Some(v) = m.birth_protos.get(&t) {
+        return v.clone();
+    }
+    match m.toks[t as usize] {
+        TokKind::NativeProto(..) if !m.proto_node.contains_key(&t) => {
+            declared_proto(m, t).ok().flatten().into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Rule OPROTO (M1): the links above born link `q` (`chain_link`), up its
+/// declared chain as `Model::proto_node` seeds it (`declared_proto`; a
+/// prototype the realm declares none for reaches `Object.prototype`), to
+/// `Object.prototype` or a null [[Prototype]]. The collapsed read at `q`
+/// stands for the builtin members of all of them, as `ObjectProto` did
+/// before the chain was exact; above `q` a lookup adds only what the
+/// program stored on them.
+pub(crate) fn born_links_above(m: &mut Model, q: Tok) -> Vec<Tok> {
+    let op = m.tok(TokKind::ObjectProto);
+    let mut out = Vec::new();
+    let mut p = q;
+    while p != op {
+        let up = match declared_proto(m, p) {
+            Ok(Some(u)) => u,
+            Ok(None) => break,
+            Err(()) => op,
+        };
+        if up == q || out.contains(&up) {
+            break;
+        }
+        out.push(up);
+        p = up;
+    }
+    out
+}
+
+/// Rule OPROTO (M1): the token a lookup of `t` reads at chain link `q`. A
+/// builtin-made receiver's chain holds its exact intrinsic prototypes; its
+/// own dispatch models their members (`function_method`, the family's
+/// methods), and a member read there is its family's chain read
+/// (`seed_family`): `ObjectProto` with `t` as origin, as before the chain
+/// was exact. Any other link reads as itself.
+pub(crate) fn chain_link(m: &mut Model, t: Tok, q: Tok) -> Tok {
+    if matches!(m.toks[q as usize], TokKind::NativeProto(..))
+        && (born_chain_link(m, t, q) || link_born_on_chain(m, t, q))
+    {
+        return m.tok(TokKind::ObjectProto);
+    }
+    q
+}
+
+/// Rule OPROTO (M1): is `q` a birth link (`born_chain_link`) of a link of
+/// `t`'s chain (`Model::cp`, as the solve knows it): a class's parent class
+/// object, a builtin function given as a prototype? Where the chain was
+/// collapsed that position held `ObjectProto`, read with `t` as origin.
+fn link_born_on_chain(m: &mut Model, t: Tok, q: Tok) -> bool {
+    let Some(&cp) = m.cp_nodes.get(&t) else {
+        return false;
+    };
+    let links = m.nodes[cp as usize].pts.to_sorted();
+    links
+        .into_iter()
+        .any(|p| p != q && p != crate::model::TOP && born_chain_link(m, p, q))
+}
+
+fn intrinsic_proto_seed(m: &mut Model, t: Tok) -> Option<Tok> {
+    let (fam, what) = match &m.toks[t as usize] {
+        TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => return None,
+        // An async, generator or async-generator function is born with
+        // another intrinsic prototype (`born_with_function_proto`).
+        TokKind::Func(f, _) if !born_with_function_proto(m, *f) => return None,
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
+            (Family::Function, None)
+        }
+        TokKind::Builtin(ns) => (members::ns_chain(*ns), None),
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Arr { .. } => (Family::Array, None),
+            TmplKind::BObj { what, .. } => (members::bobj_family(what), Some(*what)),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    loads::family_proto_tok(m, fam, what)
 }
 
 pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {

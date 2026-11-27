@@ -77,7 +77,7 @@ impl Model {
                     .pts
                     .to_sorted()
                     .iter()
-                    .all(|&p| matches!(self.toks[p as usize], TokKind::ObjectProto))
+                    .all(|&p| self.collapsed_end(t, p))
         });
         born_chain && self.array_proto_iteration_writes() == (None, None)
     }

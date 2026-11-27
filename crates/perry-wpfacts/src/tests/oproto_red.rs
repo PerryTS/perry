@@ -249,3 +249,14 @@ fn oproto_s5_segmenter_prototype_write_by_value() {
     escapes("S5", "const SP: any = Object.getPrototypeOf(new (Intl as any).Segmenter());\nSP.hook = u;\n\
 const s2: any = new (Intl as any).Segmenter();\ns2.hook(payload);\n");
 }
+
+/// S6: a bound function's [[Prototype]] is its target's (ECMA-262 10.4.1.3
+/// BoundFunctionCreate step 1); an async function's is
+/// %AsyncFunction.prototype%, which perry does not add-lock (rt5 probe: the
+/// store succeeds, the hook runs). A store through that value is seen by a
+/// lookup on the bound function.
+#[test]
+fn oproto_s6_bound_async_function_prototype_store() {
+    escapes("S6", "async function a(): Promise<number> { return 1; }\nconst b: any = a.bind(null);\n\
+const P: any = Object.getPrototypeOf(b);\nP.hook = u;\nb.hook(payload);\n");
+}

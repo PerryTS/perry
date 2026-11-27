@@ -201,7 +201,7 @@ impl Model {
                     .to_sorted()
                     .iter()
                     .all(|&p| match self.toks[p as usize] {
-                        TokKind::ObjectProto => true,
+                        _ if self.collapsed_end(t, p) => true,
                         TokKind::Proto(pm) => pm == tm,
                         _ => false,
                     })

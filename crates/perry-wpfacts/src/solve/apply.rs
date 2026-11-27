@@ -1367,7 +1367,8 @@ impl Model {
                     // collapsed token also holds stores onto add-open
                     // prototypes, which this receiver's chain never sees.
                     if let Key::Named(a) = key {
-                        if matches!(self.toks[q as usize], TokKind::ObjectProto)
+                        let ql = builtins::chain_link(self, of, q);
+                        if matches!(self.toks[ql as usize], TokKind::ObjectProto)
                             && builtins::locked_chain_read(self, of, a)
                         {
                             self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
@@ -1397,6 +1398,19 @@ impl Model {
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
+                    } else if builtins::chain_link(self, of, q) != q {
+                        // Rule OPROTO (M1): `q` is a link of `of`'s birth
+                        // chain, read above as the collapsed chain read
+                        // (`chain_link`), which stands for the builtin
+                        // members of every link up to `Object.prototype`:
+                        // the links above add the program's stores there.
+                        for p in builtins::born_links_above(self, q) {
+                            let f = match key {
+                                Key::Named(a) => self.field_r(p, a),
+                                Key::Any(_) => self.key_fields(p, key),
+                            };
+                            self.edge(f, dst);
+                        }
                     } else {
                         let up = self.cv_up(q, key, builtin);
                         self.edge(up, dst);
@@ -2103,6 +2117,25 @@ impl Model {
                         .insert((n, q, dst, crate::model::IDX_ENUM_CHAIN))
                     {
                         self.accessor_walk(of, q, key, ChainAct::Load(dst, self.thrown));
+                        // Rule OPROTO (M1): past an intrinsic prototype
+                        // `from` was born with, the collapsed chain read
+                        // (`Model::collapsed_end`) stands for the builtin
+                        // members of every link up to `Object.prototype`;
+                        // those links add what the program put there.
+                        if !matches!(self.toks[q as usize], TokKind::ObjectProto)
+                            && self.collapsed_end(from, q)
+                        {
+                            for p in builtins::born_links_above(self, q) {
+                                if !self.enum_kept(p) {
+                                    self.load_from(of, p, key, dst);
+                                    continue;
+                                }
+                                self.enum_file(p, EnumFiled::Chain { of, key, dst });
+                                self.enum_fields(of, p, key, dst);
+                                self.accessor_walk(of, p, key, ChainAct::Load(dst, self.thrown));
+                            }
+                            continue;
+                        }
                         let up = self.proto_node(q);
                         let link = Cons::EnumChain {
                             key,
