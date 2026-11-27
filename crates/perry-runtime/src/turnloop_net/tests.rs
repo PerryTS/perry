@@ -596,6 +596,7 @@ fn an_id_sockets_closed_waits_for_the_close_phase_newest_first() {
         0,
         "the poll phase does not emit it"
     );
+    super::close(client).expect("a close still owed to the phase is a close in progress");
     super::close_phase();
     let closed: Vec<i64> = events()
         .iter()

@@ -173,9 +173,9 @@ pub(crate) fn emit_session_close(session_handle: i64) {
     if session_handle == 0 {
         return;
     }
-    // The events queued before the transport closed (its errors, its
-    // streams' ends) precede the session's `'close'`.
-    process_pending_h2_events();
+    // The events it queued before the transport closed (its errors, its
+    // streams' ends) precede its `'close'`.
+    process_session_h2_events(session_handle);
     emit_close_listeners(session_handle);
 }
 
@@ -223,272 +223,313 @@ pub(crate) fn process_pending_h2_events() -> i32 {
         n
     };
     while let Some(event) = super::H2_DRAINED_EVENTS.with(|d| d.borrow_mut().pop_front()) {
-        match event {
-            Http2PendingEvent::Session {
-                server_handle,
-                session_handle,
-            } => {
-                if !local_server_session_event_ready(session_handle) {
-                    push_h2_event(Http2PendingEvent::Session {
-                        server_handle,
-                        session_handle,
-                    });
-                    continue;
-                }
-                let listeners = get_handle_mut::<Http2SecureServer>(server_handle)
-                    .map(|server| {
-                        crate::server::server::take_server_event_listeners(
-                            &mut server.base,
-                            "session",
-                        )
-                    })
-                    .unwrap_or_default();
-                let scope = perry_ffi::TransientRootScope::enter();
-                let listeners = scope.root_addrs(&listeners);
-                let arg = handle_to_pointer_f64(session_handle);
-                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                    session.session_event_emitted = true;
-                }
-                for cb in listeners {
-                    call1(cb.get(), arg);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::ClientConnect { session_handle } => {
-                if !local_client_connect_ready(session_handle) {
-                    push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
-                    continue;
-                }
-                let listeners = get_handle::<Http2SessionHandle>(session_handle)
-                    .and_then(|s| s.listeners.get("connect").cloned())
-                    .unwrap_or_default();
-                for cb in listeners {
-                    call0(cb);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                    session.connect_event_emitted = true;
-                }
-            }
-            Http2PendingEvent::ClientResponse {
-                stream_handle,
-                headers,
-            } => {
-                let listeners = get_handle::<Http2StreamHandle>(stream_handle)
-                    .and_then(|s| s.listeners.get("response").cloned())
-                    .unwrap_or_default();
-                let arg = map_to_js_object(&headers);
-                for cb in listeners {
-                    call1(cb, arg);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::ClientData {
-                stream_handle,
-                body,
-            } => {
-                let (listeners, encoding) = get_handle::<Http2StreamHandle>(stream_handle)
-                    .map(|s| {
-                        (
-                            s.listeners.get("data").cloned().unwrap_or_default(),
-                            s.encoding.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-                if !listeners.is_empty() && !body.is_empty() {
-                    let arg = match encoding.as_deref() {
-                        Some(_) => string_value(&String::from_utf8_lossy(&body)),
-                        None => {
-                            let buf = alloc_buffer(&body);
-                            if buf.is_null() {
-                                f64::from_bits(TAG_UNDEFINED)
-                            } else {
-                                f64::from_bits(
-                                    perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8)
-                                        .bits(),
-                                )
-                            }
-                        }
-                    };
-                    if arg.to_bits() != TAG_UNDEFINED {
-                        for cb in listeners {
-                            call1(cb, arg);
-                            unsafe {
-                                js_promise_run_microtasks();
-                            }
-                        }
-                    }
-                }
-            }
-            Http2PendingEvent::ClientEnd { stream_handle } => {
-                let listeners = get_handle::<Http2StreamHandle>(stream_handle)
-                    .and_then(|s| s.listeners.get("end").cloned())
-                    .unwrap_or_default();
-                for cb in listeners {
-                    call0(cb);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::ClientStreamClose { stream_handle } => {
-                let listeners = get_handle::<Http2StreamHandle>(stream_handle)
-                    .and_then(|s| s.listeners.get("close").cloned())
-                    .unwrap_or_default();
-                let scope = perry_ffi::TransientRootScope::enter();
-                for cb in scope.root_addrs(&listeners) {
-                    call0(cb.get());
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::ClientClose { session_handle } => {
-                emit_close_listeners(session_handle);
-                unsafe {
-                    js_promise_run_microtasks();
-                }
-            }
-            Http2PendingEvent::SessionSettingsEvent {
-                session_handle,
-                event,
-                settings,
-            } => {
-                let listeners = get_handle::<Http2SessionHandle>(session_handle)
-                    .and_then(|s| s.listeners.get(event).cloned())
-                    .unwrap_or_default();
-                let arg = settings_value(&settings);
-                for cb in listeners {
-                    call1(cb, arg);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::SessionSettingsCallback {
-                session_handle,
-                callback,
-                settings,
-                duration,
-            } => {
-                // `settings_value` allocates the JS settings object and can
-                // collect; keep the callback in the scanned stack across it.
-                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
-                let err = null_value();
-                let settings_arg = settings_value(&settings);
-                let callback =
-                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
-                call3(callback, err, settings_arg, duration);
-                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                    session.pending_callbacks.retain(|cb| *cb != callback);
-                    session.pending_settings_ack = false;
-                }
-                unsafe {
-                    js_promise_run_microtasks();
-                }
-            }
-            Http2PendingEvent::SessionPingCallback {
-                session_handle,
-                callback,
-                payload,
-                duration,
-            } => {
-                // `buffer_value_from_bytes` allocates; same custody dance as
-                // the settings callback above.
-                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
-                let err = null_value();
-                let payload_arg = buffer_value_from_bytes(&payload);
-                let callback =
-                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
-                call3(callback, err, duration, payload_arg);
-                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                    session.pending_callbacks.retain(|cb| *cb != callback);
-                }
-                unsafe {
-                    js_promise_run_microtasks();
-                }
-            }
-            Http2PendingEvent::SessionGoaway {
-                session_handle,
-                code,
-                last_stream_id,
-                opaque_data,
-            } => {
-                let listeners = get_handle::<Http2SessionHandle>(session_handle)
-                    .and_then(|s| s.listeners.get("goaway").cloned())
-                    .unwrap_or_default();
-                let opaque = buffer_value_from_bytes(&opaque_data);
-                for cb in listeners {
-                    call3(cb, code, last_stream_id, opaque);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-            }
-            Http2PendingEvent::ClientError {
-                handle,
-                message,
-                code,
-            } => {
-                let listeners = get_handle::<Http2SessionHandle>(handle)
-                    .and_then(|s| s.listeners.get("error").cloned())
-                    .or_else(|| {
-                        get_handle::<Http2StreamHandle>(handle)
-                            .and_then(|s| s.listeners.get("error").cloned())
-                    })
-                    .unwrap_or_default();
-                let scope = perry_ffi::TransientRootScope::enter();
-                let listeners = scope.root_addrs(&listeners);
-                let arg = scope.root_nanbox(match code {
-                    Some(code) => f64::from_bits(
-                        perry_ffi::error_value_with_code(
-                            &message,
-                            &code,
-                            perry_ffi::ErrorKind::Error,
-                        )
-                        .bits(),
-                    ),
-                    None => string_value(&message),
+        dispatch_h2_event(event);
+    }
+    count
+}
+
+/// Dispatch the events queued for `session_handle`, ahead of every other
+/// session's, which keep their place in the queue.
+fn process_session_h2_events(session_handle: i64) {
+    let events: Vec<Http2PendingEvent> = match H2_PENDING_EVENTS.lock() {
+        Ok(mut q) => q
+            .extract_if(.., |event| event_session(event) == Some(session_handle))
+            .collect(),
+        Err(_) => return,
+    };
+    let count = events.len();
+    // In the scanned queue's front for the same reason as above.
+    super::H2_DRAINED_EVENTS.with(|d| {
+        let mut d = d.borrow_mut();
+        for event in events.into_iter().rev() {
+            d.push_front(event);
+        }
+    });
+    for _ in 0..count {
+        let Some(event) = super::H2_DRAINED_EVENTS.with(|d| d.borrow_mut().pop_front()) else {
+            break;
+        };
+        dispatch_h2_event(event);
+    }
+}
+
+/// The session an event belongs to.
+fn event_session(event: &Http2PendingEvent) -> Option<i64> {
+    let stream_session =
+        |stream: i64| get_handle::<Http2StreamHandle>(stream).map(|s| s.session_handle);
+    match event {
+        Http2PendingEvent::Session { session_handle, .. }
+        | Http2PendingEvent::ClientConnect { session_handle }
+        | Http2PendingEvent::ClientClose { session_handle }
+        | Http2PendingEvent::SessionSettingsEvent { session_handle, .. }
+        | Http2PendingEvent::SessionSettingsCallback { session_handle, .. }
+        | Http2PendingEvent::SessionPingCallback { session_handle, .. }
+        | Http2PendingEvent::SessionGoaway { session_handle, .. }
+        | Http2PendingEvent::SessionSocketError { session_handle, .. } => Some(*session_handle),
+        // A stream's error or its session's.
+        Http2PendingEvent::ClientError { handle, .. } => stream_session(*handle).or(Some(*handle)),
+        Http2PendingEvent::ClientResponse { stream_handle, .. }
+        | Http2PendingEvent::ClientData { stream_handle, .. }
+        | Http2PendingEvent::ClientEnd { stream_handle }
+        | Http2PendingEvent::ClientStreamClose { stream_handle } => stream_session(*stream_handle),
+    }
+}
+
+fn dispatch_h2_event(event: Http2PendingEvent) {
+    match event {
+        Http2PendingEvent::Session {
+            server_handle,
+            session_handle,
+        } => {
+            if !local_server_session_event_ready(session_handle) {
+                push_h2_event(Http2PendingEvent::Session {
+                    server_handle,
+                    session_handle,
                 });
-                for cb in listeners {
-                    call1(cb.get(), arg.get());
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
+                return;
+            }
+            let listeners = get_handle_mut::<Http2SecureServer>(server_handle)
+                .map(|server| {
+                    crate::server::server::take_server_event_listeners(&mut server.base, "session")
+                })
+                .unwrap_or_default();
+            let scope = perry_ffi::TransientRootScope::enter();
+            let listeners = scope.root_addrs(&listeners);
+            let arg = handle_to_pointer_f64(session_handle);
+            if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                session.session_event_emitted = true;
+            }
+            for cb in listeners {
+                call1(cb.get(), arg);
+                unsafe {
+                    js_promise_run_microtasks();
                 }
             }
-            Http2PendingEvent::SessionSocketError {
-                session_handle,
-                syscall,
-                code,
-                target,
-            } => {
-                let listeners = get_handle::<Http2SessionHandle>(session_handle)
-                    .and_then(|s| s.listeners.get("error").cloned())
-                    .unwrap_or_default();
-                let scope = perry_ffi::TransientRootScope::enter();
-                let listeners = scope.root_addrs(&listeners);
-                let arg = scope.root_nanbox(perry_ext_net::socket_error_value(
-                    &syscall,
-                    &code,
-                    target.as_ref(),
-                ));
-                for cb in listeners {
-                    call1(cb.get(), arg.get());
-                    unsafe {
-                        js_promise_run_microtasks();
+        }
+        Http2PendingEvent::ClientConnect { session_handle } => {
+            if !local_client_connect_ready(session_handle) {
+                push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
+                return;
+            }
+            let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                .and_then(|s| s.listeners.get("connect").cloned())
+                .unwrap_or_default();
+            for cb in listeners {
+                call0(cb);
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+            if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                session.connect_event_emitted = true;
+            }
+        }
+        Http2PendingEvent::ClientResponse {
+            stream_handle,
+            headers,
+        } => {
+            let listeners = get_handle::<Http2StreamHandle>(stream_handle)
+                .and_then(|s| s.listeners.get("response").cloned())
+                .unwrap_or_default();
+            let arg = map_to_js_object(&headers);
+            for cb in listeners {
+                call1(cb, arg);
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::ClientData {
+            stream_handle,
+            body,
+        } => {
+            let (listeners, encoding) = get_handle::<Http2StreamHandle>(stream_handle)
+                .map(|s| {
+                    (
+                        s.listeners.get("data").cloned().unwrap_or_default(),
+                        s.encoding.clone(),
+                    )
+                })
+                .unwrap_or_default();
+            if !listeners.is_empty() && !body.is_empty() {
+                let arg = match encoding.as_deref() {
+                    Some(_) => string_value(&String::from_utf8_lossy(&body)),
+                    None => {
+                        let buf = alloc_buffer(&body);
+                        if buf.is_null() {
+                            f64::from_bits(TAG_UNDEFINED)
+                        } else {
+                            f64::from_bits(
+                                perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits(),
+                            )
+                        }
+                    }
+                };
+                if arg.to_bits() != TAG_UNDEFINED {
+                    for cb in listeners {
+                        call1(cb, arg);
+                        unsafe {
+                            js_promise_run_microtasks();
+                        }
                     }
                 }
             }
         }
+        Http2PendingEvent::ClientEnd { stream_handle } => {
+            let listeners = get_handle::<Http2StreamHandle>(stream_handle)
+                .and_then(|s| s.listeners.get("end").cloned())
+                .unwrap_or_default();
+            for cb in listeners {
+                call0(cb);
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::ClientStreamClose { stream_handle } => {
+            let listeners = get_handle::<Http2StreamHandle>(stream_handle)
+                .and_then(|s| s.listeners.get("close").cloned())
+                .unwrap_or_default();
+            let scope = perry_ffi::TransientRootScope::enter();
+            for cb in scope.root_addrs(&listeners) {
+                call0(cb.get());
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::ClientClose { session_handle } => {
+            emit_close_listeners(session_handle);
+            unsafe {
+                js_promise_run_microtasks();
+            }
+        }
+        Http2PendingEvent::SessionSettingsEvent {
+            session_handle,
+            event,
+            settings,
+        } => {
+            let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                .and_then(|s| s.listeners.get(event).cloned())
+                .unwrap_or_default();
+            let arg = settings_value(&settings);
+            for cb in listeners {
+                call1(cb, arg);
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::SessionSettingsCallback {
+            session_handle,
+            callback,
+            settings,
+            duration,
+        } => {
+            // `settings_value` allocates the JS settings object and can
+            // collect; keep the callback in the scanned stack across it.
+            super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
+            let err = null_value();
+            let settings_arg = settings_value(&settings);
+            let callback = super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
+            call3(callback, err, settings_arg, duration);
+            if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                session.pending_callbacks.retain(|cb| *cb != callback);
+                session.pending_settings_ack = false;
+            }
+            unsafe {
+                js_promise_run_microtasks();
+            }
+        }
+        Http2PendingEvent::SessionPingCallback {
+            session_handle,
+            callback,
+            payload,
+            duration,
+        } => {
+            // `buffer_value_from_bytes` allocates; same custody dance as
+            // the settings callback above.
+            super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
+            let err = null_value();
+            let payload_arg = buffer_value_from_bytes(&payload);
+            let callback = super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
+            call3(callback, err, duration, payload_arg);
+            if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                session.pending_callbacks.retain(|cb| *cb != callback);
+            }
+            unsafe {
+                js_promise_run_microtasks();
+            }
+        }
+        Http2PendingEvent::SessionGoaway {
+            session_handle,
+            code,
+            last_stream_id,
+            opaque_data,
+        } => {
+            let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                .and_then(|s| s.listeners.get("goaway").cloned())
+                .unwrap_or_default();
+            let opaque = buffer_value_from_bytes(&opaque_data);
+            for cb in listeners {
+                call3(cb, code, last_stream_id, opaque);
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::ClientError {
+            handle,
+            message,
+            code,
+        } => {
+            let listeners = get_handle::<Http2SessionHandle>(handle)
+                .and_then(|s| s.listeners.get("error").cloned())
+                .or_else(|| {
+                    get_handle::<Http2StreamHandle>(handle)
+                        .and_then(|s| s.listeners.get("error").cloned())
+                })
+                .unwrap_or_default();
+            let scope = perry_ffi::TransientRootScope::enter();
+            let listeners = scope.root_addrs(&listeners);
+            let arg = scope.root_nanbox(match code {
+                Some(code) => f64::from_bits(
+                    perry_ffi::error_value_with_code(&message, &code, perry_ffi::ErrorKind::Error)
+                        .bits(),
+                ),
+                None => string_value(&message),
+            });
+            for cb in listeners {
+                call1(cb.get(), arg.get());
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
+        Http2PendingEvent::SessionSocketError {
+            session_handle,
+            syscall,
+            code,
+            target,
+        } => {
+            let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                .and_then(|s| s.listeners.get("error").cloned())
+                .unwrap_or_default();
+            let scope = perry_ffi::TransientRootScope::enter();
+            let listeners = scope.root_addrs(&listeners);
+            let arg = scope.root_nanbox(perry_ext_net::socket_error_value(
+                &syscall,
+                &code,
+                target.as_ref(),
+            ));
+            for cb in listeners {
+                call1(cb.get(), arg.get());
+                unsafe {
+                    js_promise_run_microtasks();
+                }
+            }
+        }
     }
-    count
 }
 
 #[cfg(test)]

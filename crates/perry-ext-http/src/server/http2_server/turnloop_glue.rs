@@ -140,6 +140,12 @@ pub(crate) fn mark_turnloop_client_connected(session_handle: i64, protocol: &str
 pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
     if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
         session.connecting = false;
+    }
+}
+
+/// The session's transport is gone: no frame reaches a wire again.
+pub(crate) fn detach_turnloop_session(session_handle: i64) {
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
         session.turnloop_conn = 0;
     }
 }

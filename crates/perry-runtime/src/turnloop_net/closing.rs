@@ -148,6 +148,11 @@ pub(super) fn awaits(owner: Owner, handle: Handle) -> bool {
     })
 }
 
+/// Whether a close is still owed to `owner`.
+pub(super) fn owes(owner: Owner) -> bool {
+    QUEUE.with(|q| q.borrow().entries.values().any(|e| e.owner == owner))
+}
+
 /// The owner a net completion names.
 fn owner_of(completion: &Completion) -> Option<Owner> {
     match transport::link_cell(completion) {

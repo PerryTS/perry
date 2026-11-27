@@ -402,7 +402,7 @@ pub(crate) fn intercept(c: &tl::NetCompletion) -> bool {
         tl::NET_EOF => on_eof(c.id),
         tl::NET_WROTE => {}
         tl::NET_SHUTDOWN => on_shutdown(c.id),
-        tl::NET_CLOSED => on_closed(c.id),
+        tl::NET_CLOSED => on_closed(c.id, c.flags & tl::NET_FLAG_TEARDOWN != 0),
         tl::NET_TIMER => on_timer(c.id),
         tl::NET_ERROR => {
             // SAFETY: same call; both point at `'static` string data.
@@ -1316,12 +1316,14 @@ pub(super) fn on_eof(id: impl Into<Target>) {
 
 /// The connection's terminal completion, delivered in the close-callbacks
 /// phase: the session it carried is destroyed and emits `'close'` here.
-fn on_closed(id: i64) {
+fn on_closed(id: i64, teardown: bool) {
     let session = release(id);
     // No completion can name this id again, so it goes back to the shared
     // band rather than leaking one per connection.
     perry_ffi::free_handle_id(id);
-    crate::server::http2_server::emit_session_close(session);
+    if !teardown {
+        crate::server::http2_server::emit_session_close(session);
+    }
 }
 
 /// Release a connection whose transport is gone, returning the session it
@@ -1333,6 +1335,7 @@ pub(super) fn release(id: i64) -> i64 {
         .unwrap_or_else(|e| e.into_inner())
         .remove(&id)
         .unwrap_or(0);
+    crate::server::http2_server::detach_turnloop_session(session);
     let record = conns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1560,7 +1563,7 @@ mod prescan_tests {
                 assert!(peek(id, |_| ()).is_none());
                 assert!(owns(id));
             }
-            on_closed(id);
+            on_closed(id, false);
             assert!(!owns(id));
             assert!(peek(id, |_| ()).is_none());
         }

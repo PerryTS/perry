@@ -68,13 +68,14 @@ pub(crate) use session::{
 };
 pub(crate) use turnloop_glue::{
     bind_turnloop_client_port, bind_turnloop_session, bind_turnloop_stream_id,
-    complete_turnloop_ping, complete_turnloop_settings, mark_turnloop_client_connected,
-    mark_turnloop_session_closed, mark_turnloop_settings_acked, mark_turnloop_stream_closed,
-    queue_turnloop_client_body, queue_turnloop_client_response, queue_turnloop_goaway,
-    queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_session_tls_error,
-    queue_turnloop_stream_cancel, queue_turnloop_stream_error, queue_turnloop_stream_reset,
-    register_turnloop_server_session, register_turnloop_stream_handle, server_has_stream_listener,
-    socket_of_session, turnloop_conn_of_session, turnloop_target_of_stream,
+    complete_turnloop_ping, complete_turnloop_settings, detach_turnloop_session,
+    mark_turnloop_client_connected, mark_turnloop_session_closed, mark_turnloop_settings_acked,
+    mark_turnloop_stream_closed, queue_turnloop_client_body, queue_turnloop_client_response,
+    queue_turnloop_goaway, queue_turnloop_remote_settings, queue_turnloop_session_error,
+    queue_turnloop_session_tls_error, queue_turnloop_stream_cancel, queue_turnloop_stream_error,
+    queue_turnloop_stream_reset, register_turnloop_server_session, register_turnloop_stream_handle,
+    server_has_stream_listener, socket_of_session, turnloop_conn_of_session,
+    turnloop_target_of_stream,
 };
 
 pub(crate) static H2_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<Http2PendingEvent>>> =

@@ -912,6 +912,11 @@ pub fn close(id: i64) -> NetResult<()> {
             // A failed attempt's `Closed` starts the next attempt, not a close.
             let attempt = net.plans.get(&id).is_some_and(|plan| plan.retrying);
             let Some(entry) = net.entries.get_mut(&id) else {
+                // Closed already, its `NET_CLOSED` still owed to the close
+                // phase: the binding has not seen it yet.
+                if closing::owes(closing::Owner::Id(id)) {
+                    return Ok(());
+                }
                 // Nothing to close (a connect still resolving, or a second
                 // close): the connect and whatever was waiting to be written
                 // go with it, so a later lookup answer finds no plan.
@@ -1249,7 +1254,7 @@ pub(crate) fn dispatch(completion: Completion) {
                 // A failed connect attempt, not the socket the caller sees.
                 attempt_next_address(id);
             } else if transport::tearing_down() {
-                sink::emit(subsystem, NetCompletion::closed(id));
+                sink::emit(subsystem, NetCompletion::closed_in_teardown(id));
             } else if !handle
                 .is_some_and(|h| closing::mark_closed(closing::Owner::Id(id), h, false))
             {
@@ -1474,7 +1479,7 @@ pub(crate) fn shutdown_current_thread() {
         unsafe { transport::release_parked_eof(cell) };
     }
     for (subsystem, id) in ready_ids {
-        sink::emit(subsystem, NetCompletion::closed(id));
+        sink::emit(subsystem, NetCompletion::closed_in_teardown(id));
     }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {

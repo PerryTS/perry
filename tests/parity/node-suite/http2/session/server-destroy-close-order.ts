@@ -26,17 +26,10 @@ const closed = new Promise<void>((resolve) => {
     });
   }
 });
-// The destroys run in a timers-phase callback, as in the issue's probe, so
-// the close phase they owe comes before the next iteration's timers.
-await new Promise<void>((resolve) =>
-  setTimeout(() => {
-    setTimeout(() => console.log("timeout"), 0);
-    a.destroy();
-    b.destroy();
-    console.log("destroyed", a.destroyed, b.destroyed);
-    resolve();
-  }, 0),
-);
+setTimeout(() => console.log("timeout"), 0);
+a.destroy();
+b.destroy();
+console.log("destroyed", a.destroyed, b.destroyed);
 await closed;
 await new Promise((resolve) => setTimeout(resolve, 10));
 for (const client of clients) client.destroy();

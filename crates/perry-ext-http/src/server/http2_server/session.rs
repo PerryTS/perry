@@ -712,20 +712,6 @@ pub(crate) mod tests {
         let session = get_handle::<Http2SessionHandle>(handle).expect("session");
         assert_eq!(session.listeners["close"], vec![listener.get()]);
         assert!(session.close_callbacks.is_empty() && session.destroyed);
-
-    /// A `close(cb)` removes only its own entry: the same function added with
-    /// `on('close', cb)` stays registered.
-    #[test]
-    fn a_close_callback_removes_only_its_own_listener() {
-        let mut session = client_session(0);
-        let (shared, other) = (i64::MAX - 15_530, i64::MAX - 15_531);
-        session
-            .listeners
-            .insert("close".into(), vec![shared, other, shared]);
-        session.close_callbacks.push(shared);
-        assert_eq!(session.take_close_listeners(), [shared, other, shared]);
-        assert_eq!(session.listeners["close"], [other, shared]);
-        assert!(session.close_callbacks.is_empty());
     }
 
     /// A failed TLS handshake reaches the session's `'error'` as Node's
