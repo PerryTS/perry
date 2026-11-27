@@ -2916,6 +2916,9 @@ pub struct Model {
     /// A call with spread arguments -> the call a builtin model reads
     /// (`Model::builtin_args_view`); a view maps to itself.
     pub spread_view: FxHashMap<CallId, CallId>,
+    /// A spread source node -> the one node holding its elements
+    /// (`Model::spread_elems_of`).
+    pub spread_elems: FxHashMap<NodeId, NodeId>,
     /// Solver-made call → the call its chain of solver-made calls started
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.

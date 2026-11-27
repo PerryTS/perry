@@ -739,11 +739,17 @@ impl Model {
             return v;
         }
         let c = self.calls[call as usize].clone();
-        let elems = self.node_l("spread-view-elems");
-        for &s in &c.spread {
-            let key = self.elem_key();
-            self.cons(s, Cons::Load { key, dst: elems });
-        }
+        let elems = match c.spread[..] {
+            [s] => self.spread_elems_of(s),
+            _ => {
+                let elems = self.node_l("spread-view-elems");
+                for &s in &c.spread {
+                    let e = self.spread_elems_of(s);
+                    self.edge(e, elems);
+                }
+                elems
+            }
+        };
         let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
         let n = c.args.len().max(fixed + 1);
         let mut args = Vec::with_capacity(n);
@@ -777,6 +783,34 @@ impl Model {
         self.spread_view.insert(call, v);
         self.spread_view.insert(v, v);
         v
+    }
+
+    /// The elements of spread source `s` (a Load of the any-index key):
+    /// one node per source, whichever call or model reads them. Every
+    /// reader only reads it, so a solver-made call per callee or per
+    /// receiver token adds no new load to `s`. Generation in an inert body
+    /// (D2) makes its own: its load waits for the body's activation, and a
+    /// reader outside it must not wait with it.
+    pub(crate) fn spread_elems_of(&mut self, s: NodeId) -> NodeId {
+        #[cfg(test)]
+        let packet = self.packet_scope.is_some();
+        #[cfg(not(test))]
+        let packet = false;
+        // A summary packet records the load as its own operation.
+        if packet || self.gen_inert(self.cur_fn) {
+            let e = self.node_l("spread-elems");
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: e });
+            return e;
+        }
+        if let Some(&e) = self.spread_elems.get(&s) {
+            return e;
+        }
+        let e = self.node_l("spread-elems");
+        let key = self.elem_key();
+        self.cons(s, Cons::Load { key, dst: e });
+        self.spread_elems.insert(s, e);
+        e
     }
 
     pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {

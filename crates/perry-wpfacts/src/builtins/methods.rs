@@ -914,10 +914,8 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
             );
         }
         for &spread in &c.spread {
-            let f = m.node_l("annexb-spread-function");
+            let f = m.spread_elems_of(spread);
             let key = m.atom(crate::STAR_KEY);
-            let elem = m.elem_key();
-            m.cons(spread, Cons::Load { key: elem, dst: f });
             m.cons(
                 f,
                 Cons::Accessor {
