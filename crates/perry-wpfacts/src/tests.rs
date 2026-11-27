@@ -44,6 +44,7 @@ mod bool_field_guard;
 mod booleans;
 mod bound_call_memo;
 mod bound_class;
+mod bound_proto_chain;
 mod bound_in_summary;
 mod box_chain;
 pub(crate) mod box_computed_read;

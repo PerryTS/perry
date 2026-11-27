@@ -410,7 +410,7 @@ impl Model {
     /// forward target.[[GetPrototypeOf]]() (step 6), also step 11's check
     /// on a non-extensible target, and IsExtensible(target) (step 8). The
     /// result node, made once.
-    fn proxy_proto_trap(&mut self, p: u32) -> NodeId {
+    pub(crate) fn proxy_proto_trap(&mut self, p: u32) -> NodeId {
         if let Some(&n) = self.proxies[p as usize].ops.get(&ProxyOp::ProtoTrap) {
             return n;
         }

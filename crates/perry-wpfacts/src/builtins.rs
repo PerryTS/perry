@@ -1493,6 +1493,11 @@ pub(crate) fn proto_read_final(m: &Model, what: &str, a: Atom) -> bool {
 /// collapsed token may stand for an add-open prototype (`%TypedArray%`,
 /// `Error.prototype`), not `Object.prototype`.
 pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
+    // A bound value's chain is its root target's (`bound_root`); its own
+    // keys (`name`, `length`, what the program stored) are the caller's.
+    if let TokKind::Bound(b) = m.toks[t as usize] {
+        return locked_chain_read(m, m.bound_root[b as usize], a);
+    }
     if matches!(m.toks[t as usize], TokKind::NativeProto(..)) {
         return false;
     }
@@ -1566,6 +1571,9 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
 /// native member is found, never the chain end's `undefined`
 /// (`Promise.prototype.then` on a promise).
 pub(crate) fn locked_chain_defines(m: &Model, t: Tok, a: Atom) -> bool {
+    if let TokKind::Bound(b) = m.toks[t as usize] {
+        return locked_chain_defines(m, m.bound_root[b as usize], a);
+    }
     if !locked_chain_read(m, t, a) {
         return false;
     }
@@ -2443,6 +2451,8 @@ pub(crate) fn own_values_filled(what: &str) -> bool {
 
 fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
+        // A bound value's chain is its root target's (`bound_root`).
+        TokKind::Bound(b) => seed_family(m, m.bound_root[*b as usize]),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
             _ if m.virt_protos.contains_key(&t) => None,
@@ -2456,7 +2466,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
                 .then_some(Family::Object)
         }
         TokKind::NativeProto(..) => Some(Family::Object),
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => Some(Family::Function),
+        TokKind::Func(_, _) | TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)
@@ -2466,12 +2476,6 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     }
 }
 
-/// The builtin whose prototype object is the `ObjectProto` the chain of
-/// `t` starts with (`proto_node` seeds it; `seed_family`'s kinds): an
-/// array's `Array`, a site builtin object's own builtin, a function's
-/// `Function`; a typed array prototype's goes on to `%TypedArray%.prototype`,
-/// which the one `TypedArray` prototype stands for. `None`: the chain's
-/// prototypes are values or a class's, or `t` is no builtin receiver.
 /// Is program function `f` born with `%Function.prototype%` as its
 /// `[[Prototype]]` (the prototype-kind predicate,
 /// `perry_hir::fn_proto::FnProtoKind::Function`)? Not an async, generator
@@ -2546,8 +2550,26 @@ pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
     fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
 }
 
+/// The root target of `t` when it is a bound value, else `t`: the function
+/// value whose [[Prototype]] BoundFunctionCreate gave it (ECMA-262 10.4.1.3
+/// step 1: `target.[[GetPrototypeOf]]()`, through every bound target). The
+/// chain of a bound value is its root's, past the root's own keys.
+pub(crate) fn bound_root(m: &Model, t: Tok) -> Tok {
+    match m.toks[t as usize] {
+        TokKind::Bound(b) => m.bound_root[b as usize],
+        _ => t,
+    }
+}
+
+/// The builtin whose prototype object is the `ObjectProto` the chain of
+/// `t` starts with (`proto_node` seeds it; `seed_family`'s kinds): an
+/// array's `Array`, a site builtin object's own builtin, a function's
+/// `Function` (a bound value's: its root target's); a typed array prototype's goes on to `%TypedArray%.prototype`,
+/// which the one `TypedArray` prototype stands for. `None`: the chain's
+/// prototypes are values or a class's, or `t` is no builtin receiver.
 pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
     match &m.toks[t as usize] {
+        TokKind::Bound(b) => chain_ns(m, m.bound_root[*b as usize]),
         TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => Some(BuiltinNs::Array),
@@ -2558,9 +2580,7 @@ pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
             TmplKind::BObj { what, .. } => ns_by_name(what),
             _ => None,
         },
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => {
-            Some(BuiltinNs::Function)
-        }
+        TokKind::Func(_, _) | TokKind::BuiltinFn(_) => Some(BuiltinNs::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(BuiltinNs::Function)

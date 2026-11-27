@@ -1349,9 +1349,13 @@ impl Model {
     /// `ObjectProto` is %Object.prototype%, whose prototype is null (rule
     /// OPROTO); a module record's (`module.exports` or a namespace) may be null.
     pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
-        if !self.unit_mode && builtins::builtin_function(self, t) {
+        // A bound value's [[Prototype]] is its root target's
+        // (BoundFunctionCreate, ECMA-262 10.4.1.3 step 1); its prototype
+        // node holds the root's (`proto_node`).
+        let r = builtins::bound_root(self, t);
+        if !self.unit_mode && builtins::builtin_function(self, r) {
             let key = Key::Named(self.atom("__proto__"));
-            self.builtin_field_use(t, key, ChainAct::Load(dst, self.thrown));
+            self.builtin_field_use(r, key, ChainAct::Load(dst, self.thrown));
         }
         self.proto_value_at(t, dst);
         self.with_b(|m| builtins::intrinsic_proto_values(m, t, dst));
@@ -1359,7 +1363,7 @@ impl Model {
         // (`%AsyncGeneratorFunction.prototype%`, a generator object's
         // `%GeneratorPrototype%` chain) has one the model does not
         // describe: not `Function.prototype`, whose reads differ.
-        if let TokKind::Func(f, _) = self.toks[t as usize] {
+        if let TokKind::Func(f, _) = self.toks[r as usize] {
             if !builtins::born_with_function_proto(self, f) {
                 self.add_tok(dst, TOP);
                 return;

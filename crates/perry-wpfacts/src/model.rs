@@ -2099,6 +2099,13 @@ pub struct Model {
     pub stores: Vec<StoreSite>,
     /// (target fns node, bound this, bound args)
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
+    /// Per bound value, its root target: the one function value that is no
+    /// bound function at the end of its target links (`bound_into_result`
+    /// keys a bound value by it). BoundFunctionCreate (ECMA-262 10.4.1.3
+    /// step 1) gives the bound value `target.[[GetPrototypeOf]]()`, and a
+    /// bound target's is its own target's: every chain question on a bound
+    /// value is its root's (`builtins::bound_root`).
+    pub bound_root: Vec<Tok>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     /// R9BIRTH3 rule M: per class, the methods its constructor's followed
     /// `this.m()` calls name (`CtorPhase::m_calls`), checked against the
@@ -2899,7 +2906,9 @@ pub struct Model {
     /// reaches compiled units only, which use another unit's stand-in
     /// through its contract (DECISIONS 120, `Model::escape`).
     pub interp_free: bool,
-    pub bound_index: FxHashMap<(CallId, Tok), u32>,
+    /// The bound value per (birth site, root target, whether the target is
+    /// itself a bound value).
+    pub bound_index: FxHashMap<(CallId, Tok, bool), u32>,
     /// PROXY2: the Proxy objects, one per birth context of a `new Proxy`.
     pub proxies: Vec<crate::solve::proxy::ProxyRec>,
     pub proxy_index: FxHashMap<CallId, u32>,
