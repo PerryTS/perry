@@ -244,10 +244,7 @@ impl Model {
             if p & b == 0 {
                 continue;
             }
-            let pt = match self.with_b(|m| builtins::builtin_proto_tok(m, ns)) {
-                Some(pt) => pt,
-                None => self.tok(TokKind::ObjectProto),
-            };
+            let pt = self.with_b(|m| builtins::realm_proto_tok(m, &format!("{ns:?}")));
             self.enum_read_key(idx, pt, key, dst);
         }
     }

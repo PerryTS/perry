@@ -227,20 +227,22 @@ pub(super) fn family_member(
 }
 
 /// `dst` ⊇ the intrinsic prototype of family `fam` (`what`: its kind) as a
-/// value (`x.__proto__` of a receiver of the family): `ObjectProto`, the
-/// collapsed builtin prototype every write through the value is a write
-/// of, and, for another builtin's prototype, that builtin's own token
-/// (`builtin_proto_tok`), so the exact `Object.prototype` is told apart
-/// from it (its `constructor` read, a `!== Object.prototype` test). A
-/// prototype the model does not describe is a native prototype of its
-/// own (`TokKind::NativeProto` under its kind's name).
+/// value (`x.__proto__` of a receiver of the family), rule OPROTO: exactly
+/// that prototype object. `ObjectProto` for the Object family (it is
+/// %Object.prototype% and nothing else), `null` for a null-prototype box,
+/// another builtin's prototype by its own token (`builtin_proto_tok`), and
+/// a prototype the model does not describe by a native prototype token of
+/// its own (`TokKind::NativeProto` under its kind's name), which reads what
+/// the realm declares for it or, undeclared, an opaque member. A write
+/// through a described token is still booked on the shared sink
+/// (`Model::native_proto_alias`).
 pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>, dst: NodeId) {
     let op = m.tok(TokKind::ObjectProto);
-    m.add_tok(dst, op);
     let ns = match fam {
-        Family::Object => return,
+        Family::Object => return m.add_tok(dst, op),
         Family::Box => match what.map(members::box_chain) {
-            Some(members::BoxChain::Object | members::BoxChain::Null) => return,
+            Some(members::BoxChain::Object) => return m.add_tok(dst, op),
+            Some(members::BoxChain::Null) => return m.add_prim(dst, prim::NULL),
             Some(members::BoxChain::Array) => Some(BuiltinNs::Array),
             _ => None,
         },
@@ -1818,6 +1820,17 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
             m.add_tok(dst, bf);
             m.add_prim(dst, prim::ALL);
+            // Rule OPROTO: a prototype the model does not describe answers
+            // its own reads (no other token stands for it): any member, and
+            // what a write onto a builtin prototype stored under the key.
+            match key {
+                Key::Named(a) => {
+                    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                        opaque_member(m, dst);
+                    }
+                }
+                Key::Any(_) => any_written(m, dst),
+            }
             // A function's `constructor` is the Function constructor (E14);
             // a native prototype's is its native class (the builtin
             // function above).
@@ -2225,15 +2238,24 @@ fn realm_proto_value(m: &mut Model, proto: Option<&str>, dst: NodeId) {
         m.add_prim(dst, prim::NULL);
         return;
     };
+    let tok = realm_proto_tok(m, p);
+    m.add_tok(dst, tok);
+}
+
+/// Rule OPROTO: the token of the intrinsic prototype a realm entry name
+/// (`Object.prototype`, `Array.prototype`, `EventEmitter.prototype`)
+/// denotes: `ObjectProto` for %Object.prototype% only, a described
+/// builtin's `builtin_proto_tok`, else the native prototype token of its
+/// constructor's name (one object, one token).
+pub(crate) fn realm_proto_tok(m: &mut Model, p: &str) -> Tok {
     let base = p.strip_suffix(".prototype").unwrap_or(p);
-    let tok = match base {
+    match base {
         "Object" => m.tok(TokKind::ObjectProto),
         _ => match ns_by_name(base).and_then(|ns| builtin_proto_tok(m, ns)) {
             Some(t) => t,
             None => native_proto(m, base),
         },
-    };
-    m.add_tok(dst, tok);
+    }
 }
 
 /// HOSTVAL on the global object: an own member the `%Global%` declaration

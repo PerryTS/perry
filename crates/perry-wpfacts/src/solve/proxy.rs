@@ -1538,8 +1538,8 @@ impl Model {
     /// (10.1.14) for Proxy newTarget `p`: the Objects p.[[Get]]("prototype")
     /// returns (its `get` trap and the forward); a non-Object gives the
     /// realm's intrinsic default (step 4: `%Object.prototype%` for a class
-    /// or function, `ObjectProto`, which stands for every builtin
-    /// prototype). The node of those prototypes; once per Proxy.
+    /// or function, `ObjectProto`; `proxy_nt_inst` adds a builtin parent's).
+    /// The node of those prototypes; once per Proxy.
     pub(crate) fn proxy_nt_proto(&mut self, p: u32) -> NodeId {
         if let Some(&n) = self.proxies[p as usize].ops.get(&ProxyOp::NtProto) {
             return n;
@@ -1598,6 +1598,22 @@ impl Model {
         let pr = self.proxy_nt_proto(p);
         let protos = self.proto_node(inst);
         self.edge(pr, protos);
+        // Rule OPROTO: the intrinsic default of 10.1.14 step 4 is the one of
+        // the constructor that allocates the object: %Object.prototype%
+        // (`proxy_nt_proto`) for a base class or function, the builtin's own
+        // prototype for a class over a builtin parent, and a prototype the
+        // model does not name for a class over a parent value.
+        let mut root = tm;
+        while let Some(q) = self.tmpls[root as usize].parent {
+            root = q;
+        }
+        if let Some((_, name)) = self.tmpls[root as usize].native_parent.clone() {
+            let np = crate::builtins::native_proto(self, &name);
+            self.add_tok(protos, np);
+        } else if self.tmpls[root as usize].parent_value.is_some() {
+            let np = crate::builtins::native_proto(self, "%UnknownPrototype%");
+            self.add_tok(protos, np);
+        }
         Some(inst)
     }
 

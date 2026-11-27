@@ -1346,9 +1346,8 @@ impl Model {
     /// dst ⊇ `t`'s prototypes as values (DECISIONS 217): what
     /// `Object.getPrototypeOf(t)` and `t.__proto__` return. A literal's
     /// class prototype is its layout, no object (`Cons::ProtoValues`);
-    /// `ObjectProto` stands for every builtin prototype, so its own
-    /// prototype may be itself (Array.prototype's is Object.prototype) or
-    /// null; a module record's (`module.exports` or a namespace) may be null.
+    /// `ObjectProto` is %Object.prototype%, whose prototype is null (rule
+    /// OPROTO); a module record's (`module.exports` or a namespace) may be null.
     pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
         if !self.unit_mode && builtins::builtin_function(self, t) {
             let key = Key::Named(self.atom("__proto__"));
@@ -1373,10 +1372,9 @@ impl Model {
     pub(super) fn proto_value_at(&mut self, t: Tok, dst: NodeId) {
         match self.toks[t as usize] {
             TokKind::Top => self.add_tok(dst, TOP),
-            TokKind::ObjectProto => {
-                self.add_tok(dst, t);
-                self.add_prim(dst, prim::NULL);
-            }
+            // Rule OPROTO: %Object.prototype%.[[Prototype]] is null (ECMA-262
+            // 20.1.3); `ObjectProto` is no other prototype.
+            TokKind::ObjectProto => self.add_prim(dst, prim::NULL),
             _ => {
                 if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
                     let op = self.tok(TokKind::ObjectProto);

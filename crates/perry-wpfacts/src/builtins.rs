@@ -2218,10 +2218,8 @@ fn undescribed_member(m: &mut Model, dst: NodeId) {
     m.add_prim(dst, prim::ALL);
 }
 
-/// A read on `ObjectProto` itself, not through a chain (`Function.prototype
-/// .call`, `String.prototype.replace`): it stands for every builtin
-/// prototype, the undescribed ones included, so any key but `constructor`
-/// (`tok_load`) may name a builtin function or a primitive member.
+/// A read on `ObjectProto` itself, not through a chain: the methods of
+/// `Object.prototype` no builtin prototype overrides (`ProtoOwn`).
 pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
     if m.is_constructor_key(key) {
         return;
@@ -2239,8 +2237,9 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
             return;
         }
     }
-    anyfall("undescribed intrinsic prototype member", &"intrinsic", &key);
-    undescribed_member(m, dst);
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only, whose
+    // declared own keys `tok_load` reads; every other prototype is a token
+    // of its own with its own (realm or opaque) read.
 }
 
 mod loads;
@@ -2659,16 +2658,18 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     // model does not describe is that and a native prototype of its own
     // (`loads::family_proto_value`), so its reads stay apart from
     // `Object.prototype`'s.
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only; a builtin the
+    // model does not describe has its own prototype token (the realm's
+    // declaration of it, else an opaque one), never `ObjectProto`.
     match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => m.add_tok(dst, p),
         None => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
-            if let Some(ns) = ns.filter(|ns| *ns != BuiltinNs::Object) {
-                let name = format!("{ns:?}.prototype");
-                let p = native_proto(m, &name);
-                m.add_tok(dst, p);
-            }
+            let p = match ns {
+                Some(BuiltinNs::Object) => m.tok(TokKind::ObjectProto),
+                Some(ns) => native_proto(m, &format!("{ns:?}")),
+                None => native_proto(m, "%UnknownPrototype%"),
+            };
+            m.add_tok(dst, p);
         }
     }
 }
