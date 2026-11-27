@@ -1530,6 +1530,9 @@ impl Cons {
             // Template bookkeeping: a Proxy has no template; its keys are its
             // target's, which the forwarded store gives.
             Cons::AddsKeys => ProxyOperand::Value,
+            // A for-in body's function values (ForInBody): the rule runs each Func token
+            // per value of the subject; a Proxy is none (its [[Call]] is no body run).
+            Cons::ForInBody { .. } => ProxyOperand::Value,
             // An internal method of the Proxy runs, its PX model in `proxy_apply`
             // (get/set/has/ownKeys/defineProperty/deleteProperty/getPrototypeOf/apply/
             // construct traps and their forwards, ToPrimitive through the get trap).
@@ -1588,36 +1591,39 @@ impl Cons {
             | Cons::BuiltinCallee
             | Cons::ProxyCallee { .. }
             | Cons::HolderStep { .. } => ProxyOperand::Trap,
+            // Rule PXTRAP: an internal method of the Proxy runs, modelled by the PX trap
+            // arms in `proxy_apply`: Get( then ) (Fulfil); Get( prototype ) (ProtoKey);
+            // ToPropertyDescriptor's has and get of the six fields (DefineDesc); the for-in
+            // subject's [[Get]] (EnumLoad); [[Get]] / [[Set]] with Receiver `origin` of a
+            // lookup through a Proxy holder (VisitHolders, VisitStop); the [[Call]] of a
+            // Proxy getter / setter (Accessor); the traps a for-in body site runs
+            // (ForInAcc); the enumeration traps of a Proxy for-in subject, then a
+            // store under any String key (EnumKeyStore).
+            Cons::Fulfil { .. }
+            | Cons::ProtoKey { .. }
+            | Cons::DefineDesc { .. }
+            | Cons::EnumLoad { .. }
+            | Cons::VisitHolders { .. }
+            | Cons::VisitStop { .. }
+            | Cons::Accessor { .. }
+            | Cons::ForInAcc { .. }
+            | Cons::EnumKeyStore { .. } => ProxyOperand::Trap,
             // An internal method of the Proxy runs and no PX model of it is built
             // yet: PXESC (the escape stands in for the trap). ToPropertyKey of a key
             // (ToPrimitive: AccessorKeyed, OwnComputedKey, StoreKeyed, ProtoKeySet);
-            // ToPropertyDescriptor (DefineDesc); Get( then ) (Fulfil); Get( prototype )
-            // (ProtoKey, NativeParent); for-in enumeration and its reads (EnumLoad,
-            // EnumKeyStore, ForInBody); a lookup through a Proxy holder (VisitHolders,
-            // VisitStop); Annex B define / lookup; IsRegExp and ToString (NotRegExp,
+            // Get( prototype ) and
+            // [[Construct]] of an `extends` value (NativeParent); Annex B define / lookup; IsRegExp and ToString (NotRegExp,
             // RegExpPattern); [[Construct]] (NewNamed, SuperCtor, SuperCtorParent); a
             // native on a Proxy `this` its model does not name (NativeThis).
             // RequireSpec: perry-runtime's non-string specifier error
             // (`describe_received_js`) reads `constructor` and its `name` through the
             // get trap. CjsPublish: `registerPathModule` reads `__perry_cjs_record`
             // and `exports` (`cjs_record_exports`: `js_object_get_field_by_name`, the
-            // get trap on a Proxy). Accessor: installing runs no trap, but the getter
-            // or setter's later [[Call]] is the apply trap or the forward, which the
-            // ordinary rule (functions and builtin callables only) does not install.
-            // ForInAcc: the body site's [[Get]] / [[Set]] on a Proxy runs its get /
-            // set trap, program code the path watch must see.
+            // get trap on a Proxy).
             Cons::AccessorKeyed { .. }
             | Cons::OwnComputedKey { .. }
             | Cons::StoreKeyed { .. }
             | Cons::ProtoKeySet { .. }
-            | Cons::DefineDesc { .. }
-            | Cons::Fulfil { .. }
-            | Cons::ProtoKey { .. }
-            | Cons::EnumLoad { .. }
-            | Cons::EnumKeyStore { .. }
-            | Cons::ForInBody { .. }
-            | Cons::VisitHolders { .. }
-            | Cons::VisitStop { .. }
             | Cons::AnnexBDefine { .. }
             | Cons::AnnexBLookup { .. }
             | Cons::NotRegExp { .. }
@@ -1628,9 +1634,7 @@ impl Cons {
             | Cons::SuperCtorParent { .. }
             | Cons::NativeThis { .. }
             | Cons::RequireSpec { .. }
-            | Cons::CjsPublish { .. }
-            | Cons::Accessor { .. }
-            | Cons::ForInAcc { .. } => ProxyOperand::Trap,
+            | Cons::CjsPublish { .. } => ProxyOperand::Trap,
             // The operand reaches code the solve does not see (a bound target called
             // with unknown arguments, another unit's method or constructor, another
             // unit's read): the escape is the rule.

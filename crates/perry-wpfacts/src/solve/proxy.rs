@@ -178,6 +178,9 @@ pub enum ProxyOp {
     /// Rule PXOWN: the getters (false) / setters (true) of those
     /// descriptors one node takes.
     DescAcc(bool, NodeId),
+    /// Rule PXTRAP: one definition of `key` on the objects of the node by
+    /// the Proxy as its descriptor (`Cons::DefineDesc`).
+    DefineDesc(NodeId, Atom),
 }
 
 impl Model {
@@ -671,6 +674,68 @@ impl Model {
                     from,
                 },
             );
+        }
+    }
+
+    /// Rule PXTRAP (`Cons::DefineDesc`): Proxy `p` is the descriptor
+    /// `defineProperties( o, { key: p } )` / `Object.create( P, { key: p } )`
+    /// defines `key` of `o` by. ToPropertyDescriptor( p ) (6.2.6.5) runs,
+    /// per field `enumerable`, `configurable`, `value`, `writable`, `get`,
+    /// `set`, HasProperty( p, field ) (10.5.7: the `has` trap and the
+    /// forward) and Get( p, field ) (10.5.8: the `get` trap and the
+    /// forward). Which fields it has is the traps' answer, so the definition
+    /// is that of a descriptor of no known shape (`define_by_data`): `key` a
+    /// data key of `o` that holds the `value` got, and the `get` / `set` got
+    /// installed as its accessors (`Cons::Accessor`: the callable values).
+    /// Once per (Proxy, `o`, `key`).
+    fn proxy_define_desc(&mut self, p: u32, o: NodeId, key: Atom, site: SiteId, reason: u32) {
+        if self.proxy_made(p, ProxyOp::DefineDesc(o, key)) {
+            return;
+        }
+        if self.define_on.insert((o, key, true)) {
+            self.cons(
+                o,
+                Cons::DefineKey {
+                    key,
+                    data: true,
+                    reason,
+                },
+            );
+        }
+        for name in ["enumerable", "configurable", "value", "writable", "get", "set"] {
+            let a = self.atom(name);
+            self.proxy_apply(
+                NO_NODE,
+                &Cons::HasProp {
+                    key: Key::Named(a),
+                    idx: NO_NODE,
+                },
+                p,
+            );
+            let g = self.proxy_get(p, Key::Named(a), NO_NODE);
+            match name {
+                "value" => {
+                    let region = self.thrown;
+                    self.cons(
+                        o,
+                        Cons::Store {
+                            key: Key::Named(key),
+                            src: g,
+                            site,
+                            region,
+                        },
+                    );
+                }
+                "get" | "set" => self.cons(
+                    g,
+                    Cons::Accessor {
+                        holder: o,
+                        key,
+                        setter: name == "set",
+                    },
+                ),
+                _ => {}
+            }
         }
     }
 
@@ -2479,6 +2544,130 @@ impl Model {
             // property values: no internal method of the Proxy runs, no
             // trap, nothing escapes. A Proxy subject keeps its own rules.
             Cons::EnumKeyAny { o, src, site } => self.enum_key_any(o, src, site),
+            // Rule PXTRAP: the rules whose operation runs an internal method
+            // of the Proxy, each modelled by the PX trap arms (the trap read
+            // off the handler and called with the spec arguments, and the
+            // forward to the target), as for the rules above.
+            //
+            // Fulfil: Promise Resolve Functions (27.2.1.3.2 step 9)
+            // Get( resolution, "then" ) is p.[[Get]]( "then", p ) (10.5.8). A
+            // result no call takes fulfils the promise with the Proxy itself
+            // (steps 11-12); a callable one is the adoption's own rule on the
+            // value (`builtins::adopt`: `MCall` of `then`, the get trap and
+            // the [[Call]] of its result with `this` = the Proxy).
+            Cons::Fulfil { dst } => {
+                let a = self.atom("then");
+                let g = self.proxy_get(p, Key::Named(a), NO_NODE);
+                let t = self.tok(TokKind::Proxy(p));
+                let one = self.node_l("fulfil-token");
+                self.add_tok(one, t);
+                self.cons(
+                    g,
+                    Cons::Guard {
+                        test: guard::NOT_CALLABLE,
+                        from: one,
+                        dst,
+                    },
+                );
+            }
+            // ProtoKey: `E.prototype.key` with E the Proxy is
+            // Get( Get( E, "prototype" ), key ): p.[[Get]]( "prototype", p )
+            // (10.5.8), whose values the relay reads `key` on.
+            Cons::ProtoKey { key, dst } => {
+                let r = self.proto_key_relay(key, dst);
+                let pa = self.atom("prototype");
+                self.proxy_get_into(p, Key::Named(pa), NO_NODE, r);
+            }
+            // DefineDesc: the Proxy is a descriptor of `defineProperties` /
+            // `Object.create` (`proxy_define_desc`).
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason,
+            } => self.proxy_define_desc(p, o, key, site, reason),
+            // EnumLoad: `S[k]` in the body of `for (k in S)` with S the Proxy
+            // is p.[[Get]]( k, p ) (10.5.8); the enumerable-read narrowing of
+            // an ordinary subject (`enum_read_key`) is no Proxy's: its keys
+            // and reads are the traps'.
+            Cons::EnumLoad { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
+            // VisitHolders / VisitStop: a named-key lookup of `origin`
+            // (`holder_walk`) whose chain holds the Proxy: OrdinaryGet /
+            // OrdinarySet (10.1.8.1 step 3, 10.1.9.2 step 2.b) call
+            // p.[[Get]]( key, origin ) / p.[[Set]]( key, V, origin ) there,
+            // a call calls the value got with `this` = `origin`, a lookup
+            // (B.2.2.4/5) runs the getOwnPropertyDescriptor and
+            // getPrototypeOf traps: the `super` arms (`proxy_super`), whose
+            // Receiver is `origin`. A Proxy has no own accessor of its own.
+            Cons::VisitHolders { origin, key, act } | Cons::VisitStop { origin, key, act } => {
+                self.proxy_super(p, origin, key, act)
+            }
+            // Accessor: the Proxy as the getter / setter of a definition.
+            // Installing runs no internal method of it; a [[Get]] / [[Set]]
+            // that finds it calls it (10.1.8.1 step 7, 10.1.9.2 step 7:
+            // Call( getter, Receiver ), Call( setter, Receiver, « V » )): the
+            // accessor group's call of a non-program function value
+            // (`group_call`: `call_tok`, the Proxy's [[Call]], `proxy_call`:
+            // the apply trap or the forward once its target is callable).
+            Cons::Accessor {
+                holder,
+                key,
+                setter,
+            } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.cons(
+                    holder,
+                    Cons::AccessorInstall {
+                        key,
+                        f: t,
+                        setter,
+                        from: n,
+                    },
+                );
+            }
+            // ForInAcc (F-A path watch): a body read of the Proxy runs
+            // p.[[Get]] (10.5.8): its `get` trap, the invariant check's
+            // target.[[GetOwnProperty]] and, without a trap, the forward
+            // target.[[Get]]( key, p ); a body store p.[[Set]] (10.5.9): its
+            // `set` trap, the same check and the forward target.[[Set]]( key,
+            // V, p ), whose OrdinarySet ends in p.[[GetOwnProperty]] and
+            // p.[[DefineOwnProperty]] (10.1.9.2 steps 2.c-e: the
+            // getOwnPropertyDescriptor and defineProperty traps). The probe
+            // takes each trap value the handler holds (program code that may
+            // change the path) and the accessors of the target (the same
+            // rule on it: an ordinary target's, a Proxy target's traps).
+            Cons::ForInAcc { key, setter, probe } => {
+                let h = self.proxies[p as usize].handler;
+                let traps: &[&str] = if setter {
+                    &["set", "getOwnPropertyDescriptor", "defineProperty"]
+                } else {
+                    &["get", "getOwnPropertyDescriptor"]
+                };
+                for name in traps {
+                    let a = self.atom(name);
+                    self.cons(
+                        h,
+                        Cons::Load {
+                            key: Key::Named(a),
+                            dst: probe,
+                        },
+                    );
+                }
+                let t = self.proxies[p as usize].target;
+                self.cons(t, Cons::ForInAcc { key, setter, probe });
+            }
+            // EnumKeyStore (ENUM3): `o[k] = src` in `for (k in S)` with S (or a
+            // link of its chain, `from`) the Proxy. EnumerateObjectProperties
+            // (14.7.5.9) runs its [[OwnPropertyKeys]], [[GetOwnProperty]] of
+            // each key and [[GetPrototypeOf]] (the ownKeys /
+            // getOwnPropertyDescriptor / getPrototypeOf traps and the walk on,
+            // `proxy_own_keys`); the keys it yields are the ownKeys trap's
+            // Strings: the store under any String key (`enum_key_any`).
+            Cons::EnumKeyStore { o, src, site, .. } => {
+                let r = self.reason("for-in: the enumerated object is a Proxy");
+                self.proxy_own_keys(p, r);
+                self.enum_key_any(o, src, site);
+            }
             // Rule PXCLASS: the rules with no PX arm of their own, each named
             // (a new rule must take a place in this match and answer
             // `Cons::proxy_operand`). `Value`: no internal method of the
@@ -2487,8 +2676,7 @@ impl Model {
             // method of the Proxy: its escape, the rule named in the reason
             // (`proxy_escape`: each trap with unknown operands, the target's
             // own escape), and the rule's result is unknown.
-            Cons::Accessor { .. }
-            | Cons::AccessorKeyed { .. }
+            Cons::AccessorKeyed { .. }
             | Cons::AddsKeys { .. }
             | Cons::AnnexBDefine { .. }
             | Cons::AnnexBLookup { .. }
@@ -2496,12 +2684,7 @@ impl Model {
             | Cons::CallerValue { .. }
             | Cons::CjsPublish { .. }
             | Cons::ContractThis { .. }
-            | Cons::DefineDesc { .. }
-            | Cons::EnumKeyStore { .. }
-            | Cons::EnumLoad { .. }
-            | Cons::ForInAcc { .. }
             | Cons::ForInBody { .. }
-            | Cons::Fulfil { .. }
             | Cons::HandOver { .. }
             | Cons::Miss { .. }
             | Cons::NativeParent { .. }
@@ -2514,7 +2697,6 @@ impl Model {
             | Cons::OwnGate { .. }
             | Cons::OwnOnly { .. }
             | Cons::OwnTest { .. }
-            | Cons::ProtoKey { .. }
             | Cons::ProtoKeySet { .. }
             | Cons::RegExpPattern { .. }
             | Cons::RequireSpec { .. }
@@ -2524,9 +2706,7 @@ impl Model {
             | Cons::SuperCtor { .. }
             | Cons::SuperCtorParent { .. }
             | Cons::ThisFrom { .. }
-            | Cons::ViewedBuffer { .. }
-            | Cons::VisitHolders { .. }
-            | Cons::VisitStop { .. } => {
+            | Cons::ViewedBuffer { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 match c.proxy_operand() {
                     ProxyOperand::Value => self.apply_inner(n, c, Tokens::Slice(&[t]), 0),
