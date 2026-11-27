@@ -3325,6 +3325,10 @@ pub struct Model {
     pub foreign_fn_value: bool,
     /// The escape reason of a value handed to foreign code.
     pub foreign_reason: Option<u32>,
+    /// Diagnostics only: the per-call reasons of the values a call of ⊤
+    /// hands to foreign code (`[call N]`, as a call of an unknown function
+    /// value names its call; `diagnostic_esc_via`'s callee rule).
+    pub foreign_call_reasons: crate::pts::FxHashSet<u32>,
     /// Foreign code was handed a value: it holds ⊤ (`note_foreign_holds`).
     pub foreign_holds: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):

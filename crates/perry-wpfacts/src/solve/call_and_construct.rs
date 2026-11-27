@@ -370,7 +370,15 @@ impl Model {
             self.top_calls += 1;
         }
         let foreign = self.foreign_calls.contains(&call) || (t == TOP && self.foreign_fn_value);
-        let r = if foreign {
+        let r = if foreign && t == TOP && self.diagnostic.is_some() {
+            // ROOTS2: the escape names its call, as below for a call of ⊤
+            // that is not foreign code: the unknown callee decides.
+            let r = self.reason(&format!(
+                "passed to foreign code (a declared extern) [call {call}]"
+            ));
+            self.foreign_call_reasons.insert(r);
+            r
+        } else if foreign {
             match self.foreign_reason {
                 Some(r) => r,
                 None => {
