@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 // ============================================================================
 // URLSearchParams implementation
 // ============================================================================
@@ -319,7 +318,8 @@ fn store_entries(params: *mut ObjectHeader, entries: Vec<(String, String)>) {
         resolve_search_params_receiver(params) as i64,
     ));
     let array = entries_array_from(entries);
-    let params = crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let params =
+        crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
     js_object_set_field_f64(params, URL_SEARCH_PARAMS_ENTRIES, entries_value(array));
 }
 
@@ -328,7 +328,8 @@ fn update_entries(params: *mut ObjectHeader, entries: Vec<(String, String)>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let params_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(params as i64));
     store_entries(params, entries);
-    let params = crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let params =
+        crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
     unsafe { maybe_sync_params_to_owner(params) };
 }
 
@@ -501,7 +502,10 @@ fn pairs_array(params: *mut ObjectHeader) -> f64 {
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, k.get_nanbox_f64());
         pair = js_array_push_f64(pair, v.get_nanbox_f64());
-        let arr = js_array_push_f64(entries_array_of(arr_h.get_nanbox_f64()), entries_value(pair));
+        let arr = js_array_push_f64(
+            entries_array_of(arr_h.get_nanbox_f64()),
+            entries_value(pair),
+        );
         arr_h.set_nanbox_f64(entries_value(arr));
     }
     arr_h.get_nanbox_f64()
@@ -749,7 +753,9 @@ pub extern "C" fn js_url_search_params_get(
 #[no_mangle]
 pub extern "C" fn js_url_search_params_has(params: *mut ObjectHeader, name_value: f64) -> f64 {
     let name = coerce_search_param_arg(name_value);
-    let found = stored_pairs(params).into_iter().any(|(k, _)| stored_eq(k, &name));
+    let found = stored_pairs(params)
+        .into_iter()
+        .any(|(k, _)| stored_eq(k, &name));
     if found {
         1.0
     } else {
@@ -924,7 +930,9 @@ pub extern "C" fn js_url_search_params_values_arr(params: *mut ObjectHeader) -> 
 pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
     let mut entries = get_url_search_params_entries(params);
     // Stable, by the names' UTF-16 code units.
-    crate::cold_sort::sort_by(&mut entries, |a, b| a.0.encode_utf16().cmp(b.0.encode_utf16()));
+    crate::cold_sort::sort_by(&mut entries, |a, b| {
+        a.0.encode_utf16().cmp(b.0.encode_utf16())
+    });
     update_entries(params, entries);
 }
 

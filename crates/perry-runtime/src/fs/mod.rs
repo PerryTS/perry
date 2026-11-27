@@ -1410,7 +1410,10 @@ pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) ->
         if obj.is_null() {
             return None;
         }
-        let protocol = crate::url::href::component_of(obj as *mut crate::object::ObjectHeader, crate::url::href::Component::Protocol);
+        let protocol = crate::url::href::component_of(
+            obj as *mut crate::object::ObjectHeader,
+            crate::url::href::Component::Protocol,
+        );
         if protocol != "file:" {
             return None;
         }

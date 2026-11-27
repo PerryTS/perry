@@ -61,7 +61,11 @@ url_getter!(get_pathname, "pathname", component(Component::Pathname));
 url_getter!(get_search, "search", component(Component::Search));
 url_getter!(get_hash, "hash", component(Component::Hash));
 url_getter!(get_origin, "origin", super::href::origin_value);
-url_getter!(get_search_params, "searchParams", super::search_params::url_search_params);
+url_getter!(
+    get_search_params,
+    "searchParams",
+    super::search_params::url_search_params
+);
 url_getter!(get_username, "username", component(Component::Username));
 url_getter!(get_password, "password", component(Component::Password));
 url_setter!(set_href, "href", js_url_set_href);

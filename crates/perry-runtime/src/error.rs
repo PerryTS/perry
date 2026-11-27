@@ -605,7 +605,11 @@ impl CoreError {
             let text = js_string_from_bytes(text.as_ptr(), text.len() as u32);
             let text = scope.root_nanbox_f64(crate::value::js_nanbox_string(text as i64));
             err.with_mut_ptr(|err: *mut u8| {
-                crate::node_submodules::set_error_user_prop(err as usize, key, text.get_nanbox_f64())
+                crate::node_submodules::set_error_user_prop(
+                    err as usize,
+                    key,
+                    text.get_nanbox_f64(),
+                )
             });
         }
         err.with_mut_ptr(Self::of)

@@ -175,14 +175,20 @@ fn decode_string_or_file_url(value: f64) -> Option<String> {
     if obj.is_null() {
         return None;
     }
-    let protocol = crate::url::href::component_of(obj as *mut crate::object::ObjectHeader, crate::url::href::Component::Protocol);
+    let protocol = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Protocol,
+    );
     if protocol != "file:" {
         return None;
     }
     unsafe {
         crate::fs::validate::validate_file_url_path_object(obj);
     }
-    let pathname = crate::url::href::component_of(obj as *mut crate::object::ObjectHeader, crate::url::href::Component::Pathname);
+    let pathname = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Pathname,
+    );
     if pathname.is_empty() {
         return None;
     }
