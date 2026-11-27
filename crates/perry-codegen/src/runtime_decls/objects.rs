@@ -774,6 +774,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_reflect_install_metadata", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reflect_get_metadata", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_reflect_get_own_metadata",

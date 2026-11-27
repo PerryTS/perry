@@ -141,8 +141,8 @@ pub use json::json_stringify;
 
 mod error;
 pub use error::{
-    emit_warning, error_value_with_code, system_error_value, throw_with_code, value_byte_slice,
-    warn_stub, ErrorKind,
+    emit_warning, error_value_with_code, system_error_value, throw_program_value, throw_with_code,
+    value_byte_slice, warn_stub, ErrorKind,
 };
 
 mod event_pump;

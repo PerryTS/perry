@@ -86,6 +86,23 @@ fn ensure_initialized() -> Instant {
     *st.get_or_insert_with(Instant::now)
 }
 
+/// libuv's loop clock: `uv_now`, whole milliseconds since the timer origin,
+/// read fresh (`uv_update_time`) and floored.
+///
+/// Node starts a timer at `getLibuvNow()` and runs it when that clock, read at
+/// the timers phase, is at least `start + delay` — both whole milliseconds. Two
+/// `setTimeout(f, 1)` scheduled in the same millisecond therefore share one
+/// deadline and fire in the same timers phase, back to back with only their
+/// checkpoints between, never with a check phase between them. Perry kept the
+/// exact `Instant` of each call, so the second deadline sat microseconds after
+/// the first and a phase whose clock read fell between them split the pair.
+/// Deadlines and the phase clock are both taken on this grid (NXH13).
+pub(crate) fn loop_now(origin: Instant) -> Instant {
+    let now = Instant::now();
+    let ms = now.saturating_duration_since(origin).as_millis() as u64;
+    origin + Duration::from_millis(ms)
+}
+
 /// Get current time in milliseconds since program start
 #[no_mangle]
 pub extern "C" fn js_timer_now() -> f64 {
@@ -122,10 +139,10 @@ pub extern "C" fn js_set_timeout_value_ref(
 
 fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Promise {
     crate::promise::bump(&PROFILE_PROMISE_TIMER_REGISTRATIONS);
-    ensure_initialized();
+    let origin = ensure_initialized();
 
     let promise = js_promise_new();
-    let deadline = Instant::now() + Duration::from_millis(normalize_timer_delay(delay_ms));
+    let deadline = loop_now(origin) + Duration::from_millis(normalize_timer_delay(delay_ms));
     store::with_current(|timers| {
         timers.insert_timer(Entry::promise(deadline, promise, value, has_ref));
     });
@@ -624,8 +641,14 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
             );
         }
         1
+    } else if delay_ms < 1.0 {
+        // node's `Timeout`: `if (!(after >= 1 && after <= TIMEOUT_MAX)) after
+        // = 1`. A `setTimeout(f, 0)` is a 1 ms timer, so one scheduled from a
+        // close callback waits for the clock to move and runs after the next
+        // check phase's immediates, not in the very next timers phase.
+        1
     } else {
-        delay_ms.max(0.0) as u64
+        delay_ms as u64
     }
 }
 
@@ -686,7 +709,7 @@ pub extern "C" fn js_timer_unref(timer_id: i64) {
 /// Node's `refresh()` re-inserts the timer and never re-refs it.
 #[no_mangle]
 pub extern "C" fn js_timer_refresh(timer_id: i64) {
-    let now = Instant::now();
+    let now = loop_now(ensure_initialized());
     if store::with_current(|timers| timers.refresh(timer_id, now)) {
         sync_loop_timer();
     }
@@ -817,7 +840,7 @@ fn schedule_callback_timer(
 ) -> i64 {
     schedule_callback_timer_inner(
         callback,
-        delay_ms,
+        normalize_timer_delay(delay_ms),
         args,
         type_name,
         class,
@@ -841,12 +864,16 @@ fn schedule_js_timer(
     class: Class,
     kind: CallbackTimerKind,
 ) -> i64 {
+    let delay_ms = normalize_timer_delay(delay_ms);
     schedule_callback_timer_inner(callback, delay_ms, args, type_name, class, None, Some(kind)).1
 }
 
+/// `delay_ms` is already normalized: whole milliseconds, as node's `Timeout`
+/// clamps a JS delay ([`normalize_timer_delay`]), or the exact delay of a
+/// runtime-owned turn ([`schedule_native_turn`]).
 fn schedule_callback_timer_inner(
     callback: i64,
-    delay_ms: f64,
+    delay_ms: u64,
     args: Vec<f64>,
     type_name: &str,
     class: Class,
@@ -878,14 +905,13 @@ fn schedule_callback_timer_inner(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay_ms = normalize_timer_delay(delay_ms);
     // Only a timer has a start time: Node's `insert` reads the loop clock
     // (`getLibuvNow`, which updates libuv's time) once per timer, and an
     // Immediate has none. A check- or poll-phase entry runs in queue order and
     // nothing reads its deadline (the heap and `refresh` are timer-only), so it
     // carries the timer origin and scheduling it reads no clock.
     let deadline = if class.is_timer() {
-        Instant::now() + Duration::from_millis(delay_ms)
+        loop_now(origin) + Duration::from_millis(delay_ms)
     } else {
         origin
     };
@@ -1035,7 +1061,26 @@ pub fn schedule_native_immediate(callback: i64, args: &[f64], provider_type: &'s
     )
 }
 
-/// The timers-phase sibling of [`schedule_native_immediate`].
+/// A runtime-owned job that runs in the very next timers phase: an fs request
+/// Perry performs on the next loop turn (`FSREQCALLBACK` / `FSREQPROMISE`).
+/// It is not a node `Timeout`, so it takes no delay and node's 1 ms floor
+/// for `setTimeout(f, 0)` does not apply to it.
+pub fn schedule_native_turn(callback: i64, provider_type: &'static str) -> i64 {
+    schedule_callback_timer_inner(
+        callback,
+        0,
+        Vec::new(),
+        provider_type,
+        Class::Timeout,
+        None,
+        None,
+    )
+    .0
+}
+
+/// The timers-phase sibling of [`schedule_native_immediate`]: an internal
+/// node `Timeout` (an abort-signal or socket timeout), so its delay is
+/// normalized as `setTimeout`'s is.
 pub fn schedule_native_timeout(callback: i64, delay_ms: f64, provider_type: &'static str) -> i64 {
     schedule_callback_timer(
         callback,

@@ -264,6 +264,20 @@ fn literal_method_reads_its_receiver_once_at_entry_into_a_rooted_slot() {
 }
 
 #[test]
+fn sloppy_prologue_sends_a_symbol_receiver_to_the_coercion() {
+    // A Symbol is POINTER_TAG'd like an object, so the object edge itself
+    // must tell them apart by the payload's first word.
+    let ir = compile_ir(&literal_module(method(METHOD, false, false)));
+    let body = closure_body(&ir, METHOD);
+    let magic = format!(", {}", crate::runtime_abi::SYMBOL_HEADER_MAGIC as i32);
+    assert!(
+        body.lines()
+            .any(|l| l.contains("icmp eq i32 ") && l.trim_end().ends_with(&magic)),
+        "{body}"
+    );
+}
+
+#[test]
 fn strict_literal_method_binds_the_raw_receiver() {
     let ir = compile_ir(&literal_module(method(METHOD, false, true)));
     let body = closure_body(&ir, METHOD);

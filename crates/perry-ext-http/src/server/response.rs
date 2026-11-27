@@ -739,9 +739,7 @@ pub extern "C" fn js_node_http_res_set_strict_content_length(handle: i64, value:
 pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    response_state(response_root.get())
-        .map(|sr| sr.req_handle)
-        .unwrap_or(0)
+    req_handle_of(response_root.get())
 }
 
 /// `res.headersSent` getter.
@@ -1242,9 +1240,20 @@ pub(crate) fn finalize_buffered_end(
     let has_explicit_length = original_headers.iter().any(|(n, _)| {
         n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
     });
+    let socket = response_socket(response_root.get());
+    let socket_destroyed = JsValue::from_bits(socket.to_bits()).is_pointer()
+        && heap::truthy(unsafe { perry_ffi::runtime_get(socket, b"destroyed") });
     let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
+    }
+    if socket_destroyed {
+        // node's `_writeRaw`: a destroyed socket takes nothing, and the write's
+        // callback (`onFinish`: the end callbacks, then `'finish'`) never runs.
+        // The response's `'close'` comes from its socket's.
+        sr.writable_ended = true;
+        heap::mark_ended(response_root.get());
+        return Some(EndOutcome::Deferred);
     }
 
     // P5 streaming: the head already went to the wire on this thread, so the
@@ -1308,7 +1317,6 @@ pub(crate) fn finalize_buffered_end(
         auto_content_length,
     };
     let turnloop = sr.turnloop;
-    let req_handle = sr.req_handle;
     store_encoded_head(response_root.get());
     // P5: the handler, the codec and the socket are on the same thread, so
     // the response is encoded and submitted here. A response with no
@@ -1330,7 +1338,7 @@ pub(crate) fn finalize_buffered_end(
         sr.writable_finished = true;
     }
     heap::mark_ended(response_root.get());
-    crate::server::request::mark_connection_written(req_handle);
+    crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
     Some(end_outcome(response_root.get(), deferred))
 }
 

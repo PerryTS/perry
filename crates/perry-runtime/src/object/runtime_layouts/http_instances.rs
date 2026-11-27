@@ -173,3 +173,117 @@ runtime_layout!(SERVER_RESPONSE, 0x53490007, 0, &raw const SERVER_RESPONSE_PROTO
     NP_ATOM_STATUS_CODE @ response_slot::STATUS_CODE => OPT,
     NP_SYMBOL_NATIVE_PAYLOAD @ response_slot::PAYLOAD => PAYLOAD_SLOT,
 ], realm = ["node:http.ServerResponse", "node:http2.Http2ServerResponse.prototype"]);
+
+runtime_prototype_family!(
+    INCOMING_MESSAGE_PROTO_FAMILY = INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE,
+);
+
+runtime_atom!(
+    HI_ATOM_HTTP_VERSION_MAJOR,
+    "httpVersionMajor",
+    "6874747056657273696f6e4d616a6f72"
+);
+runtime_atom!(
+    HI_ATOM_HTTP_VERSION_MINOR,
+    "httpVersionMinor",
+    "6874747056657273696f6e4d696e6f72"
+);
+runtime_atom!(
+    HI_ATOM_HTTP_VERSION,
+    "httpVersion",
+    "6874747056657273696f6e"
+);
+runtime_atom!(HI_ATOM_COMPLETE, "complete", "636f6d706c657465");
+runtime_atom!(HI_ATOM_RAW_HEADERS, "rawHeaders", "72617748656164657273");
+runtime_atom!(
+    HI_ATOM_RAW_TRAILERS,
+    "rawTrailers",
+    "726177547261696c657273"
+);
+runtime_atom!(
+    HI_ATOM_JOIN_DUPLICATE_HEADERS,
+    "joinDuplicateHeaders",
+    "6a6f696e4475706c696361746548656164657273"
+);
+runtime_atom!(HI_ATOM_ABORTED, "aborted", "61626f72746564");
+runtime_atom!(HI_ATOM_UPGRADE, "upgrade", "75706772616465");
+runtime_atom!(reuse HI_ATOM_URL, "url", "75726c");
+runtime_atom!(HI_ATOM_METHOD, "method", "6d6574686f64");
+runtime_atom!(HI_ATOM_CLIENT, "client", "636c69656e74");
+runtime_atom!(HI_ATOM_U_CONSUMING, "_consuming", "5f636f6e73756d696e67");
+runtime_atom!(HI_ATOM_U_DUMPED, "_dumped", "5f64756d706564");
+
+/// `IncomingMessage`'s slots: Readable's (the emitter's three, the state,
+/// the optional hooks), then node's constructor fields in its order, then
+/// its symbol-keyed fields.
+pub(crate) mod incoming_slot {
+    pub(crate) const SOCKET: u32 = 7;
+    pub(crate) const HTTP_VERSION_MAJOR: u32 = 8;
+    pub(crate) const HTTP_VERSION_MINOR: u32 = 9;
+    pub(crate) const HTTP_VERSION: u32 = 10;
+    pub(crate) const COMPLETE: u32 = 11;
+    pub(crate) const RAW_HEADERS: u32 = 12;
+    pub(crate) const RAW_TRAILERS: u32 = 13;
+    pub(crate) const JOIN_DUPLICATE_HEADERS: u32 = 14;
+    pub(crate) const ABORTED: u32 = 15;
+    pub(crate) const UPGRADE: u32 = 16;
+    pub(crate) const URL: u32 = 17;
+    pub(crate) const METHOD: u32 = 18;
+    pub(crate) const STATUS_CODE: u32 = 19;
+    pub(crate) const STATUS_MESSAGE: u32 = 20;
+    pub(crate) const CLIENT: u32 = 21;
+    pub(crate) const CONSUMING: u32 = 22;
+    pub(crate) const DUMPED: u32 = 23;
+    pub(crate) const K_HEADERS: u32 = 24;
+    pub(crate) const K_HEADERS_COUNT: u32 = 25;
+    pub(crate) const K_TRAILERS: u32 = 26;
+    pub(crate) const K_TRAILERS_COUNT: u32 = 27;
+    pub(crate) const K_ABORT_CONTROLLER: u32 = 28;
+    pub(crate) const K_ABORT_SIGNAL_SOCKET: u32 = 29;
+    pub(crate) const K_ABORT_SIGNAL_LISTENER: u32 = 30;
+    pub(crate) const K_ABORT_SIGNAL_DETACHED: u32 = 31;
+    pub(crate) const PAYLOAD: u32 = 32;
+}
+
+// `new IncomingMessage(socket)`: `Readable.call(this, opts)` (READABLE's
+// keys, but `_eventsCount`, which the first listener creates after every
+// constructor field), then the constructor's fields. The payload key comes
+// first: a server request's payload is attached before the constructor
+// runs (the stream's state record joins the attached cell), and a key that
+// is present ahead of the constructor's holes leaves each of their fills in
+// place. It is a private entry, so no enumeration sees its position.
+runtime_layout!(INCOMING_MESSAGE, 0x53490009, 0, &raw const INCOMING_MESSAGE_PROTO_FAMILY, [
+    NP_SYMBOL_NATIVE_PAYLOAD @ incoming_slot::PAYLOAD => PAYLOAD_SLOT,
+    NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
+    SI_ATOM_U_READABLE_STATE @ readable_slot::STATE,
+    NP_ATOM_U_READ @ readable_slot::READ => OPT,
+    NP_ATOM_U_DESTROY @ readable_slot::DESTROY => OPT,
+    SI_ATOM_U_CONSTRUCT @ readable_slot::CONSTRUCT => OPT,
+    NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
+    NP_ATOM_SOCKET @ incoming_slot::SOCKET,
+    HI_ATOM_HTTP_VERSION_MAJOR @ incoming_slot::HTTP_VERSION_MAJOR,
+    HI_ATOM_HTTP_VERSION_MINOR @ incoming_slot::HTTP_VERSION_MINOR,
+    HI_ATOM_HTTP_VERSION @ incoming_slot::HTTP_VERSION,
+    HI_ATOM_COMPLETE @ incoming_slot::COMPLETE,
+    HI_ATOM_RAW_HEADERS @ incoming_slot::RAW_HEADERS,
+    HI_ATOM_RAW_TRAILERS @ incoming_slot::RAW_TRAILERS,
+    HI_ATOM_JOIN_DUPLICATE_HEADERS @ incoming_slot::JOIN_DUPLICATE_HEADERS,
+    HI_ATOM_ABORTED @ incoming_slot::ABORTED,
+    HI_ATOM_UPGRADE @ incoming_slot::UPGRADE,
+    HI_ATOM_URL @ incoming_slot::URL,
+    HI_ATOM_METHOD @ incoming_slot::METHOD,
+    NP_ATOM_STATUS_CODE @ incoming_slot::STATUS_CODE,
+    NP_ATOM_STATUS_MESSAGE @ incoming_slot::STATUS_MESSAGE,
+    HI_ATOM_CLIENT @ incoming_slot::CLIENT,
+    HI_ATOM_U_CONSUMING @ incoming_slot::CONSUMING,
+    HI_ATOM_U_DUMPED @ incoming_slot::DUMPED,
+    NP_SYMBOL_K_HEADERS @ incoming_slot::K_HEADERS,
+    NP_SYMBOL_K_HEADERS_COUNT @ incoming_slot::K_HEADERS_COUNT,
+    NP_SYMBOL_K_TRAILERS @ incoming_slot::K_TRAILERS,
+    NP_SYMBOL_K_TRAILERS_COUNT @ incoming_slot::K_TRAILERS_COUNT,
+    NP_SYMBOL_K_ABORT_CONTROLLER @ incoming_slot::K_ABORT_CONTROLLER,
+    NP_SYMBOL_K_ABORT_SIGNAL_SOCKET @ incoming_slot::K_ABORT_SIGNAL_SOCKET,
+    NP_SYMBOL_K_ABORT_SIGNAL_LISTENER @ incoming_slot::K_ABORT_SIGNAL_LISTENER,
+    NP_SYMBOL_K_ABORT_SIGNAL_DETACHED @ incoming_slot::K_ABORT_SIGNAL_DETACHED,
+    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
+], realm = ["node:http.IncomingMessage", "node:http.IncomingMessage.prototype"]);

@@ -1093,12 +1093,7 @@ pub fn run_with_parse_cache(
         cache.finish_lowering();
     }
 
-    // CommonJS closed world (`cjs_link`): one bit for the program, applied to
-    // the wrapper's escape forms before any transform, codegen or facts pass.
-    ctx.cjs_closed = super::cjs_link::program_is_closed(&ctx.native_modules);
-    for hir_module in ctx.native_modules.values_mut() {
-        super::cjs_link::resolve_open_sites(hir_module, ctx.cjs_closed)?;
-    }
+    super::lowered_program::settle(&mut ctx)?;
     // Select from the surviving HIR, never from the wrapper's discarded
     // dynamic loader. In particular a dead createRequire import cannot
     // select URL/dgram, or contribute opaque keys to streams selection.

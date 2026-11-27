@@ -52,6 +52,11 @@ extern "C" {
     fn perry_stub_warn_ffi(name: *const c_char, reason: *const c_char, issue: *const c_char);
 }
 
+extern "C-unwind" {
+    /// Runtime entry: throw a value the program handed over, as is. Diverges.
+    fn js_throw_program_value(value: f64) -> !;
+}
+
 /// Which JS Error subclass [`throw_with_code`] raises.
 pub enum ErrorKind {
     /// A plain `Error`.
@@ -81,6 +86,13 @@ pub fn throw_with_code(msg: &str, code: &str, kind: ErrorKind) -> ! {
     // SAFETY: both slices are valid for their lengths; the runtime copies
     // the bytes into arena-owned storage before diverging.
     unsafe { js_throw_error_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), k) }
+}
+
+/// Throw `value`, a value the program handed to the wrapper (an argument, or
+/// state the program stored), unchanged. Never returns.
+pub fn throw_program_value(value: f64) -> ! {
+    // SAFETY: the runtime takes any NaN-boxed value and diverges.
+    unsafe { js_throw_program_value(value) }
 }
 
 /// Build a JS Error subclass whose `.message` is `msg` and whose `.code` is

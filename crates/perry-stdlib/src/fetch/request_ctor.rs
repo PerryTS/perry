@@ -103,17 +103,7 @@ pub unsafe extern "C" fn js_request_new(
         None => (non_stream_body, None),
     };
     let body_error = body_error.map(|error| scope.root_nanbox_f64(error));
-    let headers_id_in = handle_id(headers_handle);
-    let mut headers = if headers_id_in != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id_in)
-            .map(|record| record.store.clone())
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
+    let mut headers = headers::headers_store_of(headers_handle).unwrap_or_default();
     if let Some(content_type) = form_data_content_type {
         if !headers.has("content-type") {
             headers.set("content-type", &content_type);
@@ -145,7 +135,7 @@ pub unsafe extern "C" fn js_request_new(
         keepalive: body_metadata::bool_from_js(keepalive),
         duplex,
         signal,
-        cached_headers_id: None,
+        cached_headers: 0,
         body_error: body_error.map(|error| error.get_nanbox_f64()),
         read_body_stream_id: None,
     };

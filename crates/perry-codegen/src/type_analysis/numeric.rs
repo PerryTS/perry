@@ -359,7 +359,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::DateNow => true,
         // Math.* builtins always evaluate to a real numeric double: every
         // lowering coerces its operands internally (ToNumber via
-        // `lower_math_operand` / `js_math_to_number` — BigInt and Symbol
+        // `lower_math_operand` / `js_number_coerce` — BigInt and Symbol
         // throw) and emits a raw-f64-returning intrinsic or runtime helper,
         // never a NaN-tagged value. Without these arms, `Math.sqrt(x) *
         // Math.sin(y)` fails the "statically numeric" test and the multiply

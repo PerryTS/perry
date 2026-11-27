@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 
 mod types;
 pub use types::*;
+mod byte_store_placement;
 mod json_defer;
 mod policy;
 pub(crate) use json_defer::JsonParseAllocation;
@@ -505,7 +506,10 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
         None
     };
     let start = Instant::now();
-    crate::arena::discard_previously_idle_eden_pages();
+    tenuring::fixed_cost_minor_begin();
+    if crate::arena::discard_previously_idle_eden_pages() != 0 {
+        tenuring::fixed_cost_note_page_return();
+    }
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
     // Not budgeted, so the low-pause veto does not apply here (#7611 deleted
@@ -545,7 +549,9 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     };
     if let Some(fast_path) = copying_outcome {
         let freed_bytes = fast_path.freed_bytes;
-        crate::arena::advance_block_pool_reuse_window();
+        if crate::arena::advance_block_pool_reuse_window() != 0 {
+            tenuring::fixed_cost_restart_mutator();
+        }
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
             stats

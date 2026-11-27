@@ -72,6 +72,24 @@ pub(super) fn normalized_hwm(
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
 }
 
+/// node's `getHighWaterMark` on an options value already read: the default
+/// for `undefined`/`null`, else a non-negative integer or a throw.
+fn hwm_value(value: f64, name: &str, object_mode: bool) -> f64 {
+    if value.to_bits() == TAG_UNDEFINED || value.to_bits() == TAG_NULL {
+        return default_hwm(object_mode);
+    }
+    if let Some(n) = jsvalue_as_f64(value) {
+        if n.is_finite() && n >= 0.0 && n.floor() == n {
+            return n;
+        }
+    }
+    let message = format!(
+        "The value of \"{name}\" is out of range. It must be >= 0. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE")
+}
+
 fn normalized_default_encoding(opts: &RuntimeHandle<'_>) -> f64 {
     let value = crate::runtime_state_key!(b"defaultEncoding").read_value(opts.get_nanbox_f64());
     if value.to_bits() == TAG_NULL || value.to_bits() == TAG_UNDEFINED {
@@ -167,6 +185,14 @@ pub(super) fn set_visible_readable_encoding(stream: f64, encoding: f64) {
     }
 }
 
+/// EOF was pushed (node's `state.ended`, the readable side's own ended
+/// flag); `readable` turns false only when `'end'` is emitted
+/// (`mark_stream_ended`).
+pub(super) fn mark_readable_eof(stream: f64) {
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    set_visible_readable_ended(stream, true);
+}
+
 pub(super) fn mark_stream_ended(stream: f64) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable(stream, false);
@@ -195,7 +221,6 @@ pub(super) fn set_visible_writable_finished(stream: f64, finished: bool) {
 }
 
 pub(super) fn mark_writable_ended(stream: f64) {
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_writable(stream, false);
     set_visible_writable_ended(stream, true);
 }
@@ -222,18 +247,32 @@ pub(super) fn init_readable_state(
     opts: &RuntimeHandle<'_>,
     duplex: bool,
 ) {
+    init_readable_state_with(stream, opts, duplex, None)
+}
+
+/// [`init_readable_state`]; `hwm`, when given, is the value of the options'
+/// `highWaterMark` (a native constructor's options object holding only it).
+pub(super) fn init_readable_state_with(
+    stream: &RuntimeHandle<'_>,
+    opts: &RuntimeHandle<'_>,
+    duplex: bool,
+    hwm: Option<f64>,
+) {
     let mode = resolve_object_mode(
         opts,
         crate::runtime_state_key!(b"readableObjectMode"),
         duplex,
     );
-    let hwm = normalized_hwm(
-        opts,
-        crate::runtime_state_key!(b"readableHighWaterMark"),
-        "options.readableHighWaterMark",
-        duplex,
-        mode,
-    );
+    let hwm = match hwm {
+        Some(value) => hwm_value(value, "options.highWaterMark", mode),
+        None => normalized_hwm(
+            opts,
+            crate::runtime_state_key!(b"readableHighWaterMark"),
+            "options.readableHighWaterMark",
+            duplex,
+            mode,
+        ),
+    };
     let emit_close = crate::runtime_state_key!(b"emitClose")
         .read_value(opts.get_nanbox_f64())
         .to_bits()
@@ -441,7 +480,7 @@ mod pipeline;
 #[path = "node_stream_constructors/web_adapter.rs"]
 mod web_adapter;
 
-pub(crate) use builders::ensure_lazy_stream;
+pub(crate) use builders::{ensure_lazy_stream, init_readable_native};
 pub use builders::{
     init_transform_in_place, init_writable_payload_in_place,
     js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,

@@ -235,6 +235,7 @@ mod get_slow;
 mod primitive_canonical_read;
 pub(crate) use primitive_canonical_read::primitive_canonical_get;
 mod array_canonical_read;
+pub(crate) use get_slow::call_getter;
 pub(crate) use get_slow::get_field_by_name_of_value;
 pub use get_slow::{
     js_object_get_field_nonptr, js_object_get_field_site_slow, js_object_get_field_slow,

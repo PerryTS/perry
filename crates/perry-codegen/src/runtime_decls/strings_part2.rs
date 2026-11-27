@@ -865,6 +865,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // after enqueueing onto a queue the pump drains; otherwise sleeps until
     // the next timer deadline (or 1s safety cap).
     module.declare_function("js_wait_for_event", VOID, &[]);
+    module.declare_function("js_event_loop_poll_nowait", VOID, &[]);
+    module.declare_function("js_event_loop_poll_wait", VOID, &[]);
+    module.declare_function("js_event_loop_close_phase", VOID, &[]);
     // Host-driven event loop flag (watchOS SwiftUI tree shell): the entry's
     // drain loop exits when perry_ui_app_run marked the loop host-driven.
     module.declare_function("js_event_loop_host_driven", I32, &[]);
@@ -1146,18 +1149,18 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // new Headers() -> f64
     module.declare_function("js_headers_new", DOUBLE, &[]);
     module.declare_function("js_headers_from_value", DOUBLE, &[DOUBLE]);
-    // headers.set(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
-    module.declare_function("js_headers_set", DOUBLE, &[DOUBLE, I64, I64]);
-    // headers.append(handle_f64, key_ptr, val_ptr) -> f64 (undefined-tag)
-    module.declare_function("js_headers_append", DOUBLE, &[DOUBLE, I64, I64]);
-    // headers.get(handle_f64, key_ptr) -> *mut StringHeader (i64)
-    module.declare_function("js_headers_get", I64, &[DOUBLE, I64]);
+    // headers.set(headers, name, value) -> undefined (operands boxed)
+    module.declare_function("js_headers_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // headers.append(headers, name, value) -> undefined (operands boxed)
+    module.declare_function("js_headers_append", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // headers.get(headers, name) -> string | null
+    module.declare_function("js_headers_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // headers.getSetCookie(handle_f64) -> f64 (NaN-boxed POINTER_TAG to ArrayHeader)
     module.declare_function("js_headers_get_set_cookie", DOUBLE, &[DOUBLE]);
-    // headers.has(handle_f64, key_ptr) -> f64 (TAG_TRUE/FALSE)
-    module.declare_function("js_headers_has", DOUBLE, &[DOUBLE, I64]);
-    // headers.delete(handle_f64, key_ptr) -> f64 (undefined-tag)
-    module.declare_function("js_headers_delete", DOUBLE, &[DOUBLE, I64]);
+    // headers.has(headers, name) -> bool
+    module.declare_function("js_headers_has", DOUBLE, &[DOUBLE, DOUBLE]);
+    // headers.delete(headers, name) -> undefined
+    module.declare_function("js_headers_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     // headers.forEach(handle_f64, cb_nanbox) -> f64 (undefined-tag)
     module.declare_function("js_headers_for_each", DOUBLE, &[DOUBLE, DOUBLE]);
     // headers.keys/values/entries(handle_f64) -> f64 (NaN-boxed POINTER_TAG to ArrayHeader)
@@ -1165,7 +1168,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_headers_values", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_entries", DOUBLE, &[DOUBLE]);
     module.declare_function("js_headers_init_from_value", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_headers_method_value", DOUBLE, &[DOUBLE, I64, I64]);
 
     // new Request(url_ptr, method_ptr, body_ptr, headers_handle_f64, metadata...) -> f64
     module.declare_function(

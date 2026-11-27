@@ -271,6 +271,192 @@ const NURSERY_CAP_SCALE_MIN: u8 = 1;
 const NURSERY_CAP_SCALE_MAX: u8 = 16;
 const _: () = assert!(NURSERY_CAP_SCALE_MAX == 4 * NURSERY_CAP_SCALE_UNIT);
 
+/// The fixed-cost floor of the ladder grows while one minor's fixed cost is
+/// above this share, in percent, of the mutator time that filled its Eden.
+///
+/// The floor's premise above, "a minor there copies almost nothing, so its
+/// cost is its fixed cost, ~100k instructions", is a number the influx ladder
+/// never checks. On nextjs-hello a minor that copies 200 KB costs ~32M
+/// instructions of root scanning, remembered-set and pruning work (NXGC1), so
+/// the lower survival that keeps the influx ladder at 8 MB bought 2.8x the
+/// minors at that price. This dial prices the fixed part from the minor
+/// itself and holds Eden where it is a small share of the program's own time.
+/// See [`retune_fixed_cost_scale`].
+const FIXED_COST_GROW_PERCENT: u128 = 2;
+
+/// The fixed-cost floor shrinks only to a size at which the reading predicts
+/// a fixed share at or below this. Half the grow edge: a growth step is taken
+/// from above 2% and lands above 1%, a shrink at or below 1%, so a steady
+/// reading cannot oscillate, and a reading must halve or double before the
+/// floor moves again.
+const FIXED_COST_SHRINK_PERCENT: u128 = 1;
+
+/// What the first write to a page of fresh anonymous memory costs the thread
+/// that faults it in, in nanoseconds per page: the price of the Eden pages a
+/// growth of the fixed-cost floor adds ([`first_touch_price_ns`]).
+///
+/// Measured with a fresh mapping and the thread CPU clock, one write per
+/// page: x86-64 Linux 4 KiB pages 0.9 us, Apple M 16 KiB pages 1.05 us. The
+/// fault, not the zeroing, dominates at base pages, so the price is per page,
+/// not per byte. A THP-backed Eden (2 MiB pages) costs about half of this per
+/// byte, so the constant over-prices it: the floor then grows later, never
+/// further. A constant, not a measurement at run time, so a floor move depends
+/// only on the minors' own readings.
+const FIRST_TOUCH_NS_PER_PAGE: u64 = 1_000;
+
+/// The one-time CPU cost of faulting in `bytes` of Eden the thread has not
+/// touched yet ([`FIRST_TOUCH_NS_PER_PAGE`] per OS page).
+fn first_touch_price_ns(bytes: usize) -> u64 {
+    (bytes.div_ceil(os_page_bytes()) as u64).saturating_mul(FIRST_TOUCH_NS_PER_PAGE)
+}
+
+fn os_page_bytes() -> usize {
+    #[cfg(unix)]
+    {
+        // SAFETY: sysconf reads a constant of the running system.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page > 0 {
+            return page as usize;
+        }
+    }
+    4096
+}
+
+/// The fixed-cost floor's state between readings ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostDial {
+    /// The previous reading at the floor's size: its share there (parts per
+    /// million of the mutator time), its shrink destination and its window's
+    /// whole thread CPU per MiB of Eden. `None` before the first reading and
+    /// after a move.
+    prev: Option<(u64, u8, u64)>,
+    /// Readings since the floor last moved.
+    readings: u8,
+    /// The fixed cost, in nanoseconds, that the next doubling would have saved
+    /// over the readings since the floor last moved: what the program has
+    /// paid toward the first touch of the pages that doubling adds.
+    saved_ns: u64,
+    /// A growth step not checked yet.
+    step: Option<FixedCostStep>,
+    /// A growth step that bought nothing. The floor grows past its size
+    /// again only once readings there are at least twice its share.
+    hold: Option<FixedCostHold>,
+}
+
+/// A growth of the fixed-cost floor, from the readings that took it until the
+/// second reading at the new size checks it ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostStep {
+    /// The floor before the step.
+    floor: u8,
+    /// The fixed share, parts per million of the mutator time, the readings
+    /// that took the step measured with an Eden of `cap_bytes`.
+    share_ppm: u64,
+    /// The Eden cap before the step.
+    cap_bytes: usize,
+    /// The readings' mean thread CPU (mutator and minor) per MiB of Eden.
+    total_per_mib: u64,
+}
+
+impl FixedCostStep {
+    /// Did the step buy nothing, by a reading of `share_after_ppm` with an
+    /// Eden of `cap_after` bytes? Growing Eden from B to A bytes scales a
+    /// fixed share by B/A; the step bought nothing when the share stayed
+    /// above the midpoint between no change and that full fall,
+    /// `share * (A + B) / 2A`. For a doubling that is F4's three quarters,
+    /// and a step the old-gen term or the influx scale cut short (4.19 to
+    /// 5.58 MB, +33%) is judged by the fall that step can buy.
+    fn bought_nothing(self, share_after_ppm: u64, cap_after: usize) -> bool {
+        u128::from(share_after_ppm) * 2 * cap_after as u128
+            > u128::from(self.share_ppm) * (cap_after as u128 + self.cap_bytes as u128)
+    }
+}
+
+/// A growth step of the fixed-cost floor that bought nothing, holding the
+/// floor at the size it was taken back to ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostHold {
+    /// The floor the step was taken from.
+    floor: u8,
+    /// The share measured there, as in [`FixedCostStep::share_ppm`].
+    share_ppm: u64,
+    /// Readings in a row at that floor whose share was at least twice
+    /// `share_ppm`. [`RAISE_DEBOUNCE_CYCLES`] of them release the hold, so
+    /// one slow minor does not.
+    doubled_readings: u8,
+}
+
+impl FixedCostDial {
+    const START: Self = FixedCostDial {
+        prev: None,
+        readings: 0,
+        saved_ns: 0,
+        step: None,
+        hold: None,
+    };
+}
+
+/// Thread CPU clock marks of the minor collections, for the fixed-cost floor
+/// ([`retune_fixed_cost_scale`]). Policy state of the same kind as the
+/// streaks, one value per thread.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostClock {
+    /// When the last copying minor on this thread finished.
+    last_end_ns: Option<u64>,
+    /// When the minor in progress began.
+    begin_ns: Option<u64>,
+    /// The minor in progress's survivor work: its worklist drains.
+    drain_ns: u64,
+    /// The minor in progress's page returns: the idle Eden pages it advised
+    /// back to the kernel ([`fixed_cost_note_page_return`]).
+    returned_ns: u64,
+}
+
+impl FixedCostClock {
+    const START: Self = FixedCostClock {
+        last_end_ns: None,
+        begin_ns: None,
+        drain_ns: 0,
+        returned_ns: 0,
+    };
+
+    /// The minor in progress has, from its begin until `now`, returned pages.
+    fn page_returned(self, now: u64) -> Self {
+        match self.begin_ns {
+            Some(begin) => FixedCostClock {
+                returned_ns: now.saturating_sub(begin),
+                ..self
+            },
+            None => self,
+        }
+    }
+
+    /// Work that is neither minor nor program ran after the last reading
+    /// closed: the next mutator interval starts at `now`.
+    fn mutator_restarted(self, now: u64) -> Self {
+        match self.last_end_ns {
+            Some(_) => FixedCostClock {
+                last_end_ns: Some(now),
+                ..self
+            },
+            None => self,
+        }
+    }
+
+    /// The reading of the minor in progress finishing at `now`:
+    /// `(fixed_ns, minor_ns, mutator_ns)`. Fixed is the minor's time less its
+    /// survivor drains and its page returns.
+    fn reading(self, now: u64) -> Option<(u64, u64, u64)> {
+        let begin = self.begin_ns?;
+        let minor_ns = now.saturating_sub(begin);
+        let fixed_ns = minor_ns
+            .saturating_sub(self.drain_ns)
+            .saturating_sub(self.returned_ns);
+        let mutator_ns = begin.saturating_sub(self.last_end_ns.unwrap_or(0));
+        Some((fixed_ns, minor_ns, mutator_ns))
+    }
+}
+
 crate::perry_thread_local! {
     /// Power-on threshold. This is `OCCUPANCY_MIN_SURVIVALS`, not the ceiling:
     /// see `SURVIVOR_ROUND_MEASURED`. Starting at the ceiling is a claim that
@@ -298,6 +484,14 @@ crate::perry_thread_local! {
         const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// The fixed-cost floor of the ladder, in the same quarters as
+    /// `NURSERY_CAP_SCALE`: the Eden runs at the larger of the two. Starts at
+    /// the floor; see [`retune_fixed_cost_scale`].
+    static FIXED_COST_SCALE: super::TriggerInput<u8> =
+        const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
+    /// The debounce and step check of [`retune_fixed_cost_scale`].
+    static FIXED_COST_DIAL: Cell<FixedCostDial> = const { Cell::new(FixedCostDial::START) };
+    static FIXED_COST_CLOCK: Cell<FixedCostClock> = const { Cell::new(FixedCostClock::START) };
     /// The influx readings of the ladder's current phase: their sum and their
     /// count. A phase starts at a move, or at a reading on the far side of
     /// the band from the phase's mean; see [`retune_nursery_cap_scale`].
@@ -569,22 +763,27 @@ pub(super) fn set_env_pin_for_test(pin: u8) -> TenuringSurvivalsTestGuard {
 /// old bytes do not inflate Eden.
 pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
     scavenge_nursery_cap_from(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         old_gen_reclaimable_pressure_bytes(),
     )
 }
 
-/// The influx-driven half of the cap on its own: the configured base times
-/// the debounced `NURSERY_CAP_SCALE`, **re-denominated in objects** by
-/// [`nursery_cap_object_scale_permille`]. Named so the composition below reads
-/// as the two-term policy it is.
-pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
-    influx_driven_nursery_cap_bytes_at(NURSERY_CAP_SCALE.with(TriggerInput::get))
+/// The ladder half of the cap on its own: the configured base times the
+/// larger of the debounced `NURSERY_CAP_SCALE` (survivor influx) and
+/// `FIXED_COST_SCALE` (the minor's fixed cost), **re-denominated in objects**
+/// by [`nursery_cap_object_scale_permille`]. Named so the composition below
+/// reads as the two-term policy it is.
+pub(super) fn ladder_nursery_cap_bytes() -> usize {
+    ladder_nursery_cap_bytes_at(
+        NURSERY_CAP_SCALE
+            .with(TriggerInput::get)
+            .max(FIXED_COST_SCALE.with(TriggerInput::get)),
+    )
 }
 
-/// [`influx_driven_nursery_cap_bytes`] at a given ladder scale, so the retune
+/// [`ladder_nursery_cap_bytes`] at a given ladder scale, so the retune
 /// can price a candidate step before taking it.
-fn influx_driven_nursery_cap_bytes_at(scale: u8) -> usize {
+fn ladder_nursery_cap_bytes_at(scale: u8) -> usize {
     let constant_band = gc_scavenge_nursery_cap_bytes().saturating_mul(scale as usize)
         / NURSERY_CAP_SCALE_UNIT as usize;
     // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
@@ -682,7 +881,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
             previous,
             mean,
             nursery_cap_object_scale_permille(mean),
-            influx_driven_nursery_cap_bytes()
+            ladder_nursery_cap_bytes()
         );
     }
 }
@@ -762,7 +961,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
             objects,
             bytes,
             nursery_cap_object_scale_permille(mean),
-            influx_driven_nursery_cap_bytes()
+            ladder_nursery_cap_bytes()
         );
     }
 }
@@ -1081,9 +1280,8 @@ pub(super) fn retune_after_scavenge(
 fn retune_nursery_cap_scale(eden_live_bytes: usize, first_round_live_bytes: usize) {
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
-    let cap_at = |scale: u8| {
-        scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes_at(scale), old_reclaimable)
-    };
+    let cap_at =
+        |scale: u8| scavenge_nursery_cap_from(ladder_nursery_cap_bytes_at(scale), old_reclaimable);
     let cap = cap_at(scale);
     // Called before `retune_after_scavenge` replaces it, so this is still the
     // cohort `first_round_live_bytes` follows.
@@ -1257,6 +1455,327 @@ fn start_cap_phase() {
     CAP_PHASE_CYCLES.with(|c| c.set(CapPhaseCycles::START));
 }
 
+/// This thread's CPU clock in nanoseconds: the time the thread ran, not the
+/// time that passed, so a server's idle wait and a preemption by another
+/// process count as neither mutator nor collector time. `None` where no
+/// per-thread CPU clock exists, which leaves the fixed-cost floor at its
+/// start (the influx ladder alone sizes Eden there, as before), and under the
+/// unit tests, whose collections must not depend on timing; they drive
+/// [`retune_fixed_cost_scale`] with explicit readings.
+pub(super) fn thread_cpu_ns() -> Option<u64> {
+    #[cfg(all(
+        not(test),
+        any(target_os = "linux", target_os = "android", target_vendor = "apple")
+    ))]
+    {
+        let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+        // SAFETY: `ts` is a valid out-pointer for the call's duration.
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0 {
+            return Some(
+                (ts.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(ts.tv_nsec as u64),
+            );
+        }
+    }
+    None
+}
+
+/// A minor collection begins on this thread (copying or not; only a copying
+/// minor completes the reading).
+pub(super) fn fixed_cost_minor_begin() {
+    let begin_ns = thread_cpu_ns();
+    FIXED_COST_CLOCK.with(|c| {
+        c.set(FixedCostClock {
+            begin_ns,
+            drain_ns: 0,
+            returned_ns: 0,
+            ..c.get()
+        })
+    });
+}
+
+/// The minor that began at [`fixed_cost_minor_begin`] has, from its start
+/// until now, advised idle Eden pages back to the kernel. Call it right after
+/// that discard, and only when the discard returned bytes.
+///
+/// Returning pages is not fixed cost: it is paid once per byte a smaller Eden
+/// gives up, the price of a shrink as first touch is the price of a growth.
+/// A hugepage-backed Eden block costs ~150-180 us of thread CPU to advise
+/// (low-survival fixture, 2 MiB THP blocks), ~3x the ~65 us minor around it,
+/// so charging it to the minors right after a take-back read as the share
+/// having doubled and released the hold that take-back set.
+pub(super) fn fixed_cost_note_page_return() {
+    if let Some(now) = thread_cpu_ns() {
+        FIXED_COST_CLOCK.with(|c| c.set(c.get().page_returned(now)));
+    }
+}
+
+/// A copying minor's reading has closed and the collector then advised pooled
+/// blocks back to the kernel (their reuse window expired). That time is
+/// neither the minor's nor the program's: the next mutator interval starts
+/// now. Call it only when pages were returned.
+pub(super) fn fixed_cost_restart_mutator() {
+    if let Some(now) = thread_cpu_ns() {
+        FIXED_COST_CLOCK.with(|c| c.set(c.get().mutator_restarted(now)));
+    }
+}
+
+/// The copying minor's worklist drain ran from `started` (a [`thread_cpu_ns`]
+/// reading) until now: survivor work, not fixed cost.
+pub(super) fn note_fixed_cost_drain(started: Option<u64>) {
+    if let (Some(started), Some(now)) = (started, thread_cpu_ns()) {
+        FIXED_COST_CLOCK.with(|c| {
+            let mut clock = c.get();
+            clock.drain_ns = clock.drain_ns.saturating_add(now.saturating_sub(started));
+            c.set(clock);
+        });
+    }
+}
+
+/// A copying minor finished. Its fixed cost is its CPU time minus its drains
+/// and its page returns; the mutator time is the thread's CPU time since the previous copying minor
+/// finished. Only a minor that collected a whole Eden allocation window
+/// (`full_eden_window`) is a reading: an early minor (a forced or explicit
+/// collection) did not wait for an Eden to fill, so its interval says nothing
+/// about how often an Eden of `entry_cap` bytes fills.
+pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
+    let now = thread_cpu_ns();
+    let clock = FIXED_COST_CLOCK.with(|c| {
+        c.replace(FixedCostClock {
+            last_end_ns: now,
+            ..FixedCostClock::START
+        })
+    });
+    let Some((fixed_ns, minor_ns, mutator_ns)) = now.and_then(|now| clock.reading(now)) else {
+        return;
+    };
+    if !full_eden_window {
+        return;
+    }
+    retune_fixed_cost_scale(fixed_ns, minor_ns, mutator_ns, entry_cap);
+}
+
+/// Retune the ladder's fixed-cost floor from one copying minor: `fixed_ns` of
+/// work that does not scale with survivors (root scanning, the remembered
+/// set, pruning, finalization; everything but the worklist drain) of the
+/// minor's `minor_ns`, against `mutator_ns` of program time that filled an
+/// Eden of `cap_now` bytes.
+///
+/// If the fixed cost of a minor is paid once per Eden, its share of the
+/// program's time at an Eden of `C` bytes is `fixed / mutator * cap_now / C`.
+/// The floor grows while that share is above [`FIXED_COST_GROW_PERCENT`] at
+/// the current size, one doubling per move, and stops at the first size where
+/// it is not; it shrinks, to the smallest size at which the reading predicts
+/// at most [`FIXED_COST_SHRINK_PERCENT`], when that is below the floor. Every
+/// move needs the previous reading to agree (the same
+/// [`RAISE_DEBOUNCE_CYCLES`] of two as the influx ladder), so one slow minor
+/// (a page fault storm, a first-touch rebuild) moves nothing.
+///
+/// # Each step is paid for first
+///
+/// A doubling saves part of every later minor's fixed cost, but it costs at
+/// once: the first touch of the Eden pages it adds
+/// ([`first_touch_price_ns`]). On a short program with cheap minors that price
+/// is many times what the saved minors are worth (low-survival fixture: 46
+/// minors of ~40 us, 21 ms of CPU; doubled four times it paid ~10k page faults
+/// and 17 ms more for 1 ms of minors). So the dial adds up, over its readings
+/// at the current size, the fixed cost the doubling would have saved, and
+/// grows only once that sum covers the price: the program has then paid the
+/// price in minors already, and if it runs as long again as it has at this
+/// size it gets it back. It never pays more than twice the best choice in
+/// hindsight (the rent-or-buy bound), and a long-running program with costly
+/// minors (a server: minors of milliseconds) pays it within a window or two.
+///
+/// # Each step is checked
+///
+/// Part of what the reading calls fixed is not: work that walks Eden itself
+/// grows with it, and the first minors of a thread pay first-touch costs
+/// that later ones do not. A step whose readings do not fall buys nothing
+/// and only costs the memory. So a growth is a single doubling, and the
+/// second reading at the new size checks it (the first window after a
+/// growth also pays the first touch of the new Eden pages, so it is not a
+/// reading of the size): an Eden grown from B to A bytes scales a fixed share
+/// by B/A, and a step whose share stayed above the midpoint of that fall
+/// ([`FixedCostStep::bought_nothing`]; a doubling: fell by less than a
+/// quarter) is mostly not fixed cost. Such a step is taken back, and the
+/// floor does not grow past that size again until two readings in a row
+/// there are each at least twice the share that took the step (the
+/// program's minors changed; one slow minor is not that). The check also prices the whole thread:
+/// the window's mutator time plus the whole minor, per byte of Eden, must
+/// fall below the mean of the readings that took the step. A larger Eden can
+/// make every allocation dearer (a working set out of cache); a step whose
+/// total does not fall saved less than it cost and is taken back the same
+/// way. A step that passes both is kept and the floor goes on from there
+/// while the share stays above the edge.
+///
+/// The floor is bounded by the ladder's ceiling (`NURSERY_CAP_SCALE_MAX`,
+/// 64 MB) and never takes a step that cannot enlarge the cap: where the
+/// tenured-proportional term or the influx scale already sets a larger Eden
+/// the floor steps from that size. The effective cap is the larger of the
+/// influx and fixed-cost scales ([`ladder_nursery_cap_bytes`]), and each dial
+/// keeps its own hysteresis, so a program whose fixed cost falls gives the
+/// memory back to whatever the influx ladder holds on its own, instead of the
+/// influx ladder's dead band keeping a size neither rule would choose.
+///
+/// # Noise
+///
+/// The readings are thread CPU time, so they vary from run to run by the
+/// cache and frequency noise of a few milliseconds of work, a few percent.
+/// A move needs two readings beyond an edge, the edges are a factor 2 apart,
+/// a kept step lowered its share and a taken-back one holds until two
+/// readings in a row double its share, so the floor of a program whose share
+/// is not within that noise of an edge is the same on every run.
+pub(super) fn retune_fixed_cost_scale(
+    fixed_ns: u64,
+    minor_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+) {
+    if mutator_ns == 0 || cap_now == 0 {
+        return;
+    }
+    let floor = FIXED_COST_SCALE.with(TriggerInput::get);
+    let influx = NURSERY_CAP_SCALE.with(TriggerInput::get);
+    let old_reclaimable = old_gen_reclaimable_pressure_bytes();
+    let cap_at = |scale: u8| {
+        scavenge_nursery_cap_from(
+            ladder_nursery_cap_bytes_at(scale.max(influx)),
+            old_reclaimable,
+        )
+    };
+    // This reading's share, in parts per million, predicted at the cap of
+    // `scale`.
+    let share_at = |scale: u8| {
+        let ppm = u128::from(fixed_ns) * 1_000_000 * cap_now as u128
+            / (u128::from(mutator_ns) * cap_at(scale).max(1) as u128);
+        ppm.min(u128::from(u64::MAX)) as u64
+    };
+    let ceiling = cap_at(NURSERY_CAP_SCALE_MAX);
+    // The smallest floor at which this reading predicts a fixed share of at
+    // most `percent`, or the first floor beyond which no step enlarges the cap.
+    let destination = |percent: u128| {
+        let mut scale = NURSERY_CAP_SCALE_MIN;
+        while scale < NURSERY_CAP_SCALE_MAX
+            && cap_at(scale) < ceiling
+            && u128::from(fixed_ns) * 100 * cap_now as u128
+                > percent * u128::from(mutator_ns) * cap_at(scale) as u128
+        {
+            scale *= 2;
+        }
+        scale
+    };
+    let share = share_at(floor);
+    let shrink_to = destination(FIXED_COST_SHRINK_PERCENT);
+    // The window's whole thread CPU (mutator and the whole minor) per MiB of
+    // the Eden it filled.
+    let total_per_mib = {
+        let total = u128::from(mutator_ns.saturating_add(minor_ns)) << 20;
+        (total / cap_now as u128).min(u128::from(u64::MAX)) as u64
+    };
+    let mut dial = FIXED_COST_DIAL.with(Cell::get);
+    dial.readings = dial.readings.saturating_add(1);
+    let moved = |dial: &mut FixedCostDial, to: u8, why: &str| {
+        *dial = FixedCostDial {
+            prev: None,
+            readings: 0,
+            saved_ns: 0,
+            ..*dial
+        };
+        FIXED_COST_SCALE.with(|s| s.set(to));
+        diag_fixed_cost_scale(floor, to, why, fixed_ns, mutator_ns, cap_now);
+    };
+    if let Some(step) = dial.step {
+        if dial.readings == 1 {
+            // The first window at the new size: see "Each step is checked".
+            FIXED_COST_DIAL.with(|d| d.set(dial));
+            return;
+        }
+        dial.step = None;
+        let measured_ppm = {
+            let ppm = u128::from(fixed_ns) * 1_000_000 / u128::from(mutator_ns);
+            ppm.min(u128::from(u64::MAX)) as u64
+        };
+        let why = if step.bought_nothing(measured_ppm, cap_now) {
+            Some("step bought nothing, back")
+        } else if total_per_mib >= step.total_per_mib {
+            Some("step cost more than it saved, back")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            dial.hold = Some(FixedCostHold {
+                floor: step.floor,
+                share_ppm: step.share_ppm,
+                doubled_readings: 0,
+            });
+            moved(&mut dial, step.floor, why);
+            FIXED_COST_DIAL.with(|d| d.set(dial));
+            return;
+        }
+    }
+    let prev = dial.prev.replace((share, shrink_to, total_per_mib));
+    let edge = (FIXED_COST_GROW_PERCENT * 10_000) as u64;
+    let from = floor.max(influx).min(NURSERY_CAP_SCALE_MAX);
+    let grow_to = from.saturating_mul(2);
+    // What the doubling would have saved of this minor, and what its added
+    // pages cost to touch: see "Each step is paid for first".
+    let grow_cap = cap_at(grow_to.min(NURSERY_CAP_SCALE_MAX));
+    let saved_here = u128::from(fixed_ns) * cap_now as u128 / grow_cap.max(1) as u128;
+    dial.saved_ns = dial
+        .saved_ns
+        .saturating_add(fixed_ns.saturating_sub(saved_here.min(u128::from(u64::MAX)) as u64));
+    let price_ns = first_touch_price_ns(grow_cap.saturating_sub(cap_now));
+    diag_fixed_cost_reading(
+        fixed_ns,
+        minor_ns,
+        mutator_ns,
+        cap_now,
+        total_per_mib,
+        dial.saved_ns,
+        price_ns,
+    );
+    dial.hold = dial
+        .hold
+        .filter(|hold| floor <= hold.floor)
+        .and_then(|hold| {
+            let doubled_readings = if share_at(hold.floor) >= hold.share_ppm.saturating_mul(2) {
+                hold.doubled_readings.saturating_add(1)
+            } else {
+                0
+            };
+            (doubled_readings < RAISE_DEBOUNCE_CYCLES).then_some(FixedCostHold {
+                doubled_readings,
+                ..hold
+            })
+        });
+    let held = dial.hold.is_some();
+    match prev {
+        Some((prev_share, _, prev_total))
+            if share > edge
+                && prev_share > edge
+                && !held
+                && grow_to <= NURSERY_CAP_SCALE_MAX
+                && cap_at(grow_to) > cap_at(from)
+                && dial.saved_ns >= price_ns =>
+        {
+            dial.step = Some(FixedCostStep {
+                floor,
+                share_ppm: share.min(prev_share),
+                cap_bytes: cap_at(floor),
+                total_per_mib: (total_per_mib / 2).saturating_add(prev_total / 2),
+            });
+            moved(&mut dial, grow_to, "grow");
+        }
+        Some((_, prev_shrink, _)) if shrink_to < floor && prev_shrink < floor => {
+            dial.step = None;
+            moved(&mut dial, shrink_to.max(prev_shrink), "shrink");
+        }
+        _ => {}
+    }
+    FIXED_COST_DIAL.with(|d| d.set(dial));
+}
+
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
 /// promote-on-first-copy lock: ≥90% of the Eden bytes the sweep classified
 /// must have been live. That is the "the aging round would filter nothing"
@@ -1341,7 +1860,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
 /// diagnostic check or state reads on the disabled path.
 pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
     eprintln!(
-        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={}",
+        "[gc-nursery-policy] next_scale={} next_cap={} influx={eden_live_bytes} mean={} grow_streak={} shrink_streak={} promote_locked={} next_survivals={} fixed_cost_scale={}",
         NURSERY_CAP_SCALE.with(TriggerInput::get),
         scavenge_nursery_cap_effective_bytes(),
         MEAN_SURVIVING_OBJECT_BYTES.with(TriggerInput::get),
@@ -1349,7 +1868,43 @@ pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
         CAP_SHRINK_STREAK.with(Cell::get),
         PROMOTE_LOCK.with(Cell::get),
         TENURING_SURVIVALS.with(Cell::get),
+        FIXED_COST_SCALE.with(TriggerInput::get),
     );
+}
+
+fn diag_fixed_cost_scale(
+    from: u8,
+    to: u8,
+    why: &str,
+    fixed_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+) {
+    if crate::gc::diagnostic_hooks::enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery fixed-cost scale {from}/{unit} -> {to}/{unit} of base, {why} \
+             (fixed_ns={fixed_ns} mutator_ns={mutator_ns} cap={cap_now})",
+            unit = NURSERY_CAP_SCALE_UNIT
+        );
+    }
+}
+
+fn diag_fixed_cost_reading(
+    fixed_ns: u64,
+    minor_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+    total_per_mib: u64,
+    saved_ns: u64,
+    price_ns: u64,
+) {
+    if crate::gc::diagnostic_hooks::enabled() {
+        eprintln!(
+            "[gc-tenuring] fixed-cost reading fixed_ns={fixed_ns} minor_ns={minor_ns} \
+             mutator_ns={mutator_ns} cap={cap_now} total_ns_per_mib={total_per_mib} \
+             saved_ns={saved_ns} price_ns={price_ns}"
+        );
+    }
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
@@ -1357,7 +1912,7 @@ fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}/{unit} -> {to}/{unit} of base \
              (band {} B, eden_live_bytes={eden_live_bytes})",
-            influx_driven_nursery_cap_bytes_at(to),
+            ladder_nursery_cap_bytes_at(to),
             unit = NURSERY_CAP_SCALE_UNIT
         );
     }
@@ -1405,6 +1960,9 @@ pub(super) fn reset_for_test() {
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
     start_cap_phase();
+    FIXED_COST_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
+    FIXED_COST_DIAL.with(|d| d.set(FixedCostDial::START));
+    FIXED_COST_CLOCK.with(|c| c.set(FixedCostClock::START));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
 }

@@ -36,6 +36,7 @@ mod generator;
 mod generator_state;
 mod install_static;
 mod math_temporal;
+mod reflect_metadata;
 
 // Complete namespace construction, reached through feature hooks.
 mod builtin_namespace;

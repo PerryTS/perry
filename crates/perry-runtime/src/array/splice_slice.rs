@@ -390,7 +390,7 @@ pub(crate) fn length_operand_across(arr: *const ArrayHeader, v: f64) -> (f64, *c
     if (v.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
         return (v, arr);
     }
-    operand_across_slow(arr, v, crate::math::js_math_to_number)
+    operand_across_slow(arr, v, crate::builtins::js_number_coerce)
 }
 
 #[inline(never)]

@@ -88,6 +88,8 @@ fn is_http_server_method(name: &str) -> bool {
             | "addListener"
             | "once"
             | "listeners"
+            | "listenerCount"
+            | "emit"
             | "setTimeout"
             | "closeAllConnections"
             | "closeIdleConnections"
@@ -358,7 +360,24 @@ unsafe extern "C" fn http_server_method_dispatch_ext(
     if name.is_empty() {
         return 0;
     }
-    let value = if crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+    // A heap request reaches here only for node's own prototype methods
+    // (`_read`, `_destroy`, `_dump`, `setTimeout`, ...): the object
+    // carries every other member itself.
+    let heap_request = crate::server::request_payload::is_request(handle);
+    let value = if heap_request {
+        let args = if args_ptr.is_null() || args_len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        crate::server::request_payload::method(handle, name, args).or_else(|| {
+            Some(
+                crate::server::handle_dispatch::js_ext_http_incoming_message_dispatch_method(
+                    handle, method_ptr, method_len, args_ptr, args_len,
+                ),
+            )
+        })
+    } else if crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
         && (is_http_server_method(name)
             || (is_bun_server_method(name) && crate::server::bun_server::is_bun_server(handle)))
     {

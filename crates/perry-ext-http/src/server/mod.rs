@@ -65,6 +65,7 @@ mod https_server;
 // #10428: runtime callback for http/https/http2 exports used as values.
 mod native_dispatch;
 mod request;
+pub(crate) mod request_payload;
 mod response;
 mod response_cork;
 mod response_end;
@@ -167,13 +168,16 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
             // reachable from the server, so this walk is their only root.
             if !exchange_slot_sabotage() {
                 for pending in server.pending.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut pending.request);
                     visitor.visit_nanbox_f64_slot(&mut pending.response);
                 }
                 for parked in server.in_flight.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut parked.request);
                     visitor.visit_nanbox_f64_slot(&mut parked.response);
                 }
             }
             visitor.visit_nanbox_f64_slot(&mut server.response_class);
+            visitor.visit_nanbox_f64_slot(&mut server.request_class);
             for error in server.pending_client_errors.iter_mut() {
                 visitor.visit_nanbox_f64_slot(&mut error.socket);
             }
@@ -286,6 +290,7 @@ extern "C" fn retire_transport_edges(agent: u64) {
             server.pending.clear();
             server.in_flight.clear();
             server.response_class = undefined;
+            server.request_class = undefined;
             server.with_client_errors(|errors| errors.clear());
             server.bun_promises.clear();
         }
@@ -739,7 +744,7 @@ mod tests {
         let mut http = HttpServer::with_handler(0);
         http.pending.push_back(server::HttpPendingRequest {
             server_handle: 0,
-            request_handle: 0,
+            request: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             response: pending_response,
             skip_default_response: false,
             h2_stream_handle: 0,

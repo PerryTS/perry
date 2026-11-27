@@ -1,0 +1,1 @@
+Runtime internals: byte store placement (the inline/native cutoff and Buffer pool eligibility) lives in `gc/byte_store_placement.rs` instead of `gc/policy.rs`, bringing `gc/policy.rs` back under its file-size allowlist entry. No behavior change.

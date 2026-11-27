@@ -1061,16 +1061,6 @@
   {
    "file": "crates/perry-stdlib/src/fetch/mod.rs",
    "names": [
-    "HEADERS_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "HashMap<handle id, HeadersRecord> whose method_values hold NaN-boxed bound-method closure bits (GC heap values) created on the owning thread; each thread scans only ids it owns (fetch/gc.rs), and OwnedHandles::drop -> release() removes the exiting thread's records (fetch/lifecycle.rs:262-275, 216-220).",
-   "hook": "release",
-   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "names": [
     "REQUEST_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -1883,7 +1873,23 @@
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/controller.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local debug-print rate limiter at streams.rs:1244 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1782 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1864 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1968 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:2013 (PERRY_JSON_PATH=1); fetch_add counter only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/readable.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local debug-print rate limiter at streams.rs:1244 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1782 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1864 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1968 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:2013 (PERRY_JSON_PATH=1); fetch_add counter only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/reader.rs",
    "names": [
     "N"
    ],
@@ -2062,20 +2068,20 @@
    "why": "Queue of foreign-thread callback requests: slot index, copied native ABI register images, and an Arc completion; no GC heap addresses."
   },
   {
-   "file": "crates/perry-runtime/src/gc/policy.rs",
-   "names": [
-    "CACHED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock<usize> caching PERRY_GC_SCAVENGE_NURSERY_MB nursery cap bytes; config value."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/policy.rs",
+   "file": "crates/perry-runtime/src/gc/policy/major_pacing.rs",
    "names": [
     "CONFIG"
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock<(usize,usize)> caching major-GC pacing floor bytes and growth numerator from env; config."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/policy/nursery_cap.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<usize> caching PERRY_GC_SCAVENGE_NURSERY_MB nursery cap bytes; config value."
   },
   {
    "file": "crates/perry-runtime/src/pty/reactor.rs",
@@ -2221,6 +2227,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:263) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_HEADERS_PROTOTYPE_INSTALL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to perry-stdlib's Headers.prototype member installer, stored only by js_register_global_headers_prototype and transmuted back to a fn type when the realm's Headers prototype is born; code address."
   },
   {
    "file": "crates/perry-runtime/src/object/global_fetch.rs",

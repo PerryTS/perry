@@ -74,11 +74,12 @@ fn readable_lifecycle_flags_reflect_ended_state() {
         TAG_TRUE
     );
 
+    // EOF pushed, no `'end'` yet: node's `readable` stays true.
     let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
-    assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_FALSE);
+    assert_eq!(js_node_stream_method_readable(handle).to_bits(), TAG_TRUE);
     assert_eq!(
         js_object_get_field_by_name_f64(obj, hidden_key(b"readable")).to_bits(),
-        TAG_FALSE
+        TAG_TRUE
     );
     // `readableEnded` is "'end' was emitted"; pushing EOF only ends the buffer.
     assert_eq!(

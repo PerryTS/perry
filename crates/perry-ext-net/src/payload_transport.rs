@@ -52,6 +52,8 @@ pub(crate) struct SocketFields {
     pub write_ended: bool,
     pub shutdown_done: bool,
     pub read_started: bool,
+    /// The buffer reached the high-water mark and the transport read stopped.
+    pub read_stopped: bool,
     pub paused: bool,
     pub flowing: Option<bool>,
     pub need_drain: bool,

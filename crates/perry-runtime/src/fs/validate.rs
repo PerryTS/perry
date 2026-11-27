@@ -34,8 +34,9 @@ pub(crate) fn is_path_like(value: f64) -> bool {
     if jv.is_pointer() {
         let obj = jv.as_pointer::<crate::object::ObjectHeader>();
         if !obj.is_null() {
-            let protocol = crate::value::boxed_text::get_string_content(
-                crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+            let protocol = crate::url::href::component_of(
+                obj as *mut crate::object::ObjectHeader,
+                crate::url::href::Component::Protocol,
             );
             return protocol == "file:" && unsafe { is_valid_file_url_path_object(obj) };
         }
@@ -66,23 +67,24 @@ fn encoded_path_separator(pathname: &str) -> bool {
 }
 
 unsafe fn file_url_host(obj: *const crate::object::ObjectHeader) -> String {
-    let hostname = crate::value::boxed_text::get_string_content(
-        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_HOSTNAME),
+    let hostname = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Hostname,
     );
     if !hostname.is_empty() {
         return hostname;
     }
-    crate::value::boxed_text::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_HOST,
-    ))
+    crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Host,
+    )
 }
 
 unsafe fn file_url_pathname(obj: *const crate::object::ObjectHeader) -> String {
-    crate::value::boxed_text::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PATHNAME,
-    ))
+    crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Pathname,
+    )
 }
 
 unsafe fn is_valid_file_url_path_object(obj: *const crate::object::ObjectHeader) -> bool {
@@ -124,8 +126,9 @@ fn validate_path_like_value(_arg_name: &str, value: f64) -> bool {
     if obj.is_null() {
         return false;
     }
-    let protocol = crate::value::boxed_text::get_string_content(
-        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+    let protocol = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Protocol,
     );
     if protocol.is_empty() {
         return false;

@@ -273,11 +273,11 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
                 event.flags & tl::NET_FLAG_PLAINTEXT != 0,
                 bytes.len(),
                 true,
-                |socket, state| {
+                |_, state| {
                     let parser = net::record_get(state, "parser");
                     np::payload_mut::<Conn>(parser, &PARSER)
                         .ok()
-                        .map(|conn| feed_step(socket, conn, bytes))
+                        .map(|conn| feed_step(conn, bytes))
                 },
             )
         };
@@ -423,7 +423,7 @@ fn is_websocket(id: &RootedSocket) -> bool {
     with_conn(id, |c| c.websocket).unwrap_or(false)
 }
 
-fn feed_step(id: &RootedSocket, c: &mut Conn, bytes: &[u8]) -> Option<Step> {
+fn feed_step(c: &mut Conn, bytes: &[u8]) -> Option<Step> {
     if c.websocket {
         return None;
     }
@@ -438,7 +438,7 @@ fn feed_step(id: &RootedSocket, c: &mut Conn, bytes: &[u8]) -> Option<Step> {
         c.clock.receiving(Instant::now());
     }
     c.input.extend_from_slice(bytes);
-    Some(decode_step(id, c))
+    Some(decode_step(c))
 }
 
 fn deliver_feed(id: &RootedSocket, bytes: &[u8], step: Option<Step>) {
@@ -450,7 +450,7 @@ fn deliver_feed(id: &RootedSocket, bytes: &[u8], step: Option<Step>) {
 }
 
 fn feed(id: &RootedSocket, bytes: &[u8]) {
-    if let Some(step) = with_conn(id, |c| feed_step(id, c, bytes)) {
+    if let Some(step) = with_conn(id, |c| feed_step(c, bytes)) {
         deliver_feed(id, bytes, step);
     }
 }
@@ -466,7 +466,9 @@ enum Step {
     Again,
     /// A decoded request, and whether the client is waiting for a
     /// `100 Continue` before it sends the body.
-    Dispatch(HttpPendingRequest, bool),
+    /// The exchange, its request's native half (born as an object outside
+    /// the connection borrow), and whether to send `100 Continue`.
+    Dispatch(HttpPendingRequest, Box<IncomingMessage>, bool),
     /// A head with `Expect: 100-continue` was decoded: answer
     /// `100 Continue` now, then keep decoding (the body follows it).
     Continue,
@@ -476,7 +478,7 @@ enum Step {
     Failed(turnloop_http::Error),
 }
 
-fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
+fn decode_step(c: &mut Conn) -> Step {
     loop {
         if c.destroyed || c.paused || c.handshaking {
             return Step::Idle;
@@ -566,8 +568,8 @@ fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
                         c.requests += 1;
                         c.seq += 1;
                         c.paused = true;
-                        let (request, send_continue) = finish_request(id, c, building);
-                        Step::Dispatch(request, send_continue)
+                        let (request, message, send_continue) = finish_request(c, building);
+                        Step::Dispatch(request, message, send_continue)
                     }
                     None => Step::Again,
                 };
@@ -595,9 +597,7 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
     loop {
         // Head/body/trailer steps do not run JS or allocate GC objects.
         // Keep the same proven parser until an externally visible action.
-        let step = initial
-            .take()
-            .or_else(|| with_conn(id, |c| decode_step(id, c)));
+        let step = initial.take().or_else(|| with_conn(id, decode_step));
         refresh_deadline(id);
         if with_conn(id, |c| c.closing || c.destroyed).unwrap_or(true) {
             return;
@@ -609,7 +609,7 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 write_raw(id, b"HTTP/1.1 100 Continue\r\n\r\n");
                 continue;
             }
-            Some(Step::Dispatch(mut request, send_continue)) => {
+            Some(Step::Dispatch(mut request, message, send_continue)) => {
                 cancel_deadline(id);
                 // The response is born here, outside the connection borrow:
                 // the birth allocates. Nothing allocates between the birth
@@ -620,12 +620,23 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 let max_requests = with_conn(id, |c| c.server_handle)
                     .and_then(|server| with_base_server(server, |s| s.max_requests_per_socket))
                     .unwrap_or(0.0);
-                request.response = alloc_http1_server_response_for_turnloop(
+                // node's `new server[kIncomingMessage](socket)`.
+                let request_class = with_conn(id, |c| c.server_handle)
+                    .and_then(|server| with_base_server(server, |s| s.request_class))
+                    .unwrap_or(f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()));
+                // node's `parserOnIncoming`: the request, then its response.
+                let roots = perry_ffi::TransientRootScope::enter();
+                let req = roots.root_nanbox(unsafe {
+                    crate::server::request_payload::alloc(*message, id.value(), request_class)
+                });
+                let response = alloc_http1_server_response_for_turnloop(
                     id.value(),
                     seq,
-                    request.request_handle,
+                    req.get(),
                     max_requests,
                 );
+                request.request = req.get();
+                request.response = response;
                 crate::server::server::queue_server_pending(request);
                 // Outside the connection borrow: `write_raw` takes the same
                 // lock, and `std::sync::Mutex` is not reentrant.
@@ -704,10 +715,9 @@ fn building_from(head: &http1::Head) -> Building {
 /// Turn a fully decoded request into the `(req, res)` handle pair the pump
 /// dispatches.
 fn finish_request(
-    socket: &RootedSocket,
     c: &mut Conn,
     building: Building,
-) -> (HttpPendingRequest, bool) {
+) -> (HttpPendingRequest, Box<IncomingMessage>, bool) {
     let mut im = IncomingMessage::new(
         building.method.clone(),
         building.url.clone(),
@@ -722,11 +732,6 @@ fn finish_request(
     } else {
         "1.1".to_string()
     };
-    let im_handle = alloc_incoming_message(im);
-    // `req.socket === conn` for the
-    // `'connection'` listener's argument — same handle, every request on
-    // this connection.
-    incoming_socket_assign(im_handle, socket.value());
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {
@@ -744,7 +749,9 @@ fn finish_request(
 
     c.active = Some(Active {
         seq: c.seq,
-        request_handle: im_handle,
+        // A heap request's `'aborted'` comes from its parked response
+        // (the reaper's dead-connection pass), never from this word.
+        request_handle: 0,
         method: building.method,
         version: building.version,
         connection: building.connection,
@@ -759,14 +766,15 @@ fn finish_request(
     (
         HttpPendingRequest {
             server_handle: c.server_handle,
-            request_handle: im_handle,
-            // Born by the dispatch step, outside this connection borrow.
+            // Both born by the dispatch step, outside this connection borrow.
+            request: f64::from_bits(JsValue::UNDEFINED.bits()),
             response: f64::from_bits(JsValue::UNDEFINED.bits()),
             skip_default_response: false,
             h2_stream_handle: 0,
             h2_stream_headers: Vec::new(),
             is_check_continue,
         },
+        Box::new(im),
         send_continue,
     )
 }

@@ -4,7 +4,6 @@
 
 use super::*;
 
-use super::parse::create_url_object;
 use super::search_params::url_decode;
 
 const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -441,8 +440,12 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let windows = options_windows_flag(options_f64);
 
     let href = path_to_file_url_string(&path, windows);
-    let obj = create_url_object(&href);
-    crate::value::js_nanbox_pointer(obj as i64)
+    match super::href::parse(&href, None) {
+        Some(parsed) => {
+            crate::value::js_nanbox_pointer(super::href::new_url_object(&parsed) as i64)
+        }
+        None => super::parse::throw_invalid_url(&href, None),
+    }
 }
 
 /// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument

@@ -77,7 +77,9 @@ mod write_queue;
 mod tests;
 
 pub(crate) use closing::{pending as close_queued, ready as close_ready, run as close_phase};
-pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
+pub(crate) use defer_eof::{
+    check_phase_begin, check_phase_end, deliver_due_eof, pending as eof_parked,
+};
 pub use errors::{map_error, NodeError};
 pub use sink::{
     register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_LINK_ROUTES,
@@ -278,8 +280,8 @@ struct Entry {
     connecting: bool,
     /// `close` was submitted; the entry survives until its `Closed` arrives.
     closing: bool,
-    /// The peer's EOF was delivered: nothing is read any more.
-    ended: bool,
+    /// The peer's EOF was read; its delivery may still be parked.
+    eof: bool,
     referenced: bool,
     #[cfg(windows)]
     pipe_drain: Option<OpId>,
@@ -305,7 +307,7 @@ impl Entry {
             posted: false,
             connecting: false,
             closing: false,
-            ended: false,
+            eof: false,
             referenced: true,
             #[cfg(windows)]
             pipe_drain: None,

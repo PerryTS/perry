@@ -16,9 +16,11 @@ mod wrapper_libs;
 
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use features::{
-    auto_optimized_cross_features, gc_diagnostics_requested, gc_instruments_requested,
-    gc_trace_requested, hot_diag_requested, instrumented_variant_requested, variant_archive_name,
+    auto_optimized_cross_features, gc_collector_diagnostics_requested, gc_diagnostics_requested,
+    gc_instruments_requested, gc_trace_requested, hot_diag_requested,
+    instrumented_variant_requested, variant_archive_name,
 };
+pub(crate) use wrapper_libs::links_better_sqlite3;
 
 pub(crate) use paths::android_global_dynamic_tls_rustflag;
 

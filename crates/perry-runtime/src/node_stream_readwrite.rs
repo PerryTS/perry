@@ -427,7 +427,12 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
     let chunk = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
     while readable_is_flowing(s.get_nanbox_f64()) && !stream_destroyed(s.get_nanbox_f64()) {
         if crate::array::js_array_length(pending()) == 0 {
-            if super::read_in_flight(s.get_nanbox_f64()) || !has_hook(s.get_nanbox_f64()) {
+            // node's `read()` never calls `_read` after EOF: an ended stream
+            // does not even look its hook up.
+            if super::read_in_flight(s.get_nanbox_f64())
+                || stream_hidden_ended(s.get_nanbox_f64())
+                || !has_hook(s.get_nanbox_f64())
+            {
                 break;
             }
             super::read_ahead(s.get_nanbox_f64(), 0.0);
@@ -436,7 +441,10 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
             }
             continue;
         }
-        if !super::read_in_flight(s.get_nanbox_f64()) && has_hook(s.get_nanbox_f64()) {
+        if !super::read_in_flight(s.get_nanbox_f64())
+            && !stream_hidden_ended(s.get_nanbox_f64())
+            && has_hook(s.get_nanbox_f64())
+        {
             let head = crate::array::js_array_get_f64(pending(), 0);
             super::read_ahead(
                 s.get_nanbox_f64(),
@@ -496,9 +504,10 @@ pub(super) fn schedule_readable_resume(stream: f64) {
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(crate::fn_info!(ns_readable_resume_microtask, 0), 1);
+    // node's `resume()`: `process.nextTick(resume_, stream, state)`.
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_resume_tick, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    crate::builtins::js_queue_microtask(closure as i64);
+    crate::builtins::js_queue_next_tick(closure as i64);
 }
 
 pub(super) fn pause_readable_stream(stream: f64) -> f64 {
@@ -1011,6 +1020,13 @@ pub(super) fn stream_hidden_ended(value: f64) -> bool {
     get_hidden_value(value, hidden_ended_key()).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
+/// node's `_writableState.ending`: `end()` was called on the writable side.
+/// A Duplex keeps it apart from the readable side's `ended`
+/// ([`stream_hidden_ended`]); the two sides end independently.
+pub(super) fn writable_side_ended(stream: f64) -> bool {
+    has_truthy_hidden(stream, Slot::WritableEnded)
+}
+
 pub(super) fn readable_aborted_value(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
         return f64::from_bits(TAG_FALSE);
@@ -1499,20 +1515,21 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
         return;
     }
 
-    let Some(read) = resolve_read_callback(stream) else {
-        if emit_default_error {
-            maybe_emit_default_read_error(stream);
-        }
-        return;
-    };
     // node's `read()`: no `_read` while one is in flight (cleared by its
-    // `push()`), after EOF, or once destroyed.
+    // `push()`), after EOF, or once destroyed. It is not looked up then
+    // either, so a stream with none raises no not-implemented error.
     if get_hidden_value(stream, hidden_read_invoked_key()).is_some()
         || stream_hidden_ended(stream)
         || stream_destroyed(stream)
     {
         return;
     }
+    let Some(read) = resolve_read_callback(stream) else {
+        if emit_default_error {
+            maybe_emit_default_read_error(stream);
+        }
+        return;
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let read = scope.root_nanbox_f64(read);

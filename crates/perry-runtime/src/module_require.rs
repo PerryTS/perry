@@ -458,6 +458,11 @@ fn package_parts(specifier: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// A request naming a file by absolute path (`/x`, or `C:\x` on Windows).
+fn is_absolute_request(specifier: &str) -> bool {
+    specifier.starts_with('/') || std::path::Path::new(specifier).is_absolute()
+}
+
 fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
@@ -465,7 +470,7 @@ fn resolve_request(
     if crate::embedded::is_virtual_path(specifier) {
         return resolve_file(std::path::Path::new(specifier)).ok_or(ResolveError::NotFound);
     }
-    if specifier.starts_with('/') {
+    if is_absolute_request(specifier) {
         return resolve_file(std::path::Path::new(specifier)).ok_or(ResolveError::NotFound);
     }
     if specifier.starts_with("./") || specifier.starts_with("../") {

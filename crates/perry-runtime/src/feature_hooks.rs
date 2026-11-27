@@ -225,7 +225,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     // them expect the real builders. A shipped archive's installer does not
     // name them (the core archive would link the serializers).
     #[cfg(test)]
-    js_runtime_install_diagnostics();
+    js_runtime_install_gc_diagnostics();
     // The always-compiled hosts (Node-API, WebAssembly) are not Cargo
     // features: perry installs them by name for the programs that need them,
     // so installing "everything compiled" (the core archive's installer) must
@@ -299,15 +299,39 @@ pub extern "C" fn js_runtime_install_wasm_host() {
 
 /// The heap-snapshot and `process.report` builders. Always compiled: they
 /// are user APIs, not instruments, so every archive carries them and perry
-/// installs them for a program that references one.
+/// installs them for a program that references one. The GC diagnostic
+/// observers install with them; the diagnostic collector body waits for the
+/// program's first snapshot or report (`gc::diagnostic_hooks::install_collector`).
 #[no_mangle]
 pub extern "C" fn js_runtime_install_diagnostics() {
     perry_install_once!({
         crate::gc::diagnostic_hooks::install();
-        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json_with_format);
-        PROCESS_REPORT_JSON.set(crate::process::report::process_report_json_string);
+        HEAP_SNAPSHOT_JSON.set(heap_snapshot_json);
+        PROCESS_REPORT_JSON.set(process_report_json);
         crate::diagnostic_report_roots::install();
     });
+}
+
+/// The diagnostics install for a build compiled with a GC diagnostics knob
+/// (`PERRY_GC_DIAG`, `PERRY_GC_TRACE`, `PERRY_GC_VERIFY_EVACUATION`): the
+/// diagnostic collector body from the first collection on.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_gc_diagnostics() {
+    js_runtime_install_diagnostics();
+    crate::gc::diagnostic_hooks::install_collector();
+}
+
+/// The heap-snapshot builder slot's value. The first snapshot selects the
+/// diagnostic collector body; the snapshot itself is built exactly as before.
+fn heap_snapshot_json(format: crate::gc::HeapSnapshotFormat) -> String {
+    crate::gc::diagnostic_hooks::install_collector();
+    crate::gc::gc_build_v8_heap_snapshot_json_with_format(format)
+}
+
+/// The `process.report` JSON builder slot's value; see [`heap_snapshot_json`].
+fn process_report_json(trigger: &str, filename: Option<&str>) -> String {
+    crate::gc::diagnostic_hooks::install_collector();
+    crate::process::report::process_report_json_string(trigger, filename)
 }
 
 #[cfg(feature = "dyn-eval")]

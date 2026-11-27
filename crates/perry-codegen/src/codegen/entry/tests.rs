@@ -312,7 +312,10 @@ fn executable_exit_block_emits_the_process_exit_event() {
         "js_event_loop_timers_phase",
         "js_event_loop_poll_callbacks",
         "js_event_loop_check_phase",
+        "js_event_loop_close_phase",
         "js_wait_for_event",
+        "js_event_loop_poll_wait",
+        "js_event_loop_poll_nowait",
         "js_run_stdlib_pump",
     ] {
         assert!(
@@ -344,9 +347,11 @@ fn event_loop_body_emits_nodes_phase_order() {
         .find("\nevent_loop.body.")
         .map(|offset| offset + 1)
         .unwrap_or_else(|| panic!("missing event-loop body block in emitted IR:\n{ir}"));
+    // NXH13: the iteration spans body, body_check, the two poll arms and
+    // body_after_poll; the exit block follows them.
     let body_len = ir[body_start..]
-        .find("\nevent_loop.")
-        .expect("the body block should be followed by another event_loop block");
+        .find("\nevent_loop.exit")
+        .expect("the iteration blocks should be followed by the exit block");
     let body = &ir[body_start..body_start + body_len];
 
     let mut previous = 0usize;
@@ -356,9 +361,15 @@ fn event_loop_body_emits_nodes_phase_order() {
             "@js_promise_run_microtasks_event_loop()",
         ),
         ("timers", "@js_event_loop_timers_phase()"),
-        ("poll: I/O pump", "@js_run_stdlib_pump()"),
+        ("stdlib pumps", "@js_run_stdlib_pump()"),
+        // The poll turn that delivers socket/http I/O callbacks sits between
+        // timers and check, so an I/O callback's immediate runs before a
+        // timeout scheduled beside it (NXH13).
+        ("poll: wait", "@js_event_loop_poll_wait()"),
+        ("poll: zero-timeout turn", "@js_event_loop_poll_nowait()"),
         ("poll: native callbacks", "@js_event_loop_poll_callbacks()"),
         ("check", "@js_event_loop_check_phase()"),
+        ("close", "@js_event_loop_close_phase()"),
     ] {
         let at = body
             .find(call)
@@ -450,9 +461,9 @@ fn event_loop_body_rechecks_liveness_before_parking() {
         "the re-check must branch to the park only when something is still live\n{check_block}"
     );
     assert!(
-        check_block.contains("%event_loop.header"),
-        "the re-check must skip the park and go straight back to the header when \
-         nothing is live\n{check_block}"
+        check_block.contains("%event_loop.body_poll_now"),
+        "the re-check must take the zero-timeout poll instead of the park when \
+         nothing is live or an immediate is queued\n{check_block}"
     );
 
     // The park itself still exists — the fix removes the park on a DEAD loop,
@@ -467,7 +478,7 @@ fn event_loop_body_rechecks_liveness_before_parking() {
         .expect("body_wait should be followed by another event_loop block");
     let wait_block = &ir[wait_start..wait_start + wait_len];
     assert!(
-        wait_block.contains("call void @js_wait_for_event()"),
+        wait_block.contains("call void @js_event_loop_poll_wait()"),
         "a loop with live work must still park\n{wait_block}"
     );
 }

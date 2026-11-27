@@ -82,7 +82,7 @@ fn heavy_influx_lowers_threshold_and_promotes_next_cycle() {
 #[test]
 fn copying_minor_feeds_the_object_denomination_census() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);
-    let base = crate::gc::tenuring::influx_driven_nursery_cap_bytes();
+    let base = crate::gc::tenuring::ladder_nursery_cap_bytes();
     let seed = crate::gc::tenuring::mean_surviving_object_bytes();
     assert_eq!(
         seed,
@@ -127,7 +127,7 @@ fn copying_minor_feeds_the_object_denomination_census() {
 
     // And the band moved with it, proportionally.
     assert_eq!(
-        crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
+        crate::gc::tenuring::ladder_nursery_cap_bytes(),
         base * crate::gc::tenuring::nursery_cap_object_scale_permille(recorded) / 1000
     );
 }
@@ -199,7 +199,7 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
     // ...and the first cap already reflects it — before any collection. The
     // first cap is the ladder's floor (#11549), a quarter of the base.
     assert_eq!(
-        crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
+        crate::gc::tenuring::ladder_nursery_cap_bytes(),
         crate::gc::tenuring::nursery_cap_floor_bytes()
             * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded)
             / 1000

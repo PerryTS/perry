@@ -813,6 +813,22 @@ fn default_members_match_the_build_perry_alias() {
     }
 }
 
+#[test]
+fn sqlite_link_root_follows_resolved_wrapper_identity() {
+    let selects = |filename: &str| {
+        links_better_sqlite3(&[PathBuf::from("/kit").join(filename)], Some("macos"))
+    };
+    assert!(selects("libperry_ext_better_sqlite3.a"));
+    assert!(selects("libperry_ext_better_sqlite3_instr.a"));
+    for other in [
+        "libperry_ext_net_instr.a",
+        "libperry_ext_better_sqlite3_extra.a",
+        "libperry_ext_better_sqlite3.a.bak",
+    ] {
+        assert!(!selects(other), "{other}");
+    }
+}
+
 /// The instrumented variant's archives sit beside the default ones as
 /// `<name>_instr.<ext>`, runtime, stdlib and wrappers alike, on every OS; the
 /// default variant keeps the plain names.

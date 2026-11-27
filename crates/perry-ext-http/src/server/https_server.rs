@@ -421,7 +421,7 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 /// identical). Per the issue #604 architectural change, we no
 /// longer block on the handler-returned Promise.
 pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
-    let req_f64 = handle_to_pointer_f64(pending.request_handle);
+    let req_f64 = pending.request;
     // The response is rooted for the dispatch: every callback below can run
     // a moving collection. The fresh word goes back before parking.
     let exchange_roots = perry_ffi::TransientRootScope::enter();
@@ -429,7 +429,7 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
     unsafe {
-        crate::server::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.request_handle());
         if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
             crate::server::types::js_handle_clear_side_tables(pending.response_handle());
         }

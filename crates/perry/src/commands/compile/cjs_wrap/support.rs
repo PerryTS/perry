@@ -145,6 +145,14 @@ export function requireComputed(specifier, dir, reloader) {{
     // module's directory, as Node's per-module `require` does. The `./`
     // prefix is stripped textually: canonicalization only normalizes a path
     // that exists on disk, and deployed images may lack the sources.
+    // An absolute `.json` path computed at run time (Next.js manifests) is a
+    // module of the program's loader, as in Node: one record per resolved
+    // filename in `require.cache`, read and parsed once, the same object on
+    // every later require, read again only after `delete require.cache[k]`.
+    // The loader also answers a JSON that is a compiled path module.
+    if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
+        return reloader()(specifier);
+    }}
     let path = specifier;
     if (specifier.charCodeAt(0) === 46) {{
         if (specifier.charCodeAt(1) === 47) {{
@@ -160,11 +168,6 @@ export function requireComputed(specifier, dir, reloader) {{
     }}
     const pathModule = __perry_require_path_module(path);
     if (pathModule !== undefined || __perry_has_path_module(path)) return refresh(path, pathModule, reloader);
-    // An absolute `.json` path computed at run time (Next.js manifests) is
-    // read and parsed; it is data, never code.
-    if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
-        return __perry_require_json_disk(specifier);
-    }}
     // A computed bare platform package can name a manifest-listed addon
     // through package.json main, without a .node suffix in the request.
     return reloader()(specifier);

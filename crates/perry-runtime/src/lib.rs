@@ -955,12 +955,14 @@ pub(crate) mod stdlib_pump {
         // Payload transports have no extension handle registry. Their driver
         // already accounts for ref'd sockets and owed completions, including
         // Closed after destroy; a socket destroyed while resolving owes its
-        // Closed from `turnloop_net`'s own queue. Query the existing agent loop
-        // without creating one, so a net-only program stays alive to deliver
-        // those completions.
+        // Closed, and an EOF read behind data owes its delivery, from
+        // `turnloop_net`'s own queues. Query the existing agent loop without
+        // creating one, so a net-only program stays alive to deliver those
+        // completions.
         #[cfg(not(target_arch = "wasm32"))]
         if crate::event_pump::agent_loop_has_outstanding_work()
             || crate::turnloop_net::close_queued()
+            || crate::turnloop_net::eof_parked()
         {
             return 1;
         }

@@ -1,0 +1,1 @@
+Size the GC nursery by what its minors cost: grow Eden while the fixed cost of a minor is a large share of the mutator time that filled it and the saved fixed cost pays the first touch of the added pages, check each step by the total thread CPU per Eden byte, and keep page returns out of the fixed cost.

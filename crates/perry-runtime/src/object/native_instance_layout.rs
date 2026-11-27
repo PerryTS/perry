@@ -150,6 +150,9 @@ fn instance_layout_of_prototype(serial: u64) -> Option<LayoutEntry> {
         INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => {
             (rl::SERVER_RESPONSE::WORD, rl::SERVER_RESPONSE::desc)
         }
+        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => {
+            (rl::INCOMING_MESSAGE::WORD, rl::INCOMING_MESSAGE::desc)
+        }
         _ => return None,
     })
 }
@@ -266,7 +269,7 @@ pub(crate) unsafe fn birth_store(obj: *mut ObjectHeader, slot: u32, value: f64) 
 /// a program that does not reach a layout defines no descriptor for it, and
 /// naming one is a birth (`desc()` aborts). A matching word proves the layout
 /// was born, so its descriptor is defined and `desc()` cannot abort there.
-const INSTANCE_LAYOUTS: [(u32, fn() -> *mut PerryLayoutDesc); 8] = {
+const INSTANCE_LAYOUTS: [(u32, fn() -> *mut PerryLayoutDesc); 9] = {
     use crate::object::runtime_layouts as rl;
     [
         (rl::EVENT_EMITTER::WORD, rl::EVENT_EMITTER::desc),
@@ -277,6 +280,7 @@ const INSTANCE_LAYOUTS: [(u32, fn() -> *mut PerryLayoutDesc); 8] = {
         (rl::TRANSFORM::WORD, rl::TRANSFORM::desc),
         (rl::PASSTHROUGH::WORD, rl::PASSTHROUGH::desc),
         (rl::SERVER_RESPONSE::WORD, rl::SERVER_RESPONSE::desc),
+        (rl::INCOMING_MESSAGE::WORD, rl::INCOMING_MESSAGE::desc),
     ]
 };
 
@@ -416,7 +420,8 @@ pub(crate) unsafe fn state_object_slot(obj: *const ObjectHeader, readable: bool)
     let duplex =
         word == rl::DUPLEX::WORD || word == rl::TRANSFORM::WORD || word == rl::PASSTHROUGH::WORD;
     if readable {
-        (duplex || word == rl::READABLE::WORD).then_some(readable_slot::STATE)
+        (duplex || word == rl::READABLE::WORD || word == rl::INCOMING_MESSAGE::WORD)
+            .then_some(readable_slot::STATE)
     } else if duplex {
         Some(duplex_slot::WRITABLE_STATE)
     } else {
