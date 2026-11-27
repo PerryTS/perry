@@ -3127,6 +3127,9 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// DEL-KEY: (key node, receiver node, constant) of a computed-key delete
+    /// made by name per String constant of its key (`Cons::DeleteKeyed`).
+    pub delete_keyed: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
     /// (key node, receiver node, value node, store site, index) a
     /// `StoreIndexed` store has been added for: `true` the index store,
     /// `false` the computed-key one. A shared body's replay has its own key

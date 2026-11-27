@@ -292,6 +292,7 @@ impl Model {
                 reason,
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
+            Cons::DeleteKeyed { o, reason } => format!("deletekeyed {n} {o} {reason}"),
             Cons::StoreKeyed {
                 o, src, site, subj, ..
             } => {

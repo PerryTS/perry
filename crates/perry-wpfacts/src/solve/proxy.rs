@@ -2082,6 +2082,7 @@ impl Model {
             // rule), the computed-key definition.
             | Cons::DefineAnyKey { .. }
             | Cons::DefineKeyed { .. }
+            | Cons::DeleteKeyed { .. }
             // Rule PXSUPER: the Proxy as the home object's prototype of a
             // `super.key` (its [[GetPrototypeOf]] result: the lookup starts
             // at it, `super_lookup`), or as the `this` of one (the

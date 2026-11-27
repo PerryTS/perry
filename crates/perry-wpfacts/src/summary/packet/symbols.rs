@@ -509,6 +509,11 @@ impl Model {
                 self.reasons.get(reason as usize),
                 accessor
             ),
+            Cons::DeleteKeyed { o, reason } => format!(
+                "DeleteKeyed o={:?} reason={:?}",
+                o,
+                self.reasons.get(reason as usize)
+            ),
             Cons::EnumKeyStore { o, src, site, from } => format!(
                 "EnumKeyStore o={:?} src={:?} site={site} from={from:?}",
                 o, src

@@ -999,6 +999,8 @@ impl Model {
                         self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
+                    } else if builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_key(t, key);
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -2507,6 +2509,7 @@ impl Model {
                     }
                 }
             }
+            Cons::DeleteKeyed { o, reason } => self.delete_keyed(n, o, reason),
             Cons::StoreKeyed {
                 o,
                 src,

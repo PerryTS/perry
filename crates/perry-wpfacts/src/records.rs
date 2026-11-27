@@ -314,6 +314,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::StoreIndexed { .. }
         | Cons::StoreKeyed { .. }
         | Cons::DefineKeyed { .. }
+        | Cons::DeleteKeyed { .. }
         | Cons::DefineAnyKey { .. }
         | Cons::AccessorKeyed { .. } => Reject(R5Protocol("ToPropertyKey".into())),
         // Escape.

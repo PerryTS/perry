@@ -236,6 +236,73 @@ impl Model {
         Some(self.key_nodes.get(&n).copied())
     }
 
+    /// DEL-KEY (`Cons::DeleteKeyed` on key node `n`): `delete o[k]` deletes
+    /// the one own property ToPropertyKey(k) names (ECMA-262 13.5.1.2 ->
+    /// 10.1.10 OrdinaryDelete). A for-in run's one key (`key_nodes`) and a
+    /// key that holds finitely many String constants only (`const_str_keys`;
+    /// ToPropertyKey of a String is that String, 7.1.19) delete each by name
+    /// (`Cons::DeleteKey`, as `delete o.name`), made as constants arrive. Any
+    /// other key (an unbounded String, a Number, a Symbol, an object whose
+    /// ToPropertyKey runs code, a key-shape entry) may name any key: E7 HARD
+    /// on `o`, once. The node only grows: the named deletes made before stay.
+    pub(super) fn delete_keyed(&mut self, n: NodeId, o: NodeId, reason: u32) {
+        if let Some(&a) = self.key_nodes.get(&n) {
+            if self.delete_keyed.insert((n, o, a)) {
+                self.cons(o, Cons::DeleteKey { key: a, reason });
+            }
+            return;
+        }
+        let kn = &self.nodes[n as usize];
+        if kn.prim == 0 && kn.pts.is_empty() {
+            return;
+        }
+        let named = self.const_str_keys(n).filter(|ks| {
+            ks.iter()
+                .all(|&a| !self.atom_is_mark(a) && self.atoms[a as usize] != crate::STAR_KEY)
+        });
+        match named {
+            Some(ks) => {
+                for a in ks {
+                    if self.delete_keyed.insert((n, o, a)) {
+                        self.cons(o, Cons::DeleteKey { key: a, reason });
+                    }
+                }
+            }
+            None => {
+                if self.keyed_done.insert((n, o, 4)) {
+                    self.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E7Delete,
+                            reason,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// DEL-KEY: `delete g.name` on the global object, whole program. The
+    /// global object is an ordinary object whose own properties are the
+    /// global bindings (ECMA-262 9.1.1.4); OrdinaryDelete (10.1.10) removes
+    /// that one property, stores no value, runs no code and hands the
+    /// object nowhere. A read of the binding may find it absent: a native
+    /// write of that key alone that only deletes (`global_maybe_deleted`:
+    /// `undefined` beside its values). No other key is written: no any-key
+    /// write, no HARD mark, as the named define there (`Cons::DefineKey`).
+    /// Its enumerable reads may go on to the chain (B-del, `enum_lose`).
+    pub(super) fn delete_global_key(&mut self, t: Tok, key: Atom) {
+        self.enum_lose(t);
+        self.virt_revoke(t, Some(key));
+        crate::builtins::note_native_data_write(
+            self,
+            t,
+            Some(Key::Named(key)),
+            "E7 delete",
+            crate::builtins::WriteValue::Absent,
+        );
+    }
+
     /// A store into a published method's receiver marker is a store into
     /// an instance of this unit as well: the marker stands for instances of
     /// the classes the method is published with (DECISIONS 59), and this

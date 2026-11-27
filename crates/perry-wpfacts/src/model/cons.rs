@@ -841,6 +841,13 @@ pub enum Cons {
         reason: u32,
         accessor: bool,
     },
+    /// DEL-KEY: the node is the key of `delete o[k]` (ECMA-262 13.5.1.2:
+    /// [[Delete]] of the one own property ToPropertyKey(k) names, 10.1.10).
+    /// A for-in run's one key, or a key that holds finitely many String
+    /// constants only, deletes each by name (`DeleteKey`); any other key (an
+    /// unbounded String, a Symbol, an object whose ToPropertyKey runs code)
+    /// is E7 HARD on `o`, a delete under any key.
+    DeleteKeyed { o: NodeId, reason: u32 },
     /// GLOBK3: `Object.defineProperty(o, k, d)` under a computed key `key`,
     /// on the nodes `o`, `key` and `set` (any of them growing decides
     /// again, `Model::define_computed_key`). The global object under a key
@@ -1325,6 +1332,7 @@ impl Cons {
             Cons::ForInBody { .. } => "forinbody",
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
+            Cons::DeleteKeyed { .. } => "deletekeyed",
             Cons::DefineAnyKey { .. } => "defineanykey",
             Cons::StoreKeyed { .. } => "storekeyed",
             Cons::EnumKeyStore { .. } => "enumkeystore",

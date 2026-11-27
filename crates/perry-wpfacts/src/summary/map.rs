@@ -482,6 +482,7 @@ pub fn map_cons(
             reason,
             accessor,
         },
+        DeleteKeyed { o, reason } => DeleteKeyed { o: n(o), reason },
         StoreKeyed {
             o,
             src,
@@ -795,6 +796,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxKeyCall { .. }
             | ForInBody { .. }
             | DefineKeyed { .. }
+            | DeleteKeyed { .. }
             | StoreKeyed { .. }
             | StoreIndexed { .. }
             | AccessorKeyed { .. }

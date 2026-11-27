@@ -159,6 +159,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::StoreKeyed { .. }
         | Cons::StoreIndexed { .. }
         | Cons::DefineKeyed { .. }
+        | Cons::DeleteKeyed { .. }
         | Cons::ElemUndef { .. }
         | Cons::LenIndex { .. }
         | Cons::LenPermuted { .. }

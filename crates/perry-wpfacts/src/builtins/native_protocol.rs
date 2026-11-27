@@ -387,6 +387,22 @@ fn written_by(
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
     let stored = |t: Tok| stored_key(t, a);
+    // DEL-KEY: a named delete of the global object (`delete g.name`,
+    // `Model::delete_global_key`) is no program store: its key's field holds
+    // no `undefined`, so the entry counts as a write that only deletes,
+    // for the writers `counts` takes such a write for.
+    let gone_counts = counts(&crate::model::NativeWrite {
+        reason: 0,
+        accessor: false,
+        getters: Vec::new(),
+        setters: Vec::new(),
+        opaque: false,
+        stored: Vec::new(),
+        absent: true,
+    });
+    let gone = |t: Tok, k: Option<Atom>| {
+        gone_counts && m.native_writes.get(&(t, k)).is_some_and(|w| w.absent)
+    };
     // A computed read of the global object takes the field of each named
     // key it may spell (`global_shaped_read`, `global_shaped_replay`): a
     // named program store it may name is one of those fields, not a write
@@ -400,6 +416,12 @@ fn written_by(
     let hit = |t: Tok| {
         has(t, None)
             || (has(t, Some(a)) && !stored(t))
+            || (stored(t) && gone(t, Some(a)))
+            || (any
+                && gone_counts
+                && m.native_writes
+                    .range((t, None)..=(t, Some(Atom::MAX)))
+                    .any(|(&(_, k), x)| x.absent && field_named(t, k)))
             || num.is_some_and(|n| has(t, Some(n)))
             || (any && any_on(t, &|k| !field_named(t, k)))
             || (num_read && any_on(t, &|k| k.is_some_and(|k| m.numeric_atom(k))))

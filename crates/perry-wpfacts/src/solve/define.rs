@@ -308,7 +308,7 @@ impl Model {
 
     /// The keys key node `k` may be when it holds only String constants,
     /// finitely many (`Node::strs`, exact: `STRS_K` is unbounded); else `None`.
-    fn const_str_keys(&self, k: NodeId) -> Option<Vec<Atom>> {
+    pub(super) fn const_str_keys(&self, k: NodeId) -> Option<Vec<Atom>> {
         let kn = &self.nodes[k as usize];
         if !kn.pts.is_empty() || kn.prim != prim::STR {
             return None;
