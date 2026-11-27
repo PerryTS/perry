@@ -7,8 +7,10 @@ abstract class NamedError extends Error {
   static create(name: string) {
     const result = class extends NamedError {
       public override readonly name = name
-      constructor(public readonly data: unknown, options?: ErrorOptions) {
+      public readonly data: unknown
+      constructor(data: unknown, options?: ErrorOptions) {
         super(name, options)
+        this.data = data
         this.name = name
       }
       toObject() { return { name, data: this.data } }
