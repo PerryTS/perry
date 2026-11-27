@@ -1727,6 +1727,39 @@ fn only_listening_reading_or_owed_requests_hold_the_loop() {
     assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
 }
 
+/// An EOF parked behind data owes its delivery after the check phase: the
+/// process stays alive for it although no handle holds the loop any more.
+#[test]
+fn a_parked_eof_keeps_the_process_alive_until_delivered() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let (link, child, _peer) = accepted_after_fin(&scope, b"x");
+    let active = || crate::stdlib_pump::js_stdlib_has_active_handles() != 0;
+    unsafe {
+        transport::set_ref(core(np::link_event_owner(link).unwrap()), link, false).unwrap();
+        transport::read_start(child_core(child), child).unwrap();
+    }
+    assert!(pump_until(|| count(NET_DATA, child) == 1
+        && unsafe { (*child_core(child)).read_operation() }.is_none()));
+    assert_eq!(
+        count(NET_EOF, child),
+        0,
+        "the EOF behind the data is parked"
+    );
+    assert!(
+        !crate::turnloop_net::loop_alive(),
+        "no handle holds the loop"
+    );
+    assert!(active(), "the parked EOF keeps the process alive");
+    assert!(pump_phases_until(|| count(NET_EOF, child) == 1));
+    assert!(!active(), "the delivered EOF owes nothing");
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
 thread_local! {
     static REPLACEMENT: Cell<Option<std::net::SocketAddr>> = const { Cell::new(None) };
 }
