@@ -88,7 +88,7 @@ fn siteb1_number_key_store_not_a_write() {
     );
     let v = at(&pf, "Math");
     assert!(
-        !v.is_empty() && v.iter().all(|v| v.ends_with("[\"builtin:GlobalThis\"]")),
+        !v.is_empty() && v.iter().all(|v| v.starts_with("PerKind") && v.contains("GlobalThis")),
         "{v:?}"
     );
 }
