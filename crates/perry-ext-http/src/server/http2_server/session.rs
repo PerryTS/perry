@@ -647,6 +647,26 @@ pub(crate) mod tests {
         assert_eq!(errors_for(handle), vec![NO_LOOP_MESSAGE.to_string()]);
     }
 
+    /// A server session's transport finishing queues no `'close'` and does
+    /// not destroy it: both belong to its socket's `'close'`, so the event
+    /// runs in the close-callbacks phase, once.
+    #[test]
+    fn a_server_session_waits_for_its_socket_to_close() {
+        let mut server = client_session(0);
+        server.session_type = 0;
+        let handle = register_handle(server);
+        crate::server::http2_server::mark_turnloop_session_closed(handle);
+        let session = get_handle::<Http2SessionHandle>(handle).expect("session");
+        assert!(!session.closed && !session.destroyed);
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Http2PendingEvent::ClientClose { session_handle, .. } if *session_handle == handle
+        )));
+    }
+
     /// A failed TLS handshake reaches the session's `'error'` as Node's
     /// `Error`: the cause code becomes `.code`, not part of a bare string.
     #[test]
