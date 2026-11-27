@@ -1349,3 +1349,63 @@ fn a_late_lookup_answer_or_error_leaves_a_later_connect_alone() {
     .join()
     .unwrap();
 }
+
+unsafe extern "C" fn destroy_on_lookup(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    socket::destroy(this.as_f64(), p::undefined());
+    p::undefined()
+}
+
+#[test]
+fn a_lookup_listener_that_destroys_stops_the_resolved_plan_and_releases_its_refs() {
+    let _serial = crate::test_serial();
+    std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        assert!(io::enabled());
+        CLOSES.with(|count| count.set(0));
+        ECHO_BYTES.with(|count| count.set(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(socket::new_socket(io::ROUTE, p::undefined()));
+        let cell = socket::link(owner.get());
+        let on_lookup = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(destroy_on_lookup, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        socket::once(owner.get(), "lookup", p::boxed_addr(on_lookup.get()));
+        let connected = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(destroy_on_connect, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        close_listener(owner.get());
+        let host = scope.root_nanbox(events::string("localhost"));
+        socket::connect(
+            owner.get(),
+            f64::from(port),
+            host.get(),
+            p::boxed_addr(connected.get()),
+        );
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while CLOSES.with(Cell::get) < 1 {
+            assert!(std::time::Instant::now() < limit, "lookup destroy stalled");
+            perry_runtime::event_pump::js_loop_turn_bounded(2);
+            perry_runtime::promise::js_promise_run_microtasks();
+        }
+        for _ in 0..4 {
+            perry_runtime::event_pump::js_loop_turn_bounded(2);
+        }
+        assert_eq!(ECHO_BYTES.with(Cell::get), 0, "no attempt connected");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "no attempt reached the listener"
+        );
+        let header = cell.raw() as *const perry_runtime::native_handle::NativeHandleHeader;
+        assert_eq!(unsafe { (*header).refs }, 0, "the resolve released its ref");
+        assert_eq!(perry_runtime::turnloop_net::live_handles(), 0);
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}

@@ -1595,11 +1595,32 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
     match result {
         OpResult::Resolved(addresses) => {
             if let Some(c) = current {
-                if let Some(plan) = c.plan.as_mut() {
-                    plan.op = None;
-                    plan.remaining = addresses.into_iter().collect();
+                let text = addresses
+                    .iter()
+                    .map(|a| a.ip().to_string())
+                    .collect::<Vec<_>>();
+                let route = c.route;
+                let Some(plan) = c.plan.as_mut() else {
+                    return finish_resolve(link, terminal);
+                };
+                plan.op = None;
+                plan.remaining = addresses.into_iter().collect();
+                let plan_id: *const ConnectPlan = &**plan;
+                sink::emit(
+                    route,
+                    NetCompletion::lookup(link.0 as i64, &text.join("\n")).linked(),
+                );
+                // A 'lookup' listener may destroy or reconnect the socket; a new
+                // connect either resolves again or already owns a handle.
+                let same_plan = core_of(link).is_some_and(|c| {
+                    c.entry.is_none()
+                        && c.plan
+                            .as_deref()
+                            .is_some_and(|plan| std::ptr::eq(plan, plan_id) && plan.op.is_none())
+                });
+                if same_plan {
+                    attempt_next_address(link);
                 }
-                attempt_next_address(link);
             }
         }
         OpResult::Err(err) => {
@@ -1624,6 +1645,10 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
         }
         _ => {}
     }
+    finish_resolve(link, terminal);
+}
+
+unsafe fn finish_resolve(link: OwnerLink, terminal: bool) {
     if terminal {
         release(link);
     }

@@ -481,6 +481,7 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
     };
     let callback = scope.root_nanbox(callback);
     let lookup = scope.root_nanbox(lookup);
+    let wanted = super::payload_lookup::wanted(arg1.get());
     let custom_lookup = path.is_none()
         && crate::ip::classify_ip(&host) == 0
         && super::payload_lookup::validate(lookup.get());
@@ -541,6 +542,7 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         fields.connecting = true;
         fields.host = host.clone();
         fields.port = port as u16;
+        fields.wanted = wanted;
     }
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.

@@ -35,6 +35,118 @@ pub(crate) fn validate(lookup: f64) -> bool {
     )
 }
 
+/// What `connect` asks a resolver for: every address, or the first of one
+/// family (0 for any), as `dnsopts.all` decides in Node.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Wanted {
+    #[default]
+    All,
+    One(u8),
+}
+
+pub(crate) fn wanted(options: f64) -> Wanted {
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let family = scope.root_nanbox(dns_family(options.get()));
+    wanted_for(family.get(), options.get())
+}
+
+/// [`wanted`] for the `family` already read from `options`.
+fn wanted_for(family: f64, options: f64) -> Wanted {
+    let family = family_number(family);
+    let auto_select = JsValue::from_bits(field(options, "autoSelectFamily").to_bits());
+    let auto_select = if auto_select.is_bool() {
+        auto_select.to_bool()
+    } else {
+        crate::ip::auto_select_family_default()
+    };
+    match family {
+        None if auto_select => Wanted::All,
+        family => Wanted::One(family.unwrap_or(0)),
+    }
+}
+
+/// `options.family` as Node's `socketToDnsFamily` maps it.
+fn dns_family(options: f64) -> f64 {
+    let family = field(options, "family");
+    match string(family).as_deref() {
+        Some("IPv4") => 4.0,
+        Some("IPv6") => 6.0,
+        _ => family,
+    }
+}
+
+/// Report the runtime resolver's answer for `host` as Node's `'lookup'`
+/// events, before the transport tries the first address.
+pub(crate) fn resolved(owner: f64, addresses: &[u8]) {
+    let Ok(link) = socket::transport_link(owner) else {
+        return;
+    };
+    // SAFETY: The projection checks family and lifecycle; the copy ends before any JS.
+    let Ok((host, wanted)) = (unsafe {
+        p::socket_ptr(link).map(|payload| ((*payload).ext.host.clone(), (*payload).ext.wanted))
+    }) else {
+        return;
+    };
+    let ips: Vec<IpAddr> = String::from_utf8_lossy(addresses)
+        .lines()
+        .filter_map(|line| line.parse().ok())
+        .collect();
+    let family = |ip: &IpAddr| if ip.is_ipv4() { 4 } else { 6 };
+    let reported: Vec<IpAddr> = match wanted {
+        Wanted::All => ips,
+        Wanted::One(0) => ips.first().copied().into_iter().collect(),
+        Wanted::One(want) => match ips.iter().find(|ip| family(ip) == want) {
+            Some(&ip) => vec![ip],
+            // The resolver is not asked for one family; Node's is, and finds nothing.
+            None => {
+                let error = super::payload_io::socket_error_value("getaddrinfo", "ENOTFOUND", None);
+                let scope = TransientRootScope::enter();
+                let error = scope.root_nanbox(error);
+                failed(owner, error.get());
+                socket::destroy(owner, error.get());
+                return;
+            }
+        },
+    };
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let host = scope.root_nanbox(events::string(&host));
+    let null = f64::from_bits(JsValue::NULL.bits());
+    for ip in reported {
+        if !connecting(owner.get()) {
+            return;
+        }
+        let address = scope.root_nanbox(events::string(&ip.to_string()));
+        events::emit(
+            owner.get(),
+            "lookup",
+            &[null, address.get(), f64::from(family(&ip)), host.get()],
+        );
+    }
+}
+
+/// A failed resolve is reported to `'lookup'` listeners before `'error'`.
+pub(crate) fn failed(owner: f64, error: f64) {
+    let Ok(link) = socket::transport_link(owner) else {
+        return;
+    };
+    // SAFETY: The projection checks family and lifecycle; the copy ends before any JS.
+    let Ok(host) = (unsafe { p::socket_ptr(link).map(|payload| (*payload).ext.host.clone()) })
+    else {
+        return;
+    };
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let error = scope.root_nanbox(error);
+    let host = scope.root_nanbox(events::string(&host));
+    events::emit(
+        owner.get(),
+        "lookup",
+        &[error.get(), undefined(), undefined(), host.get()],
+    );
+}
+
 /// Call `lookup(host, dnsopts, callback)`. The callback may run before this
 /// returns, so the caller holds no payload borrow across it.
 pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64) {
@@ -42,20 +154,9 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
     let owner = scope.root_nanbox(owner);
     let options = scope.root_nanbox(options);
     let lookup = scope.root_nanbox(lookup);
-    let family = scope.root_nanbox(field(options.get(), "family"));
-    let family = scope.root_nanbox(match string(family.get()).as_deref() {
-        Some("IPv4") => 4.0,
-        Some("IPv6") => 6.0,
-        _ => family.get(),
-    });
+    let family = scope.root_nanbox(dns_family(options.get()));
     let hints = scope.root_nanbox(field(options.get(), "hints"));
-    let auto_select = JsValue::from_bits(field(options.get(), "autoSelectFamily").to_bits());
-    let all = family_number(family.get()).is_none()
-        && if auto_select.is_bool() {
-            auto_select.to_bool()
-        } else {
-            crate::ip::auto_select_family_default()
-        };
+    let all = matches!(wanted_for(family.get(), options.get()), Wanted::All);
     let dns_options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     p::own_set(dns_options.get(), "family", family.get());
     // SAFETY: Truthiness reads a rooted JS value on this agent.
@@ -307,11 +408,14 @@ pub(crate) const ATTEMPT: &str = "lookupAttempt";
 
 /// A lookup answered after `destroy()`, or for an earlier connect, is ignored.
 fn is_current(owner: f64, token: f64) -> bool {
-    let connecting = socket::transport_link(owner).is_ok_and(|link| {
+    connecting(owner) && p::record_get(socket::state(owner), ATTEMPT).to_bits() == token.to_bits()
+}
+
+fn connecting(owner: f64) -> bool {
+    socket::transport_link(owner).is_ok_and(|link| {
         // SAFETY: The projection checks family and lifecycle; the field read ends before any JS.
         unsafe { p::socket_ptr(link).is_ok_and(|payload| (*payload).ext.connecting) }
-    });
-    connecting && p::record_get(socket::state(owner), ATTEMPT).to_bits() == token.to_bits()
+    })
 }
 
 unsafe extern "C" fn fail_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
