@@ -26,3 +26,10 @@ for (const input of ["web+demo:/.//not-a-host/", "foo:/path", "mailto:a@b", "foo
   const u = new URL(input);
   console.log(JSON.stringify([u.href, u.host, u.hostname, u.port, u.pathname, u.origin]));
 }
+
+// An `undefined` base is an omitted one; the string "undefined" is a base.
+const noBase: string | undefined = [undefined][0];
+console.log(new URL("http://a/x", noBase).href, URL.canParse("http://[::1]", noBase), String(URL.parse("http://b", noBase)));
+console.log(URL.canParse("x", noBase), URL.parse("x", noBase));
+fail(() => new URL("http://a/x", "undefined"));
+console.log(URL.canParse("http://a/x", "undefined"), URL.parse("http://a/x", "undefined"));

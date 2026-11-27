@@ -4505,6 +4505,7 @@ js_unsettled_top_level_await_exit	void
 js_urierror_new	ptr	ptr
 js_url_can_parse	i32s	ptr
 js_url_can_parse_with_base	i32s	ptr,ptr
+js_url_coerce_base	ptr	f64
 js_url_coerce_string	ptr	f64
 js_url_create_object_url	ptr	f64
 js_url_domain_to_ascii	f64	f64
