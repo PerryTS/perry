@@ -12,6 +12,7 @@ mod accessor_lookup;
 mod copy;
 mod define;
 mod lookup;
+mod proto_first;
 mod shadow;
 pub(crate) mod map_vals;
 mod not_error;
