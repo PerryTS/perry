@@ -39,6 +39,7 @@ mod iter;
 mod mutate;
 mod numeric;
 mod numeric_offset;
+mod numeric_read;
 mod numeric_write;
 mod own_props;
 pub(crate) mod pool;
@@ -198,6 +199,7 @@ pub use numeric::{
     js_buffer_write_uint32_le, js_buffer_write_uint8, js_buffer_write_uint_be,
     js_buffer_write_uint_le,
 };
+pub(crate) use numeric_read::dispatch_numeric_read;
 pub(crate) use numeric_write::dispatch_numeric_write;
 
 // ---- Re-exports: hex / base64 codec helpers ----
