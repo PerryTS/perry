@@ -905,7 +905,11 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
     // `require("timers").promises` is `require("timers/promises")`, as in
     // the `import * as` namespace (`ensure_namespace_singleton`).
     if submod.key == "timers" {
-        set_named_value(obj, "promises", crate::object::timers_promises_parent_namespace());
+        set_named_value(
+            obj,
+            "promises",
+            crate::object::timers_promises_parent_namespace(),
+        );
     }
 
     with_submod_slots_mut(|slots| slots[bucket].default_object = obj);

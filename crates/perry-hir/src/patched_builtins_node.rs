@@ -158,11 +158,7 @@ pub(crate) fn fresh_value(e: &ast::Expr) -> bool {
 
 /// May the program replace member path `path` of node-core module `module`
 /// (or a namespace on the way to it)? `module` is the lowering's module name.
-pub(crate) fn member_patched(
-    set: &super::PatchedBuiltins,
-    module: &str,
-    path: &[&str],
-) -> bool {
+pub(crate) fn member_patched(set: &super::PatchedBuiltins, module: &str, path: &[&str]) -> bool {
     let Some(ns) = module_key(module) else {
         return false;
     };
