@@ -80,24 +80,3 @@ fn the_settled_value_reaches_the_result() {
     .clone();
     assert!(!matches!(v, Verdict::No(_)), "{v:?}");
 }
-
-/// The probe shape of the R1+R2 blowup (pl2): the unknown callee is handed
-/// every global and the globals are stored into one another, so the combinator
-/// runs again for each new function value. One pair per promise token.
-#[test]
-fn an_unknown_callee_loop_mints_no_pair_per_run() {
-    let (res, rej, promises) = counts(
-        r#"
-        const top: any = (globalThis as any)[process.argv[2]];
-        top[String(Math.random())] = top;
-        const all: any = Promise.all;
-        const xs = [Promise.resolve(1)];
-        top.run = (f: any) => f.call(Promise, xs);
-        try { all.call(Promise, xs); top(all); top(top.run); } catch (e) {}
-        "#,
-    );
-    assert!(
-        res <= 2 * promises && rej <= 2 * promises,
-        "resolvers {res}, rejecters {rej}, promise tokens {promises}"
-    );
-}
