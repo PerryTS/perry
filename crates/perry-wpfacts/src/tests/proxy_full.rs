@@ -646,3 +646,60 @@ fn pxenumv_proxy_value_under_unknown_key_of_forin_copy_does_not_escape() {
     let subj = "const c: any = {};\nfor (const key in px) c[key] = px[key];";
     site("{ a: 1 }", get, subj, false).unwrap();
 }
+
+/// Rule PXCLASS (`Cons::proxy_operand`): `op` uses `px` only where no
+/// internal method of it runs; the ordinary rule decides and nothing
+/// escapes. The control hands `px` to unknown code: it escapes (sound).
+fn pxclass(t: &str, op: &str) {
+    site(t, "", op, true).unwrap();
+    site(t, "", &format!("{op}\nexternal(px);"), false).unwrap();
+}
+
+/// PX-VIEW (`ViewedBuffer`, `ShareBuffer`): a TypedArray constructor tests
+/// its argument's own internal slots (23.2.5.1 step 6.b); a Proxy has none
+/// and gets a fresh buffer. Its `length` and index reads are the get trap.
+#[test]
+fn pxclass_typed_array_ctor_argument_is_no_operand() {
+    pxclass(
+        "{ a: payload, length: 0 }",
+        "const ta = new Int32Array(px);\nconsole.log(ta.length, ta.buffer.byteLength);",
+    );
+}
+
+/// `NotBuffer`: a failed `v instanceof ArrayBuffer` (perry-runtime: the
+/// buffer brand of the Proxy's target, no trap); the Proxy takes the false
+/// side.
+#[test]
+fn pxclass_failed_instanceof_array_buffer_is_no_operand() {
+    pxclass(
+        "{ a: payload }",
+        "const v: any = process.argv.length > 9 ? px : new ArrayBuffer(4);\nif (!(v instanceof ArrayBuffer)) console.log(typeof v);",
+    );
+}
+
+/// `ThisFrom`: a Proxy as a literal's method value is no closure; its
+/// [[Call]] binds `this` at each call.
+#[test]
+fn pxclass_literal_method_value_is_no_operand() {
+    pxclass("{ a: payload }", "const lit: any = { m: px };\nconsole.log(typeof lit.m);");
+}
+
+/// `OwnTest`: the callee of `H.call(o, k)` is tested by identity; a Proxy
+/// refutes the test, and the read is the ordinary one.
+#[test]
+fn pxclass_own_test_callee_is_no_operand() {
+    pxclass(
+        "{ a: payload }",
+        "const H: any = process.argv.length > 9 ? px : Object.prototype.hasOwnProperty;\nconst o: any = { x: 1 };\nconst k: string = String(Date.now());\nif (H.call(o, k)) console.log(o[k] === 1);",
+    );
+}
+
+/// `OwnGate`: a Proxy written over `Object.hasOwn` reaches the gate's
+/// invalidation node; the gate restores the ordinary read.
+#[test]
+fn pxclass_own_gate_value_is_no_operand() {
+    pxclass(
+        "{ a: payload }",
+        "(Object as any).hasOwn = px;\nconst o: any = { x: 1 };\nconst k: string = String(Date.now());\nif (Object.hasOwn(o, k)) console.log(o[k] === 1);",
+    );
+}

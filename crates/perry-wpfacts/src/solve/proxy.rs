@@ -2473,11 +2473,14 @@ impl Model {
             // property values: no internal method of the Proxy runs, no
             // trap, nothing escapes. A Proxy subject keeps its own rules.
             Cons::EnumKeyAny { o, src, site } => self.enum_key_any(o, src, site),
-            // Rule PXESC: the rules with no Proxy model yet, each named (a new
-            // rule must take a place in this match). The operation may run
-            // any internal method of the Proxy: its escape, the rule named in
-            // the reason (`proxy_escape`: each trap with unknown operands,
-            // the target's own escape), and the rule's result is unknown.
+            // Rule PXCLASS: the rules with no PX arm of their own, each named
+            // (a new rule must take a place in this match and answer
+            // `Cons::proxy_operand`). `Value`: no internal method of the
+            // Proxy runs, the ordinary rule decides. Rule PXESC (`Trap` with
+            // no model yet, `Contract`): the operation may run any internal
+            // method of the Proxy: its escape, the rule named in the reason
+            // (`proxy_escape`: each trap with unknown operands, the target's
+            // own escape), and the rule's result is unknown.
             Cons::Accessor { .. }
             | Cons::AccessorKeyed { .. }
             | Cons::AddsKeys { .. }
@@ -2519,10 +2522,15 @@ impl Model {
             | Cons::ViewedBuffer { .. }
             | Cons::VisitHolders { .. }
             | Cons::VisitStop { .. } => {
-                let r = self.reason(&format!("Proxy operand of rule {} (no Proxy model)", c.kind_name()));
                 let t = self.tok(TokKind::Proxy(p));
-                self.escape(t, r);
-                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+                match c.proxy_operand() {
+                    ProxyOperand::Value => self.apply_inner(n, c, Tokens::Slice(&[t]), 0),
+                    ProxyOperand::Trap | ProxyOperand::Contract => {
+                        let r = self.reason(&format!("Proxy operand of rule {} (no Proxy model)", c.kind_name()));
+                        self.escape(t, r);
+                        self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+                    }
+                }
             }
         }
     }
