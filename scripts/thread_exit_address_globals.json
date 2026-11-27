@@ -1883,7 +1883,23 @@
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/controller.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local debug-print rate limiter at streams.rs:1244 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1782 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1864 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1968 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:2013 (PERRY_JSON_PATH=1); fetch_add counter only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/readable.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local debug-print rate limiter at streams.rs:1244 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1782 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1864 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1968 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:2013 (PERRY_JSON_PATH=1); fetch_add counter only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/reader.rs",
    "names": [
     "N"
    ],
