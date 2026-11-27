@@ -913,6 +913,8 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
             }
         }
         ("process", "hrtime") => crate::os::js_process_hrtime(arg(0)),
+        // `process.hrtime.bigint`, the member `nm_attach_process` installs.
+        ("process", "hrtime.bigint") => crate::os::js_process_hrtime_bigint(),
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
         _ => f64::from_bits(JSValue::undefined().bits()),

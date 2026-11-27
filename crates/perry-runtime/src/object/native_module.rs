@@ -897,6 +897,17 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
         }
         // The subpath module IS the object `path.posix` / `path.win32` / `util.types`
         // read as (the CJS default namespace for the path pair), so identity holds.
+        // On the host whose flavor it is, that object is `path` itself, as in
+        // Node (`path.posix === path` on POSIX): one namespace, so a store
+        // through either name is seen through the other.
+        #[cfg(not(windows))]
+        "path/posix" | "path.posix.default" => "path.default",
+        #[cfg(not(windows))]
+        "path.posix" => "path",
+        #[cfg(windows)]
+        "path/win32" | "path.win32.default" => "path.default",
+        #[cfg(windows)]
+        "path.win32" => "path",
         "path/posix" => "path.posix.default",
         "path/win32" => "path.win32.default",
         "util/types" => "util.types",
