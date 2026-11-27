@@ -24,7 +24,7 @@
 //!
 //! **Locking.** A collection runs on the allocating thread and, through this
 //! module and `super::gc`, locks `FETCH_RESPONSES`, `REQUEST_REGISTRY`,
-//! `HEADERS_REGISTRY`, `BLOB_REGISTRY`, `FORM_DATA_REGISTRY`,
+//! `BLOB_REGISTRY`, `FORM_DATA_REGISTRY`,
 //! `FREE_FETCH_HANDLE_IDS` and the object-URL table. `std::sync::Mutex` is not
 //! reentrant, so no site may hold one of those guards across a GC allocation
 //! or a throw: copy what it needs out, drop the guard, then allocate.
@@ -200,8 +200,8 @@ fn finish_full_trace() {
     release(&dead);
 }
 
-/// Remove dead records and recycle their ids. Dropping a Headers or FormData
-/// record drops its bound-method cache with it. Allocates nothing on the GC
+/// Remove dead records and recycle their ids. Dropping a FormData record
+/// drops its bound-method cache with it. Allocates nothing on the GC
 /// heap and takes each table's lock on its own.
 fn release(dead: &[usize]) {
     if dead.is_empty() {
@@ -209,12 +209,6 @@ fn release(dead: &[usize]) {
     }
     {
         let mut table = FETCH_RESPONSES.lock().unwrap();
-        for id in dead {
-            table.remove(id);
-        }
-    }
-    {
-        let mut table = HEADERS_REGISTRY.lock().unwrap();
         for id in dead {
             table.remove(id);
         }
@@ -312,19 +306,16 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
         edges.push(props);
     }
     if let Some(response) = FETCH_RESPONSES.lock().unwrap().get(&id) {
-        if let Some(headers) = response.cached_headers_id {
-            edges.push(handle_to_f64(headers).to_bits());
+        if response.cached_headers != 0 {
+            edges.push(response.cached_headers);
         }
     }
     if let Some(request) = REQUEST_REGISTRY.lock().unwrap().get(&id) {
         edges.push(request.signal.to_bits());
         edges.extend(request.body_error.map(f64::to_bits));
-        if let Some(headers) = request.cached_headers_id {
-            edges.push(handle_to_f64(headers).to_bits());
+        if request.cached_headers != 0 {
+            edges.push(request.cached_headers);
         }
-    }
-    if let Some(record) = HEADERS_REGISTRY.lock().unwrap().get(&id) {
-        edges.extend(record.method_values.values().copied());
     }
     body_metadata::form_data_edges(id, &mut edges);
     for edge in edges {
@@ -368,8 +359,6 @@ mod tests {
             let response = js_response_new(std::ptr::null(), 201.0, std::ptr::null(), 0.0);
             let root = scope.root_nanbox_f64(response);
             let headers = js_response_get_headers(response);
-            let header_id = handle_id(headers);
-            let method = headers_bound_method_value(header_id, "get");
             let response_id = handle_id(response);
             let dead = handle_id(js_response_new(
                 std::ptr::null(),
@@ -380,26 +369,16 @@ mod tests {
             collect();
             assert!(FETCH_RESPONSES.lock().unwrap().contains_key(&response_id));
             assert!(!FETCH_RESPONSES.lock().unwrap().contains_key(&dead));
-            assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
-            assert_eq!(
-                headers_bound_method_value(header_id, "get").to_bits(),
-                method.to_bits()
-            );
-            assert_eq!(
-                js_response_get_headers(root.get_nanbox_f64()).to_bits(),
-                headers.to_bits()
-            );
-            // A detached bound method keeps its receiver alive after the
-            // Response dies. The method/receiver cycle alone must not leak.
-            let method_root = scope.root_nanbox_f64(method);
+            // The record's Headers object is an edge of the live id: the
+            // same object, its list intact.
+            let headers = js_response_get_headers(root.get_nanbox_f64());
+            assert!(super::headers::is_headers(headers));
+            // The Headers object outlives the Response that made it.
+            let headers_root = scope.root_nanbox_f64(headers);
             root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
             collect();
             assert!(!FETCH_RESPONSES.lock().unwrap().contains_key(&response_id));
-            assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
-            method_root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
-            collect();
-            // The bound-method cache lives in the record and died with it.
-            assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
+            assert!(super::headers::is_headers(headers_root.get_nanbox_f64()));
         })
         .join()
         .unwrap();
@@ -410,10 +389,10 @@ mod tests {
         let _band = crate::fetch::handle_band_test_lock();
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
-            // Headers allocate no GC payload. Registry pressure itself must
-            // arm full collection, otherwise this exhausts the numeric band.
+            // An empty Blob allocates no GC payload. Registry pressure itself
+            // must arm full collection, otherwise this exhausts the band.
             for _ in 0..(FETCH_HANDLE_ID_END - FETCH_HANDLE_ID_START + 8192) {
-                js_headers_new();
+                alloc_blob(BlobData::blob(Vec::new(), String::new()));
                 perry_runtime::gc::js_gc_loop_safepoint();
             }
             collect();
@@ -426,15 +405,15 @@ mod tests {
     #[test]
     fn collection_does_not_sweep_another_mutators_handles() {
         let _band = crate::fetch::handle_band_test_lock();
-        let id = handle_id(js_headers_new());
+        let id = alloc_blob(BlobData::blob(Vec::new(), String::new()));
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
-            js_headers_new();
+            alloc_blob(BlobData::blob(Vec::new(), String::new()));
             collect();
         })
         .join()
         .unwrap();
-        assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&id));
+        assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&id));
     }
 }
 
@@ -484,10 +463,6 @@ mod ownership_tests {
             form_root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
             super::tests::collect();
             assert!(!REQUEST_REGISTRY.lock().unwrap().contains_key(&request_id));
-            assert!(!HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .contains_key(&handle_id(headers)));
             assert!(!body_metadata::is_registered_form_data(handle_id(form)));
             assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(blob)));
         })
@@ -506,62 +481,56 @@ mod root_shape_tests {
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
-            let boxed = js_headers_new();
-            let raw = js_headers_new();
+            let blob = || handle_to_f64(alloc_blob(BlobData::blob(Vec::new(), String::new())));
+            let boxed = blob();
+            let raw = blob();
             let raw_root = scope.root_raw_mut_ptr(handle_id(raw) as *mut u8);
             let array = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(1));
             let ptr = perry_runtime::js_array_push_f64(array.get_raw_mut_ptr(), boxed);
             array.set_raw_mut_ptr(ptr);
             super::tests::collect();
-            assert!(HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .contains_key(&handle_id(boxed)));
-            assert!(HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .contains_key(&handle_id(raw)));
+            assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(boxed)));
+            assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(raw)));
             array.set_raw_mut_ptr(std::ptr::null_mut::<perry_runtime::ArrayHeader>());
             raw_root.set_raw_mut_ptr(std::ptr::null_mut::<u8>());
             super::tests::collect();
-            assert!(!HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .contains_key(&handle_id(boxed)));
-            assert!(!HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .contains_key(&handle_id(raw)));
+            assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(boxed)));
+            assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(raw)));
         })
         .join()
         .unwrap();
     }
 
     #[test]
-    fn minor_keeps_registry_edges_and_thread_exit_releases_entries() {
+    fn minor_keeps_the_cached_headers_edge() {
         let _band = crate::fetch::handle_band_test_lock();
-        let (headers, method) = std::thread::spawn(|| {
+        std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
-            let headers = js_headers_new();
-            let id = handle_id(headers);
-            let method = headers_bound_method_value(id, "get");
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let response = scope.root_nanbox_f64(js_response_new(
+                std::ptr::null(),
+                200.0,
+                std::ptr::null(),
+                0.0,
+            ));
+            let headers = js_response_get_headers(response.get_nanbox_f64());
+            unsafe { super::headers::headers_payload(headers) }
+                .unwrap()
+                .store
+                .set("x-kept", "1");
             perry_runtime::gc::gc_collect_minor();
-            assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&id));
-            let current = headers_bound_method_value(id, "get");
-            assert_ne!(current.to_bits(), TAG_UNDEFINED);
-            (id, method.to_bits())
+            let current = js_response_get_headers(response.get_nanbox_f64());
+            let store = super::headers::headers_store_of(current).unwrap();
+            assert_eq!(store.get("x-kept").as_deref(), Some("1"));
         })
         .join()
         .unwrap();
-        // Thread exit released the record, and its method cache with it.
-        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&headers));
-        let _ = method;
     }
 }
 
 #[cfg(test)]
 #[test]
-fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
+fn moving_collection_rewrites_the_cached_headers_slot() {
     let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| {
         perry_runtime::gc::gc_init();
@@ -576,29 +545,20 @@ fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
         }
         let _restore = Restore(previous);
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let headers = js_headers_new();
-        let owner = scope.root_nanbox_f64(headers);
-        let before = headers_bound_method_value(handle_id(headers), "get");
+        let owner = scope.root_nanbox_f64(js_response_new(
+            std::ptr::null(),
+            200.0,
+            std::ptr::null(),
+            0.0,
+        ));
+        let before = js_response_get_headers(owner.get_nanbox_f64());
         perry_runtime::gc::js_gc_collect();
-        let after = headers_bound_method_value(handle_id(owner.get_nanbox_f64()), "get");
-        // No `moved_objects_total` assertion: that counter only counts in a
-        // runtime built with the `perry_gc_instruments` cfg, and
-        // `cargo test -p perry-stdlib` builds perry-runtime without that
-        // feature, so the counter reads 0 and cannot tell moved from not moved.
-        // The cache slot's own address is the evidence: a cached bound-method
-        // closure that is still live after a forced evacuating collection can
-        // only have a different address if the Fetch root scanner rewrote it.
-        assert_ne!(
-            before.to_bits(),
-            after.to_bits(),
-            "the cached closure must actually move"
-        );
-        owner.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
-        tests::collect();
-        assert!(!HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .contains_key(&handle_id(headers)));
+        let after = js_response_get_headers(owner.get_nanbox_f64());
+        // The cached Headers object is young and only the record names it:
+        // after a forced evacuating collection its address can only differ if
+        // the Fetch root scanner rewrote the record's slot.
+        assert_ne!(before.to_bits(), after.to_bits(), "the Headers object must actually move");
+        assert!(super::headers::is_headers(after));
     })
     .join()
     .unwrap();

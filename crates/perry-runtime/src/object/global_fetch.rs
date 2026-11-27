@@ -494,6 +494,45 @@ pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64
     warn_unregistered_fetch_symbol("js_headers_init_from_value")
 }
 
+/// perry-stdlib's installer of the `Headers.prototype` members: the realm's
+/// lazy Headers family calls it when the prototype is born. A program that
+/// links no provider gets the declared family (constructor and tag) only.
+pub type HeadersPrototypeInstallFn = extern "C" fn(*mut ObjectHeaderAlias);
+type ObjectHeaderAlias = crate::object::ObjectHeader;
+static GLOBAL_HEADERS_PROTOTYPE_INSTALL: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_global_headers_prototype(f: HeadersPrototypeInstallFn) {
+    GLOBAL_HEADERS_PROTOTYPE_INSTALL.store(f as *mut (), Ordering::Release);
+}
+
+/// Install the provider's `Headers.prototype` members on `proto`.
+pub(crate) fn install_headers_prototype_members(proto: *mut crate::object::ObjectHeader) {
+    let f = GLOBAL_HEADERS_PROTOTYPE_INSTALL.load(Ordering::Acquire);
+    if f.is_null() {
+        return;
+    }
+    // SAFETY: the slot only ever holds a `HeadersPrototypeInstallFn`.
+    let install: HeadersPrototypeInstallFn = unsafe { std::mem::transmute(f) };
+    install(proto);
+}
+
+/// This realm's `Headers.prototype`, born on first use: the [[Prototype]]
+/// perry-stdlib gives every Headers object it allocates.
+#[no_mangle]
+pub extern "C" fn js_fetch_headers_prototype() -> *mut crate::object::ObjectHeader {
+    crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Headers)
+        as *mut crate::object::ObjectHeader
+}
+
+/// Is `value` a Headers object (direct or a subclass instance)? Its payload
+/// cell names the family: the class id is the low word of the cell's type.
+pub(crate) fn is_headers_object(value: f64) -> bool {
+    crate::native_payload::payload_cell_of_value(value).is_some_and(|cell| {
+        (unsafe { (*cell).type_id } as u32) == crate::native_class_ids::HEADERS
+    })
+}
+
 /// Register perry-stdlib's `Headers` → entries-JSON producer (#4965). The
 /// producer takes a NaN-boxed `Headers` handle and returns a fresh
 /// `StringHeader` holding a JSON array of `[name, value]` pairs (value is a
@@ -553,16 +592,12 @@ fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
     ) {
         return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
     }
-    let jsv = crate::value::JSValue::from_bits(headers.to_bits());
-    if jsv.is_handle() {
-        let addr = (headers.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::value::addr_class::is_handle_band(addr) {
-            let p = call_global_headers_object_json(headers);
-            if !p.is_null() {
-                return p;
-            }
-            return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
+    if is_headers_object(headers) {
+        let p = call_global_headers_object_json(headers);
+        if !p.is_null() {
+            return p;
         }
+        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
     }
     let json = unsafe { crate::json::js_json_stringify(headers, 0) };
     if json.is_null() {
@@ -581,14 +616,10 @@ pub extern "C" fn js_node_setheaders_entries(value: f64) -> f64 {
     if let Some(map) = crate::map::map_ptr_from_receiver_bits(value.to_bits()) {
         return crate::value::js_nanbox_pointer(crate::map::js_map_entries(map) as i64);
     }
-    let jsv = crate::value::JSValue::from_bits(value.to_bits());
-    if jsv.is_handle() {
-        let addr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::value::addr_class::is_handle_band(addr) {
-            let json = call_global_headers_entries_json(value);
-            if !json.is_null() {
-                return f64::from_bits(unsafe { crate::json::js_json_parse(json) }.bits());
-            }
+    if is_headers_object(value) {
+        let json = call_global_headers_entries_json(value);
+        if !json.is_null() {
+            return f64::from_bits(unsafe { crate::json::js_json_parse(json) }.bits());
         }
     }
     f64::from_bits(crate::value::JSValue::undefined().bits())

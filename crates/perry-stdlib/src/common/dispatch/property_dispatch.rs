@@ -420,9 +420,6 @@ unsafe fn prop_fetch(handle: i64, property_name: &str) -> Option<f64> {
         if let Some(v) = crate::fetch::dispatch_response_property(handle as usize, property_name) {
             return Some(v);
         }
-        if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
-            return Some(v);
-        }
         if let Some(v) = crate::fetch::dispatch_form_data_property(handle as usize, property_name) {
             return Some(v);
         }

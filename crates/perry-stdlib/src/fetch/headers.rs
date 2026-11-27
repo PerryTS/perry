@@ -1,50 +1,128 @@
-//! Web Fetch `Headers` FFI.
+//! Web Fetch `Headers`: an ordinary GC object that owns its header list.
 //!
-//! Split out of `fetch/mod.rs` to keep that file under the 2,000-line lint
-//! gate (mirrors the earlier `fetch_blob.rs` extraction). As a child module
-//! of `fetch`, this sees `mod.rs`'s private items (`HeadersStore`,
-//! `HEADERS_REGISTRY`, `alloc_headers`, `handle_id`, `handle_to_f64`,
-//! `string_from_header`, the `TAG_*` consts, …) through the glob `use
-//! super::*` — no extra visibility changes required.
+//! A `Headers` value is a `GC_TYPE_OBJECT` of class `HEADERS` whose
+//! [[Prototype]] is the realm's `Headers.prototype`; its payload slot owns a
+//! `HeadersPayload` (`docs/native-payload-pattern.md`). There is no id and no
+//! registry: the object is the only owner of its list, a dead Headers dies in
+//! the collection that finds it dead, and the sweep drops the list. The
+//! prototype members below are real functions installed on the realm
+//! prototype at its birth (`js_register_global_headers_prototype`); the
+//! `js_headers_*` FFIs are the typed-codegen entry points of the same
+//! operations. Every entry takes its operands boxed, roots the receiver, and
+//! converts the strings (which can run user `toString`) before it borrows the
+//! payload, so no raw address crosses an allocation or a JS call.
 
 use super::*;
+use perry_runtime::closure::{ClosureHeader, JsFunctionInfo, JsThis};
+use perry_runtime::native_payload::{self, NativePayloadFamily, PayloadPrototype};
 
 extern "C" {
     fn js_symbol_well_known_iterator() -> f64;
     fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64;
+    fn js_fetch_headers_prototype() -> *mut perry_runtime::ObjectHeader;
+    fn js_builtin_define_method(
+        target: *mut perry_runtime::ObjectHeader,
+        name_ptr: *const u8,
+        name_len: usize,
+        info: *const JsFunctionInfo,
+        arity: u32,
+        attr_bits: u8,
+    ) -> f64;
+    fn js_builtin_define_symbol_method(
+        target: *mut perry_runtime::ObjectHeader,
+        symbol_ptr: *const u8,
+        symbol_len: usize,
+        value: f64,
+    );
 }
 
-/// new Headers() — returns NaN-boxed POINTER_TAG handle as f64.
-/// See `handle_to_f64` / `handle_id` for the encoding contract.
+fn no_family_members(_: &mut PayloadPrototype) {}
+
+/// The `Headers` family. Its instances are born on the realm prototype
+/// (`alloc_with_prototype`), so the family's own prototype slot is unused.
+pub(crate) static HEADERS_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: perry_runtime::native_class_ids::HEADERS,
+    links_owner: false,
+    name: "Headers",
+    constructor_export: None,
+    constructor_length: 0,
+    install_prototype: no_family_members,
+};
+
+/// The list a Headers object (or a `class X extends Headers` instance) owns.
+///
+/// # Safety
+/// As `native_payload::payload_mut_attached`: drop the borrow before anything
+/// that allocates or calls JS.
+#[inline]
+pub(crate) unsafe fn headers_payload<'a>(value: f64) -> Option<&'a mut HeadersPayload> {
+    native_payload::payload_mut_attached::<HeadersPayload>(value, &HEADERS_FAMILY).ok()
+}
+
+/// Is `value` a Headers object?
+#[inline]
+pub(crate) fn is_headers(value: f64) -> bool {
+    unsafe { headers_payload(value).is_some() }
+}
+
+/// A copy of a Headers object's list.
+pub(super) fn headers_store_of(value: f64) -> Option<HeadersStore> {
+    unsafe { headers_payload(value).map(|p| p.store.clone()) }
+}
+
+/// A new Headers object owning `store`.
+pub(super) fn headers_object(store: HeadersStore, immutable: bool) -> f64 {
+    let bytes = store.retained_bytes();
+    let proto = unsafe { js_fetch_headers_prototype() };
+    native_payload::alloc_with_prototype(
+        &HEADERS_FAMILY,
+        HeadersPayload { store, immutable },
+        bytes,
+        &[],
+        proto,
+    )
+}
+
+/// Re-state the list's retained bytes after a mutation (rule 4).
+fn restate_bytes(value: f64) {
+    if let Some(bytes) = unsafe { headers_payload(value).map(|p| p.store.retained_bytes()) } {
+        native_payload::set_external_bytes(value, &HEADERS_FAMILY, bytes);
+    }
+}
+
+/// new Headers() — a fresh, empty Headers object.
 #[no_mangle]
 pub extern "C" fn js_headers_new() -> f64 {
-    handle_to_f64(alloc_headers(HeadersStore::default()))
+    headers_object(HeadersStore::default(), false)
 }
 
-/// Normalize a runtime `HeadersInit` value to a Headers handle.
-///
-/// A genuine Headers handle is already in the representation consumed by the
-/// Request constructor, which clones its entries into the Request record. Keep
-/// that handle instead of allocating and filling a redundant intermediate
-/// store. Records, iterables, and Proxies still take the full constructor path.
+/// Normalize a runtime `HeadersInit` value to a Headers object: a Headers
+/// object is returned as is (the Request constructor copies its list);
+/// records, iterables and Proxies take the full constructor path.
 #[no_mangle]
 pub extern "C" fn js_headers_from_value(init: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[init]);
+    if perry_runtime::proxy_hooks::proxy_is_proxy(init) == 0 && is_headers(init) {
+        return init;
+    }
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let init = scope.root_nanbox_f64(init);
-    let current = init.get_nanbox_f64();
-    if perry_runtime::proxy_hooks::proxy_is_proxy(current) == 0 {
-        let id = handle_id(current);
-        if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
-            return current;
+    let handle = scope.root_nanbox_f64(js_headers_new());
+    unsafe {
+        js_headers_init_from_value(handle.get_nanbox_f64(), init.get_nanbox_f64());
+    }
+    handle.get_nanbox_f64()
+}
+
+/// The list a `HeadersInit` value describes, without allocating a Headers
+/// object for it (`new Request(input, { headers })`).
+pub(super) unsafe fn headers_store_from_init(init: f64) -> HeadersStore {
+    if perry_runtime::proxy_hooks::proxy_is_proxy(init) == 0 {
+        if let Some(store) = headers_store_of(init) {
+            return store;
         }
     }
-
-    let handle = js_headers_new();
-    unsafe {
-        js_headers_init_from_value(handle, init.get_nanbox_f64());
-    }
-    handle
+    let handle = js_headers_from_value(init);
+    headers_store_of(handle).unwrap_or_default()
 }
 
 unsafe fn header_init_string(value: f64) -> String {
@@ -54,38 +132,6 @@ unsafe fn header_init_string(value: f64) -> String {
 
 unsafe fn headers_init_type_error(message: &str) -> ! {
     throw_fetch_type_error(message)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_headers_method_value(
-    handle: f64,
-    method_name_ptr: *const u8,
-    method_name_len: usize,
-) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    if !HEADERS_REGISTRY.lock().unwrap().contains_key(&id) || method_name_ptr.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let name =
-        match std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)) {
-            Ok(name) => name,
-            Err(_) => return f64::from_bits(TAG_UNDEFINED),
-        };
-    let method_name: &'static str = match name {
-        "append" => "append",
-        "delete" => "delete",
-        "entries" | "Symbol.iterator" | "@@iterator" => "entries",
-        "forEach" => "forEach",
-        "get" => "get",
-        "getSetCookie" => "getSetCookie",
-        "has" => "has",
-        "keys" => "keys",
-        "set" => "set",
-        "values" => "values",
-        _ => return f64::from_bits(TAG_UNDEFINED),
-    };
-    headers_bound_method_value(id, method_name)
 }
 
 fn gc_type_for_raw_ptr(raw: i64) -> Option<u8> {
@@ -372,17 +418,73 @@ unsafe fn read_headers_iterable_entries(
     entries
 }
 
-fn append_header_entries(target_id: usize, entries: Vec<(String, String)>) {
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get_mut(&target_id) {
-        for (key, value) in entries {
-            store.append(&key, &value);
-        }
-    }
+/// A header name is a token (RFC 9110 §5.6.2).
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+        })
 }
 
+/// A header value with leading/trailing HTTP whitespace removed, or `None`
+/// when it holds NUL, CR or LF (Fetch "normalize" + "is a header value").
+fn normalized_header_value(value: &str) -> Option<&str> {
+    let v = value.trim_matches(|c| matches!(c, '\t' | '\n' | '\r' | ' '));
+    (!v.bytes().any(|b| matches!(b, 0 | b'\r' | b'\n'))).then_some(v)
+}
+
+unsafe fn checked_name(op: &str, name: String) -> String {
+    if !is_valid_header_name(&name) {
+        throw_fetch_type_error(&format!("Headers.{op}: \"{name}\" is an invalid header name."));
+    }
+    name
+}
+
+unsafe fn checked_pair(op: &str, name: String, value: String) -> (String, String) {
+    let name = checked_name(op, name);
+    let Some(v) = normalized_header_value(&value) else {
+        throw_fetch_type_error(&format!("Headers.{op}: \"{value}\" is an invalid header value."));
+    };
+    (name, v.to_string())
+}
+
+/// Append validated `entries` to the Headers object `target`.
+unsafe fn append_header_entries(target: f64, entries: Vec<(String, String)>) {
+    let entries: Vec<_> = entries
+        .into_iter()
+        .map(|(k, v)| checked_pair("append", k, v))
+        .collect();
+    if let Some(p) = headers_payload(target) {
+        for (key, value) in entries {
+            p.store.append(&key, &value);
+        }
+    }
+    restate_bytes(target);
+}
+
+/// Fill the Headers object `handle` from `init` (`new Headers(init)`).
+///
+/// `handle` may also be an ordinary object without a list: the receiver of
+/// `class X extends Headers`'s `super(init)`, which this attaches the list to,
+/// so the subclass instance is itself the Headers object.
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle, init]);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(handle);
+    let init_handle = scope.root_nanbox_f64(init);
+    if !is_headers(handle)
+        && !native_payload::attach_to_object(
+            handle,
+            &HEADERS_FAMILY,
+            HeadersPayload {
+                store: HeadersStore::default(),
+                immutable: false,
+            },
+            0,
+        )
+    {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let init_value = JSValue::from_bits(init.to_bits());
     if init_value.is_undefined() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -390,143 +492,121 @@ pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f
     if init_value.is_null() {
         headers_init_type_error("Headers constructor: init must not be null");
     }
-
-    let target_id = handle_id(handle);
-    if !HEADERS_REGISTRY.lock().unwrap().contains_key(&target_id) {
+    // A Proxy is never a Headers object: route it to the record path below.
+    let source = (perry_runtime::proxy_hooks::proxy_is_proxy(init) == 0)
+        .then(|| headers_store_of(init))
+        .flatten();
+    if let Some(store) = source {
+        append_header_entries(target.get_nanbox_f64(), store.entries);
         return f64::from_bits(TAG_UNDEFINED);
     }
-
-    // A Proxy value is not a Headers handle: its NaN-box would otherwise be
-    // masked into a registry id and could alias a live Headers entry, silently
-    // copying the wrong (or no) headers. Route it to the record path below.
-    let is_proxy_init = perry_runtime::proxy_hooks::proxy_is_proxy(init) != 0;
-    let source_id = handle_id(init);
-    let cloned = if is_proxy_init {
-        None
-    } else {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&source_id)
-            .map(|store| store.entries.clone())
-    };
-    if let Some(entries) = cloned {
-        append_header_entries(target_id, entries);
+    if let Some(entries) = read_headers_record_entries(init_handle.get_nanbox_f64(), &scope) {
+        append_header_entries(target.get_nanbox_f64(), entries);
         return f64::from_bits(TAG_UNDEFINED);
     }
-
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let init_handle = scope.root_nanbox_f64(init);
-    let init_now = init_handle.get_nanbox_f64();
-
-    if let Some(entries) = read_headers_record_entries(init_now, &scope) {
-        append_header_entries(target_id, entries);
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-
     let arr = materialize_headers_init_iterable(&init_handle, &scope);
     let entries = read_headers_iterable_entries(arr, &scope);
-    append_header_entries(target_id, entries);
+    append_header_entries(target.get_nanbox_f64(), entries);
     f64::from_bits(TAG_UNDEFINED)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_headers_set(
-    handle: f64,
-    key_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
-) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let key = string_from_header(key_ptr).unwrap_or_default();
-    let value = string_from_header(value_ptr).unwrap_or_default();
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get_mut(&id) {
-        store.set(&key, &value);
+/// Mutate the list of the Headers object `this` (rooted by the caller).
+unsafe fn mutate(this: f64, f: impl FnOnce(&mut HeadersStore)) -> f64 {
+    if let Some(p) = headers_payload(this) {
+        if p.immutable {
+            throw_fetch_type_error("immutable");
+        }
+        f(&mut p.store);
+        restate_bytes(this);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `headers.append(name, value)` — adds a value, combining with `", "` when
-/// the name already exists (Web Fetch spec). Returns undefined. (#1649)
+/// `headers.set(name, value)`.
 #[no_mangle]
-pub unsafe extern "C" fn js_headers_append(
-    handle: f64,
-    key_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
-) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let key = string_from_header(key_ptr).unwrap_or_default();
-    let value = string_from_header(value_ptr).unwrap_or_default();
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get_mut(&id) {
-        store.append(&key, &value);
-    }
-    f64::from_bits(TAG_UNDEFINED)
+pub unsafe extern "C" fn js_headers_set(handle: f64, key: f64, value: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(handle);
+    let value = scope.root_nanbox_f64(value);
+    let key = header_init_string(key);
+    let value = header_init_string(value.get_nanbox_f64());
+    let (key, value) = checked_pair("set", key, value);
+    mutate(this.get_nanbox_f64(), |store| store.set(&key, &value))
 }
 
+/// `headers.append(name, value)` — combines with `", "` when the name
+/// already exists (Set-Cookie stays separate). (#1649)
 #[no_mangle]
-pub unsafe extern "C" fn js_headers_get(
-    handle: f64,
-    key_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let key = match string_from_header(key_ptr) {
-        Some(k) => k,
-        None => return std::ptr::null_mut(),
-    };
-    // The GC scanner locks this registry; snapshot before allocating.
-    let value = HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .and_then(|store| store.get(&key));
+pub unsafe extern "C" fn js_headers_append(handle: f64, key: f64, value: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(handle);
+    let value = scope.root_nanbox_f64(value);
+    let key = header_init_string(key);
+    let value = header_init_string(value.get_nanbox_f64());
+    let (key, value) = checked_pair("append", key, value);
+    mutate(this.get_nanbox_f64(), |store| store.append(&key, &value))
+}
+
+/// `headers.get(name)` — the value, or `null` when absent.
+#[no_mangle]
+pub unsafe extern "C" fn js_headers_get(handle: f64, key: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(handle);
+    let key = checked_name("get", header_init_string(key));
+    let value = headers_payload(this.get_nanbox_f64()).and_then(|p| p.store.get(&key));
     match value {
-        Some(v) => js_string_from_bytes(v.as_ptr(), v.len() as u32),
-        None => std::ptr::null_mut(),
+        Some(v) => f64::from_bits(JSValue::string_ptr(js_string_from_bytes(v.as_ptr(), v.len() as u32)).bits()),
+        None => f64::from_bits(TAG_NULL),
     }
 }
 
-/// `headers.getSetCookie()` — returns all preserved Set-Cookie values.
+/// `headers.has(name)`.
 #[no_mangle]
-pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let values = HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|record| record.set_cookie_values())
-        .unwrap_or_default();
-    // #8163: see `js_headers_keys`.
+pub unsafe extern "C" fn js_headers_has(handle: f64, key: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(handle);
+    let key = checked_name("has", header_init_string(key));
+    tagged_bool(headers_payload(this.get_nanbox_f64()).is_some_and(|p| p.store.has(&key)))
+}
+
+/// `headers.delete(name)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_headers_delete(handle: f64, key: f64) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(handle);
+    let key = checked_name("delete", header_init_string(key));
+    mutate(this.get_nanbox_f64(), |store| store.delete(&key))
+}
+
+/// A boxed array of fresh strings, rooted across its own allocations (#8163).
+fn string_array(values: Vec<String>) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(values.len() as u32));
     for v in values {
         let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-        let v_nan = JSValue::string_ptr(v_ptr).bits();
         let arr = perry_runtime::js_array_push_f64(
             arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
-            f64::from_bits(v_nan),
+            f64::from_bits(JSValue::string_ptr(v_ptr).bits()),
         );
         arr_handle.set_raw_mut_ptr(arr);
     }
     nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
 }
 
-/// #4965: produce the `[name, value]` entries JSON that the http-server
-/// `res.setHeaders(Headers)` path applies (routed through the runtime's
-/// `js_node_setheaders_entries_json` registration). Mirrors Node's
-/// `OutgoingMessage.setHeaders`: it walks the WHATWG sorted-by-name entries,
-/// collapsing `Set-Cookie` into a single `["set-cookie", [c1, c2, …]]` entry
-/// via `getSetCookie()` (the wire layer then emits one line per element).
-/// Returns null for an unknown handle so the caller raises
-/// `ERR_INVALID_ARG_TYPE`.
+/// `headers.getSetCookie()` — every preserved Set-Cookie value.
+#[no_mangle]
+pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
+    let values = unsafe { headers_payload(handle).map(|p| p.store.set_cookie_values()) };
+    string_array(values.unwrap_or_default())
+}
+
+/// #4965: the `[name, value]` entries JSON `res.setHeaders(Headers)` applies,
+/// sorted by name, Set-Cookie collapsed into one `["set-cookie", [..]]`
+/// entry. Null when `handle` is not a Headers object (the caller raises
+/// `ERR_INVALID_ARG_TYPE`).
 #[no_mangle]
 pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut StringHeader {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let guard = HEADERS_REGISTRY.lock().unwrap();
-    let Some(store) = guard.get(&id) else {
+    let Some(store) = headers_store_of(handle) else {
         return std::ptr::null_mut();
     };
     let mut names: Vec<String> = store.entries.iter().map(|(k, _)| k.clone()).collect();
@@ -552,37 +632,18 @@ pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut String
         }
     }
     let s = serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string());
-    drop(guard); // The GC scanner may lock the registry during allocation.
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
-/// Produce a flat `{ "name": "value", … }` JSON object from a `Headers` handle,
-/// for the `fetch(url, { headers })` request path (which parses headers-JSON as
-/// a `HashMap<String, String>`).
-///
-/// The global `fetch` thunk and the codegen `headers_dynamic` path both
-/// JSON-stringify the `init.headers` value. A `Headers` instance is a
-/// fetch-band registry *handle* (its first id is `0x40000`), NOT a heap
-/// pointer, so the generic `js_json_stringify` walker reaches `gc_obj_type`
-/// and dereferences `id - 8` as a `GcHeader` → SIGSEGV (the `claude -p` crash;
-/// same #5559/#5560 family of handle-band ids treated as heap pointers). The
-/// fetch entry points classify by address band BEFORE any dereference and route
-/// `Headers` handles here, reading the request's own header registry instead of
-/// walking a bogus pointer. Returns null for an unknown handle so the caller
-/// falls back to `{}`.
+/// A flat `{ "name": "value", … }` JSON object of a Headers object for the
+/// `fetch(url, { headers })` request path (parsed as a
+/// `HashMap<String, String>`), repeated names combined as `get` does. Null
+/// when `handle` is not a Headers object (the caller falls back to `{}`).
 #[no_mangle]
 pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let guard = HEADERS_REGISTRY.lock().unwrap();
-    let Some(store) = guard.get(&id) else {
+    let Some(store) = headers_store_of(handle) else {
         return std::ptr::null_mut();
     };
-    // Preserve insertion order; collapse repeated names (incl. Set-Cookie) the
-    // same way `HeadersStore::get` does so the request carries the combined
-    // value. A `serde_json::Map` keeps first-seen insertion order under the
-    // `preserve_order` feature; without it the object is still a valid flat map
-    // that `serde_json::from_str::<HashMap<_,_>>` accepts.
     let mut seen: Vec<String> = Vec::new();
     let mut out = serde_json::Map::new();
     for (k, _) in &store.entries {
@@ -596,85 +657,58 @@ pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader
     }
     let s =
         serde_json::to_string(&serde_json::Value::Object(out)).unwrap_or_else(|_| "{}".to_string());
-    drop(guard); // The GC scanner may lock the registry during allocation.
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeader) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let key = match string_from_header(key_ptr) {
-        Some(k) => k,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get(&id) {
-        if store.has(&key) {
-            return f64::from_bits(TAG_TRUE);
-        }
-    }
-    f64::from_bits(TAG_FALSE)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_headers_delete(handle: f64, key_ptr: *const StringHeader) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
-    let key = string_from_header(key_ptr).unwrap_or_default();
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get_mut(&id) {
-        store.delete(&key);
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-/// Snapshot the headers store sorted by key (WHATWG spec: iteration order is
-/// sorted lexicographically by name, regardless of insertion order). Used by
-/// `forEach`, `keys`, `values`, `entries`, and `Symbol.iterator` so all five
-/// surfaces agree byte-for-byte (refs #576).
+/// The list sorted by name (WHATWG: iteration is sorted, Set-Cookie values
+/// in insertion order). Shared by `forEach`, `keys`, `values`, `entries`
+/// and `[Symbol.iterator]` so all five agree (refs #576).
 fn snapshot_sorted(handle: f64) -> Vec<(String, String)> {
-    let id = handle_id(handle);
-    let mut entries: Vec<(String, String)> = match HEADERS_REGISTRY.lock().unwrap().get(&id) {
-        Some(s) => s.entries.clone(),
-        None => return Vec::new(),
-    };
+    let mut entries = headers_store_of(handle).map(|s| s.entries).unwrap_or_default();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
 }
 
-#[no_mangle]
-pub extern "C" fn js_headers_for_each(handle: f64, callback: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle, callback]);
-    let entries = snapshot_sorted(handle);
-    // Extract closure pointer from NaN-boxed callback
-    let cb_bits = callback.to_bits();
-    let cb_ptr = (cb_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-    if cb_ptr == 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    // #8163: `cb_ptr` is a raw heap address living ONLY in this native frame.
-    // The precise root map does not cover Rust frames and production resolves
-    // the conservative stack scan to SkipDisabled, so the first copying minor
-    // inside the loop below — every `js_string_from_bytes` can trigger one, and
-    // so can the callback itself — leaves it naming retired from-space. Root it
-    // and re-read it at each call.
+/// `headers.forEach(callback, thisArg)`: `callback.call(thisArg, value, name,
+/// headers)` per sorted entry.
+unsafe fn headers_for_each_with(handle: f64, callback: f64, this_arg: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let cb_handle = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(cb_ptr));
+    let this = scope.root_nanbox_f64(handle);
+    let cb_handle = scope.root_nanbox_f64(callback);
+    let this_arg = scope.root_nanbox_f64(this_arg);
+    if !perry_runtime::closure::is_closure_bits(callback.to_bits()) {
+        throw_fetch_type_error(
+            "Headers.forEach: Expected callback to be a function.",
+        );
+    }
+    let entries = snapshot_sorted(this.get_nanbox_f64());
     for (k, v) in entries {
         let inner = perry_runtime::gc::RuntimeHandleScope::new();
         let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
         let v_handle = inner.root_nanbox_u64(JSValue::string_ptr(v_ptr).bits());
         let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-        let k_nan = JSValue::string_ptr(k_ptr).bits();
+        let k_handle = inner.root_nanbox_u64(JSValue::string_ptr(k_ptr).bits());
+        let receiver = if this_arg.get_nanbox_u64() == TAG_UNDEFINED {
+            perry_runtime::closure::plain_call_receiver()
+        } else {
+            JsThis::from_f64(this_arg.get_nanbox_f64())
+        };
         let closure = perry_runtime::js_nanbox_get_pointer(cb_handle.get_nanbox_f64())
             as *const perry_runtime::ClosureHeader;
-        perry_runtime::js_closure_call2(
+        perry_runtime::js_closure_call3(
             closure,
-            perry_runtime::closure::plain_call_receiver(),
+            receiver,
             v_handle.get_nanbox_f64(),
-            f64::from_bits(k_nan),
+            k_handle.get_nanbox_f64(),
+            this.get_nanbox_f64(),
         );
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub extern "C" fn js_headers_for_each(handle: f64, callback: f64) -> f64 {
+    unsafe { headers_for_each_with(handle, callback, f64::from_bits(TAG_UNDEFINED)) }
 }
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -685,58 +719,25 @@ fn nanbox_array_pointer(arr: *mut perry_runtime::ArrayHeader) -> f64 {
     f64::from_bits(bits)
 }
 
-/// `headers.keys()` — returns a sorted-by-key array of header names. The
-/// returned array is itself iterable, so `for (const k of headers.keys())`,
-/// spread, and `Array.from` all work via the array's existing `Symbol.iterator`
-/// (refs #576).
+/// `headers.keys()` — the sorted names, as an (iterable) array (refs #576).
 #[no_mangle]
 pub extern "C" fn js_headers_keys(handle: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let entries = snapshot_sorted(handle);
-    // #8163: `arr` must survive the per-entry string allocations below.
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(entries.len() as u32));
-    for (k, _) in entries {
-        let k_ptr = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-        let k_nan = JSValue::string_ptr(k_ptr).bits();
-        let arr = perry_runtime::js_array_push_f64(
-            arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
-            f64::from_bits(k_nan),
-        );
-        arr_handle.set_raw_mut_ptr(arr);
-    }
-    nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
+    string_array(snapshot_sorted(handle).into_iter().map(|(k, _)| k).collect())
 }
 
-/// `headers.values()` — sorted-by-key array of header values. See `js_headers_keys`.
+/// `headers.values()` — the values in name order. See `js_headers_keys`.
 #[no_mangle]
 pub extern "C" fn js_headers_values(handle: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let entries = snapshot_sorted(handle);
-    // #8163: see `js_headers_keys`.
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(entries.len() as u32));
-    for (_, v) in entries {
-        let v_ptr = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-        let v_nan = JSValue::string_ptr(v_ptr).bits();
-        let arr = perry_runtime::js_array_push_f64(
-            arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
-            f64::from_bits(v_nan),
-        );
-        arr_handle.set_raw_mut_ptr(arr);
-    }
-    nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
+    string_array(snapshot_sorted(handle).into_iter().map(|(_, v)| v).collect())
 }
 
-/// `headers.entries()` — sorted-by-key array of `[key, value]` pair arrays.
-/// `for (const [k, v] of headers.entries())` and `for (const [k, v] of h)` both
-/// route here (the latter via the `Symbol.iterator` alias, see #576).
+/// `headers.entries()` / `headers[Symbol.iterator]()` — sorted `[name,
+/// value]` pairs, as an (iterable) array.
 #[no_mangle]
 pub extern "C" fn js_headers_entries(handle: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let entries = snapshot_sorted(handle);
-    // #8163: `arr`, `k_ptr` and `pair` are all raw heap addresses held across
-    // later allocations in this same loop. See `js_headers_for_each`.
+    // #8163: `arr`, the strings and `pair` are raw heap addresses held across
+    // later allocations in this same loop. See `headers_for_each_with`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(entries.len() as u32));
     for (k, v) in entries {
@@ -763,4 +764,77 @@ pub extern "C" fn js_headers_entries(handle: f64) -> f64 {
         arr_handle.set_raw_mut_ptr(arr);
     }
     nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
+}
+
+// ----------------- Headers.prototype members -----------------
+
+/// `this` when it is a Headers object, else WebIDL's "Illegal invocation".
+unsafe fn receiver(this: JsThis) -> f64 {
+    let this = this.as_f64();
+    if !is_headers(this) {
+        throw_fetch_type_error("Illegal invocation");
+    }
+    this
+}
+
+extern "C" fn proto_append(_: *const ClosureHeader, this: JsThis, name: f64, value: f64) -> f64 {
+    unsafe { js_headers_append(receiver(this), name, value) }
+}
+extern "C" fn proto_delete(_: *const ClosureHeader, this: JsThis, name: f64) -> f64 {
+    unsafe { js_headers_delete(receiver(this), name) }
+}
+extern "C" fn proto_get(_: *const ClosureHeader, this: JsThis, name: f64) -> f64 {
+    unsafe { js_headers_get(receiver(this), name) }
+}
+extern "C" fn proto_get_set_cookie(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { js_headers_get_set_cookie(receiver(this)) }
+}
+extern "C" fn proto_has(_: *const ClosureHeader, this: JsThis, name: f64) -> f64 {
+    unsafe { js_headers_has(receiver(this), name) }
+}
+extern "C" fn proto_set(_: *const ClosureHeader, this: JsThis, name: f64, value: f64) -> f64 {
+    unsafe { js_headers_set(receiver(this), name, value) }
+}
+extern "C" fn proto_keys(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { js_headers_keys(receiver(this)) }
+}
+extern "C" fn proto_values(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { js_headers_values(receiver(this)) }
+}
+extern "C" fn proto_entries(_: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { js_headers_entries(receiver(this)) }
+}
+extern "C" fn proto_for_each(
+    _: *const ClosureHeader,
+    this: JsThis,
+    callback: f64,
+    this_arg: f64,
+) -> f64 {
+    unsafe { headers_for_each_with(receiver(this), callback, this_arg) }
+}
+
+/// WebIDL operations: `{ writable, enumerable, configurable }`.
+const OPERATION: u8 = 0x07;
+
+fn define(proto: *mut perry_runtime::ObjectHeader, name: &str, info: *const JsFunctionInfo, arity: u32) -> f64 {
+    unsafe { js_builtin_define_method(proto, name.as_ptr(), name.len(), info, arity, OPERATION) }
+}
+
+/// The members of `Headers.prototype` (node v26's own-key order), installed
+/// by the runtime when the realm's lazy Headers family is born.
+pub(crate) extern "C" fn install_headers_prototype(proto: *mut perry_runtime::ObjectHeader) {
+    define(proto, "append", perry_runtime::fn_info!(#[realm(Headers.prototype.append, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(undefined)) })] export crate::fetch::headers::proto_append, 2; with_declared(2)), 2);
+    define(proto, "delete", perry_runtime::fn_info!(#[realm(Headers.prototype.delete, effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(undefined)) })] export crate::fetch::headers::proto_delete, 1; with_declared(1)), 1);
+    define(proto, "get", perry_runtime::fn_info!(#[realm(Headers.prototype.get, effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(str) | prim(null)) })] export crate::fetch::headers::proto_get, 1; with_declared(1)), 1);
+    define(proto, "getSetCookie", perry_runtime::fn_info!(#[realm(Headers.prototype.getSetCookie, effects = { stores(fresh); returns(fresh(Array.prototype, elems = [prim(str)])) })] export crate::fetch::headers::proto_get_set_cookie, 0; with_declared(0)), 0);
+    define(proto, "has", perry_runtime::fn_info!(#[realm(Headers.prototype.has, effects = { coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(bool)) })] export crate::fetch::headers::proto_has, 1; with_declared(1)), 1);
+    define(proto, "set", perry_runtime::fn_info!(#[realm(Headers.prototype.set, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(undefined)) })] export crate::fetch::headers::proto_set, 2; with_declared(2)), 2);
+    define(proto, "keys", perry_runtime::fn_info!(#[realm(Headers.prototype.keys)] export crate::fetch::headers::proto_keys, 0; with_declared(0)), 0);
+    define(proto, "values", perry_runtime::fn_info!(#[realm(Headers.prototype.values)] export crate::fetch::headers::proto_values, 0; with_declared(0)), 0);
+    // WHATWG aliases `[Symbol.iterator]` to the very same function as
+    // `entries`; axios requires that own prototype member.
+    let entries = define(proto, "entries", perry_runtime::fn_info!(#[realm(Headers.prototype.entries)] export crate::fetch::headers::proto_entries, 0; with_declared(0)), 0);
+    define(proto, "forEach", perry_runtime::fn_info!(#[realm(Headers.prototype.forEach, effects = { calls(arg(0), this = arg(1), args = [prim(str), prim(str), this]); stores(fresh); returns(prim(undefined)) })] export crate::fetch::headers::proto_for_each, 2; with_declared(1)), 1);
+    let symbol = "iterator";
+    unsafe { js_builtin_define_symbol_method(proto, symbol.as_ptr(), symbol.len(), entries) };
 }

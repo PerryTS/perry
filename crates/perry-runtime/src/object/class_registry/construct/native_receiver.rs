@@ -68,7 +68,6 @@ pub(super) unsafe fn fetch_backed_object(
     let name = match probe(value.as_handle()) {
         1 => "Response",
         2 => "Request",
-        3 => "Headers",
         4 => "Blob",
         5 => "File",
         _ => return None,
