@@ -674,7 +674,7 @@ fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
 }
 
 /// `ToLength(? Get(arrayLike, "length"))` for the array-like branch.
-fn array_like_length(items: f64) -> usize {
+pub(crate) fn array_like_length(items: f64) -> usize {
     if crate::value::js_nanbox_get_pointer(items) == 0 {
         return 0;
     }
@@ -687,7 +687,7 @@ fn array_like_length(items: f64) -> usize {
         raw as *const crate::object::ObjectHeader,
         key,
     );
-    let n = crate::builtins::js_number_coerce(length_val);
+    let n = crate::math::js_math_to_number(length_val);
     if n.is_nan() || n <= 0.0 {
         return 0;
     }

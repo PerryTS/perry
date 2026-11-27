@@ -1255,7 +1255,9 @@ extern "C" fn async_step_reject_thunk(
 
 const AFA_RESULT_PROMISE: u32 = 0;
 const AFA_RESULT_ARRAY: u32 = 1;
-const AFA_SOURCE_ARRAY: u32 = 2;
+/// The array-like source; `undefined` on the iterator path.
+const AFA_ARRAY_LIKE: u32 = 2;
+/// The async iterator; `undefined` on the array-like path.
 const AFA_ITERATOR_VALUE: u32 = 3;
 const AFA_REJECT_CLOSURE: u32 = 4;
 const AFA_MAP_FN: u32 = 5;
@@ -1266,7 +1268,11 @@ const AFA_MAPPED_CLOSURE: u32 = 9;
 /// The result `Construct(C)` built for a constructor receiver; `undefined`
 /// when the result is the plain `AFA_RESULT_ARRAY` accumulator.
 const AFA_CONSTRUCTED: u32 = 10;
-const AFA_STATE_CAPTURES: u32 = 11;
+/// `LengthOfArrayLike` of the array-like source, read once before `Construct`.
+const AFA_LENGTH: u32 = 11;
+/// Rejects the result after closing the iterator: the mapped-value handler.
+const AFA_ABRUPT_CLOSURE: u32 = 12;
+const AFA_STATE_CAPTURES: u32 = 13;
 
 #[inline]
 fn undefined_value() -> f64 {
@@ -1329,19 +1335,12 @@ fn resolve_from_async_map_fn(map_fn: f64) -> Result<Option<*const crate::Closure
     )))
 }
 
-fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
-    let raw = crate::value::js_nanbox_get_pointer(input) as usize;
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+fn iterator_value_for_from_async(input: f64) -> Option<f64> {
+    // Of the primitives only a string's wrapper has an intrinsic iterator.
+    let jsv = crate::value::JSValue::from_bits(input.to_bits());
+    if !jsv.is_any_string() && !crate::collection_iter::is_entry_object(input) {
         return None;
     }
-    unsafe {
-        let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (crate::gc_type_is_array!((*gc).obj_type))
-            .then_some(raw as *const crate::array::ArrayHeader)
-    }
-}
-
-fn iterator_value_for_from_async(input: f64) -> Option<f64> {
     if let Some(iter) = crate::array::call_symbol_async_iterator(input) {
         return Some(iter);
     }
@@ -1361,11 +1360,10 @@ fn iterator_value_for_from_async(input: f64) -> Option<f64> {
 
 /// `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.
 ///
-/// Returns a Promise that resolves to an Array. Source values are awaited
-/// before optional mapping, and mapped results are awaited before appending.
-/// Direct async-iterator objects keep the existing chained `.next()` path;
-/// sync iterables and array-like inputs are first materialized with the same
-/// conversion stack as `Array.from`.
+/// Returns a Promise that resolves to an Array. Mapped results are awaited
+/// before appending; an array-like's elements are also awaited before
+/// mapping, while an iterable's values arrive through the async iterator
+/// protocol (a sync iterable's through `CreateAsyncFromSyncIterator`).
 #[no_mangle]
 pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) -> f64 {
     array_from_async_full(undefined_value(), input, map_fn, this_arg)
@@ -1375,7 +1373,7 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
 /// `c` builds the result (`Construct(C)` for an iterable, `Construct(C,
 /// «len»)` for an array-like), anything else leaves it a plain array.
 pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f64) -> f64 {
-    use crate::array::{js_array_alloc, ArrayHeader};
+    use crate::array::js_array_alloc;
     use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     if let Some(rejected) = array_from_async_nullish_error(input) {
@@ -1394,25 +1392,23 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
     let this_arg = scope.root_nanbox_f64(this_arg);
     let c = scope.root_nanbox_f64(c);
     let iter_value = iterator_value_for_from_async(input.get_nanbox_f64());
-    let input = input.get_nanbox_f64();
-    let source_arr = if iter_value.is_some() {
-        std::ptr::null_mut()
-    } else if let Some(arr) = array_value_ptr(input) {
-        arr as *mut ArrayHeader
-    } else {
-        crate::array::js_array_clone(
-            crate::value::js_nanbox_get_pointer(input) as *const ArrayHeader
-        )
+    let len = match iter_value {
+        Some(_) => None,
+        None => match crate::exception::catch_js_throw(|| {
+            let input = input.get_nanbox_f64();
+            if crate::collection_iter::is_entry_object(input) {
+                crate::array::array_like_length(input)
+            } else {
+                0
+            }
+        }) {
+            Ok(len) => Some(len as f64),
+            Err(reason) => return boxed_promise(js_promise_rejected(reason)),
+        },
     };
     let iter_value = scope.root_nanbox_f64(iter_value.unwrap_or_else(undefined_value));
-    let source = scope.root_nanbox_f64(if source_arr.is_null() {
-        undefined_value()
-    } else {
-        crate::value::js_nanbox_pointer(source_arr as i64)
-    });
     let c = c.get_nanbox_f64();
     let constructed = if crate::object::js_value_is_constructor(c) {
-        let len = (!source_arr.is_null()).then(|| unsafe { (*source_arr).length as f64 });
         let args = len.as_slice();
         match crate::exception::catch_js_throw(|| unsafe {
             crate::object::js_new_function_construct(c, args.as_ptr(), args.len())
@@ -1425,91 +1421,99 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
     };
     let constructed = scope.root_nanbox_f64(constructed);
 
-    let result_promise = js_promise_new();
-    let result_arr = js_array_alloc(0);
-    unsafe {
-        (*result_arr).length = 0;
-    }
-
-    let state = js_closure_alloc(
+    // Every allocation below can collect, and the first step runs user code:
+    // each new cell is rooted and re-read after the allocations that follow.
+    let root = |cell: *mut u8| scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cell as i64));
+    let result_promise = root(js_promise_new() as *mut u8);
+    let result_arr = root(js_array_alloc(0) as *mut u8);
+    let state = root(js_closure_alloc(
         crate::fn_info!(array_from_async_step, 1),
         AFA_STATE_CAPTURES,
-    );
-    let reject_closure = js_closure_alloc(crate::fn_info!(array_from_async_reject, 1), 1);
-    let value_closure = js_closure_alloc(crate::fn_info!(array_from_async_value_step, 1), 1);
-    let mapped_closure = js_closure_alloc(crate::fn_info!(array_from_async_mapped_step, 1), 1);
-
-    crate::closure::closure_set_capture_ref(reject_closure, 0, result_promise as i64);
-    crate::closure::closure_set_capture_ref(value_closure, 0, state as i64);
-    crate::closure::closure_set_capture_ref(mapped_closure, 0, state as i64);
-
-    crate::closure::closure_set_capture_ref(state, AFA_RESULT_PROMISE, result_promise as i64);
-    crate::closure::closure_set_capture_ref(state, AFA_RESULT_ARRAY, result_arr as i64);
-    let source_arr = match source.get_nanbox_f64() {
-        s if s.to_bits() == crate::value::TAG_UNDEFINED => std::ptr::null_mut(),
-        s => crate::value::js_nanbox_get_pointer(s) as *mut ArrayHeader,
+    ) as *mut u8);
+    let reject_closure =
+        root(js_closure_alloc(crate::fn_info!(array_from_async_reject, 1), 1) as *mut u8);
+    let value_closure =
+        root(js_closure_alloc(crate::fn_info!(array_from_async_value_step, 1), 1) as *mut u8);
+    let mapped_closure =
+        root(js_closure_alloc(crate::fn_info!(array_from_async_mapped_step, 1), 1) as *mut u8);
+    let abrupt_closure =
+        root(js_closure_alloc(crate::fn_info!(array_from_async_abrupt_step, 1), 1) as *mut u8);
+    let cell = |handle: &crate::gc::RuntimeHandle<'_>| {
+        crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64())
     };
-    let iter_value = iter_value.get_nanbox_f64();
-    crate::closure::closure_set_capture_ref(state, AFA_SOURCE_ARRAY, source_arr as i64);
-    js_closure_set_capture_f64(state, AFA_ITERATOR_VALUE, iter_value);
-    crate::closure::closure_set_capture_ref(state, AFA_REJECT_CLOSURE, reject_closure as i64);
-    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn.get_nanbox_f64());
-    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg.get_nanbox_f64());
-    js_closure_set_capture_f64(state, AFA_INDEX, 0.0);
-    js_closure_set_capture_f64(state, AFA_CONSTRUCTED, constructed.get_nanbox_f64());
-    crate::closure::closure_set_capture_ref(state, AFA_VALUE_CLOSURE, value_closure as i64);
-    crate::closure::closure_set_capture_ref(state, AFA_MAPPED_CLOSURE, mapped_closure as i64);
+    let closure = |handle| cell(handle) as *mut crate::closure::ClosureHeader;
 
-    if source_arr.is_null() {
-        array_from_async_call_next(iter_value, state, reject_closure);
+    let state_ref = cell(&state);
+    crate::closure::closure_set_capture_ref(closure(&reject_closure), 0, cell(&result_promise));
+    crate::closure::closure_set_capture_ref(closure(&value_closure), 0, state_ref);
+    crate::closure::closure_set_capture_ref(closure(&mapped_closure), 0, state_ref);
+    crate::closure::closure_set_capture_ref(closure(&abrupt_closure), 0, state_ref);
+
+    let array_like = if len.is_some() {
+        input.get_nanbox_f64()
     } else {
-        array_from_async_array_next(state);
+        undefined_value()
+    };
+    let st = closure(&state);
+    crate::closure::closure_set_capture_ref(st, AFA_RESULT_PROMISE, cell(&result_promise));
+    crate::closure::closure_set_capture_ref(st, AFA_RESULT_ARRAY, cell(&result_arr));
+    js_closure_set_capture_f64(st, AFA_ARRAY_LIKE, array_like);
+    js_closure_set_capture_f64(st, AFA_LENGTH, len.unwrap_or(0.0));
+    crate::closure::closure_set_capture_ref(st, AFA_ABRUPT_CLOSURE, cell(&abrupt_closure));
+    js_closure_set_capture_f64(st, AFA_ITERATOR_VALUE, iter_value.get_nanbox_f64());
+    crate::closure::closure_set_capture_ref(st, AFA_REJECT_CLOSURE, cell(&reject_closure));
+    js_closure_set_capture_f64(st, AFA_MAP_FN, map_fn.get_nanbox_f64());
+    js_closure_set_capture_f64(st, AFA_THIS_ARG, this_arg.get_nanbox_f64());
+    js_closure_set_capture_f64(st, AFA_INDEX, 0.0);
+    js_closure_set_capture_f64(st, AFA_CONSTRUCTED, constructed.get_nanbox_f64());
+    crate::closure::closure_set_capture_ref(st, AFA_VALUE_CLOSURE, cell(&value_closure));
+    crate::closure::closure_set_capture_ref(st, AFA_MAPPED_CLOSURE, cell(&mapped_closure));
+
+    if len.is_none() {
+        array_from_async_call_next(st);
+    } else {
+        array_from_async_array_next(st);
     }
 
-    boxed_promise(result_promise)
+    result_promise.get_nanbox_f64()
 }
 
-/// Helper that calls `iter.next()` (returning a Promise) and attaches
-/// `chain_closure` as both fulfill and reject handlers. Used by the async
-/// iterator path of `js_array_from_async`.
-fn array_from_async_call_next(
-    iter_value: f64,
-    chain_closure: *const crate::closure::ClosureHeader,
-    reject_closure: *const crate::closure::ClosureHeader,
-) {
-    let method_name = b"next";
-    // Call iter.next() — returns a Promise<{value, done}> for async generators
-    // or `{value, done}` directly for sync iterators.
-    let next_result = unsafe {
-        crate::object::js_native_call_method(
+fn array_from_async_is_iterator_path(state: *const crate::closure::ClosureHeader) -> bool {
+    crate::closure::js_closure_get_capture_f64(state, AFA_ITERATOR_VALUE).to_bits()
+        != crate::value::TAG_UNDEFINED
+}
+
+fn array_from_async_reject_result(state: *const crate::closure::ClosureHeader, reason: f64) {
+    let result_promise = crate::closure::closure_capture_ref(state, AFA_RESULT_PROMISE);
+    js_promise_reject(result_promise as *mut Promise, reason);
+}
+
+/// `Await(Call(next, iterator))`, continuing in [`array_from_async_step`].
+fn array_from_async_call_next(state: *const crate::closure::ClosureHeader) {
+    let iter_value = crate::closure::js_closure_get_capture_f64(state, AFA_ITERATOR_VALUE);
+    // `next` is user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state as i64));
+    let next_result = crate::exception::catch_js_throw(|| unsafe {
+        let result = crate::object::js_native_call_method(
             iter_value,
-            method_name.as_ptr() as *const i8,
-            method_name.len(),
+            b"next".as_ptr() as *const i8,
+            4,
             std::ptr::null(),
             0,
-        )
-    };
-
-    // If the result is a Promise pointer, attach the handler via .then.
-    let next_ptr = crate::value::js_nanbox_get_pointer(next_result) as usize;
-    if next_ptr != 0 {
-        unsafe {
-            let gc_header = (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
-                let next_promise = next_ptr as *mut Promise;
-                js_promise_then(next_promise, chain_closure, reject_closure);
-                return;
-            }
+        );
+        js_promise_resolved(result)
+    });
+    let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+        as *const crate::closure::ClosureHeader;
+    match next_result {
+        Ok(awaited) => {
+            let reject = crate::closure::closure_capture_ref(state, AFA_REJECT_CLOSURE)
+                as *const crate::closure::ClosureHeader;
+            js_promise_then(awaited, state, reject);
         }
+        Err(reason) => array_from_async_reject_result(state, reason),
     }
-    // Synchronous iterator path: invoke the handler directly with the
-    // result so the iteration loop continues without going through .then.
-    array_from_async_step(
-        chain_closure as *const _,
-        crate::closure::plain_call_receiver(),
-        next_result,
-    );
 }
 
 extern "C" fn array_from_async_reject(
@@ -1524,80 +1528,68 @@ extern "C" fn array_from_async_reject(
     0.0
 }
 
-/// `.then(...)` handler invoked once per `.next()` resolution. Reads the
-/// `{value, done}` iter-result, pushes `value` into the accumulator array,
-/// and either resolves the output Promise (when `done`) or schedules
-/// another `.next()` call.
+/// `.then(...)` handler invoked once per `.next()` resolution: finishes on
+/// `done`, otherwise maps or appends `value`.
 extern "C" fn array_from_async_step(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     iter_result: f64,
 ) -> f64 {
-    let result_promise =
-        crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE) as *mut Promise;
-    let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
-        as *mut crate::array::ArrayHeader;
-    let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
-
-    if result_promise.is_null() || result_arr.is_null() {
+    // Building the error and reading `done` / `value` (maybe getters) collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+    if !crate::collection_iter::is_entry_object(iter_result) {
+        let message = format!(
+            "Iterator result {} is not an object",
+            render_from_async_callback(iter_result)
+        );
+        let error = type_error_value(&message);
+        let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
+        array_from_async_reject_result(state, error);
         return 0.0;
     }
-
-    // Read `done` and `value` off the iter result. The result is either an
-    // object with those fields, or undefined (if next() returned undefined).
-    let result_bits = iter_result.to_bits();
-    let result_obj_ptr = if (result_bits >> 48) == 0x7FFD {
-        (result_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader
-    } else if result_bits != 0 && result_bits <= 0x0000_FFFF_FFFF_FFFF {
-        result_bits as *const crate::object::ObjectHeader
-    } else {
-        // Treat malformed result as `done: true`.
-        std::ptr::null()
+    let result_h = scope.root_nanbox_f64(iter_result);
+    let read = |name: &[u8]| {
+        let key = crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32);
+        let obj = crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64())
+            as *const crate::object::ObjectHeader;
+        f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
     };
-
-    if result_obj_ptr.is_null() {
-        array_from_async_finish(closure);
-        return 0.0;
+    let step = crate::exception::catch_js_throw(|| {
+        (crate::value::js_is_truthy(read(b"done")) == 0).then(|| read(b"value"))
+    });
+    let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+        as *const crate::closure::ClosureHeader;
+    match step {
+        Ok(Some(value)) => array_from_async_map_or_push(state, value),
+        Ok(None) => array_from_async_finish(state),
+        Err(reason) => array_from_async_reject_result(state, reason),
     }
-
-    // Look up "done" and "value" fields by name.
-    let done_key = make_static_string(b"done");
-    let value_key = make_static_string(b"value");
-    let done_jv = crate::object::js_object_get_field_by_name(result_obj_ptr, done_key);
-    let value_jv = crate::object::js_object_get_field_by_name(result_obj_ptr, value_key);
-    let done_f64 = f64::from_bits(done_jv.bits());
-    let value_f64 = f64::from_bits(value_jv.bits());
-
-    if crate::value::js_is_truthy(done_f64) != 0 {
-        array_from_async_finish(closure);
-        return 0.0;
-    }
-
-    array_from_async_await_value(closure, value_f64);
-
-    let _ = iter_value;
-
     0.0
 }
 
-fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
-    let source_arr = crate::closure::closure_capture_ref(closure, AFA_SOURCE_ARRAY)
-        as *const crate::array::ArrayHeader;
-    let result_promise =
-        crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE) as *mut Promise;
-    let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
-        as *mut crate::array::ArrayHeader;
-    if source_arr.is_null() || result_promise.is_null() || result_arr.is_null() {
+/// `Await(? Get(arrayLike, k))` for the next index, or the finish once `k`
+/// reaches the length read before `Construct`.
+fn array_from_async_array_next(state: *const crate::closure::ClosureHeader) {
+    let index = crate::closure::js_closure_get_capture_f64(state, AFA_INDEX);
+    if index >= crate::closure::js_closure_get_capture_f64(state, AFA_LENGTH) {
+        array_from_async_finish(state);
         return;
     }
-    let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
-    let length = unsafe { (*source_arr).length as usize };
-    if index >= length {
-        array_from_async_finish(closure);
-        return;
+    let array_like = crate::closure::js_closure_get_capture_f64(state, AFA_ARRAY_LIKE);
+    // An element getter is user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state as i64));
+    let value = crate::exception::catch_js_throw(|| {
+        crate::object::js_object_get_index_polymorphic(array_like.to_bits() as i64, index)
+    });
+    let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+        as *const crate::closure::ClosureHeader;
+    match value {
+        Ok(value) => array_from_async_await_value(state, value),
+        Err(reason) => array_from_async_reject_result(state, reason),
     }
-    let value = crate::array::js_array_get_f64(source_arr, index as u32);
-    array_from_async_await_value(closure, value);
 }
 
 /// Resolves the result promise with the collected values: the accumulator,
@@ -1669,9 +1661,9 @@ fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, v
 
     let mapped_closure = crate::closure::closure_capture_ref(closure, AFA_MAPPED_CLOSURE)
         as *const crate::closure::ClosureHeader;
-    let reject = crate::closure::closure_capture_ref(closure, AFA_REJECT_CLOSURE)
+    let abrupt = crate::closure::closure_capture_ref(closure, AFA_ABRUPT_CLOSURE)
         as *const crate::closure::ClosureHeader;
-    js_promise_then(mapped_promise, mapped_closure, reject);
+    js_promise_then(mapped_promise, mapped_closure, abrupt);
 }
 
 extern "C" fn array_from_async_mapped_step(
@@ -1721,9 +1713,7 @@ fn array_from_async_push_and_continue(
                 result,
             ),
             Err(reason) => {
-                let result_promise =
-                    crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
-                js_promise_reject(result_promise as *mut Promise, reason);
+                array_from_async_abrupt(closure, reason);
                 return;
             }
         }
@@ -1732,22 +1722,78 @@ fn array_from_async_push_and_continue(
     let next_index = index + 1.0;
     crate::closure::js_closure_set_capture_f64(closure as *mut _, AFA_INDEX, next_index);
 
-    let source_arr = crate::closure::closure_capture_ref(closure, AFA_SOURCE_ARRAY)
-        as *const crate::array::ArrayHeader;
-    if source_arr.is_null() {
-        let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
-        let reject = crate::closure::closure_capture_ref(closure, AFA_REJECT_CLOSURE)
-            as *const crate::closure::ClosureHeader;
-        array_from_async_call_next(iter_value, closure, reject);
+    if array_from_async_is_iterator_path(closure) {
+        array_from_async_call_next(closure);
     } else {
         array_from_async_array_next(closure);
     }
 }
 
-/// Helper to allocate a static StringHeader for property-name lookups.
-/// Reuses `js_string_from_bytes` so the result is GC-tracked.
-fn make_static_string(bytes: &[u8]) -> *const crate::string::StringHeader {
-    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+extern "C" fn array_from_async_abrupt_step(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
+    let state =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
+    if !state.is_null() {
+        array_from_async_abrupt(state, reason);
+    }
+    0.0
+}
+
+/// Rejects the result with `reason`. On the iterator path `AsyncIteratorClose`
+/// runs first: `return()` is called and its result awaited, and a failure of
+/// either is dropped in favor of `reason`.
+fn array_from_async_abrupt(state: *const crate::closure::ClosureHeader, reason: f64) {
+    if !array_from_async_is_iterator_path(state) {
+        array_from_async_reject_result(state, reason);
+        return;
+    }
+    let iter_value = crate::closure::js_closure_get_capture_f64(state, AFA_ITERATOR_VALUE);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state as i64));
+    let reason_h = scope.root_nanbox_f64(reason);
+    let returned = crate::exception::catch_js_throw(|| unsafe {
+        let result = crate::object::js_native_call_method(
+            iter_value,
+            b"return".as_ptr() as *const i8,
+            6,
+            std::ptr::null(),
+            0,
+        );
+        js_promise_resolved(result)
+    });
+    let awaited = match returned {
+        Ok(awaited) => scope.root_nanbox_f64(crate::value::js_nanbox_pointer(awaited as i64)),
+        Err(_) => {
+            let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+                as *const crate::closure::ClosureHeader;
+            array_from_async_reject_result(state, reason_h.get_nanbox_f64());
+            return;
+        }
+    };
+    let rethrow = crate::closure::js_closure_alloc(crate::fn_info!(array_from_async_rethrow, 1), 2);
+    let state = crate::value::js_nanbox_get_pointer(state_h.get_nanbox_f64())
+        as *const crate::closure::ClosureHeader;
+    let result_promise = crate::closure::closure_capture_ref(state, AFA_RESULT_PROMISE);
+    crate::closure::closure_set_capture_ref(rethrow, 0, result_promise);
+    crate::closure::js_closure_set_capture_f64(rethrow, 1, reason_h.get_nanbox_f64());
+    let awaited = crate::value::js_nanbox_get_pointer(awaited.get_nanbox_f64()) as *mut Promise;
+    js_promise_then(awaited, rethrow, rethrow);
+}
+
+extern "C" fn array_from_async_rethrow(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    js_promise_reject(
+        result_promise,
+        crate::closure::js_closure_get_capture_f64(closure, 1),
+    );
+    0.0
 }
 
 #[cfg(test)]

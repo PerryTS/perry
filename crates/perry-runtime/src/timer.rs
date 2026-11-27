@@ -271,7 +271,7 @@ pub extern "C" fn js_immediate_has_pending() -> i32 {
     // check phase in progress (or the next one) ends, so the loop must not
     // park ahead of either.
     #[cfg(not(target_arch = "wasm32"))]
-    if crate::turnloop_net::eof_parked() || crate::turnloop_net::close_queued() {
+    if crate::turnloop_net::eof_parked() || crate::turnloop_net::close_ready() {
         return 1;
     }
     i32::from(store::check_pending())

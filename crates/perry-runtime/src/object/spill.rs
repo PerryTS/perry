@@ -315,6 +315,46 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
     }
 }
 
+/// Does `src` hold a value at every spill position `from..to` (the keys of
+/// its layout past the live inline bound)? [`spill_copy_into_fresh`]'s
+/// precondition. Reads only.
+pub(crate) unsafe fn spill_positions_present(
+    src: *const ObjectHeader,
+    from: usize,
+    to: usize,
+) -> bool {
+    to <= SPILL_MAX_FIELD_INDEX && (from..to).all(|i| spill_get_present(src as usize, i).is_some())
+}
+
+/// A structural spread result's spill (`spread::structural`): `dst` is a
+/// fresh object born on `src`'s layout word, with no meta record yet. It
+/// gets its own exact buffer holding `src`'s spill words `from..to`, each
+/// stored with [`spill_store_slot`]'s layout note and generational barrier
+/// (the positions below `from` stay holes). The caller holds a
+/// `GcSuppressScope`, so neither object moves, and checked
+/// [`spill_positions_present`].
+pub(crate) unsafe fn spill_copy_into_fresh(
+    dst: *mut ObjectHeader,
+    src: *const ObjectHeader,
+    from: usize,
+    to: usize,
+) {
+    object_meta_ensure(crate::meta_obj_runtime_born!(dst), MetaReason::Spill);
+    let spill = crate::array::js_array_alloc_with_length_exact(to as u32);
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(dst, to));
+    (*meta).spill = spill as u64;
+    crate::gc::runtime_write_barrier_slot(
+        meta as usize,
+        &(*meta).spill as *const _ as usize,
+        spill as u64,
+    );
+    let src_meta = crate::meta_read!(crate::meta_obj_from_storage!(src as *mut _, to));
+    let words = spill_elements((*src_meta).spill as *const crate::array::ArrayHeader);
+    for i in from..to {
+        spill_store_slot(spill, i, *words.add(i));
+    }
+}
+
 #[cfg(test)]
 pub(crate) type SpillSafepointHook = fn(usize);
 

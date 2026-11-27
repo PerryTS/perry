@@ -108,6 +108,22 @@ mod error_prop_order_tests {
         }
     }
 
+    /// A c-ares error stages an `errno` key Node leaves `undefined`; it leads
+    /// the staged fields like a numeric one.
+    #[test]
+    fn staged_undefined_errno_is_an_own_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let msg = js_string_from_bytes(b"queryA ENOTFOUND x.invalid".as_ptr(), 26);
+        register_error_errno_undefined(msg);
+        register_error_code_pub(msg, "ENOTFOUND");
+        register_error_syscall(msg, "queryA");
+        register_error_hostname(msg, "x.invalid".to_string());
+        let err = crate::error::js_error_new_with_message(msg) as usize;
+        assert_eq!(keys_of(err), ["errno", "code", "syscall", "hostname"]);
+        let errno = error_user_prop(err, "errno").expect("errno is an own key");
+        assert!(crate::value::JSValue::from_bits(errno.to_bits()).is_undefined());
+    }
+
     /// Reassigning an existing key keeps its ORIGINAL position — in node,
     /// `o.a=1; o.b=2; o.a=3` still enumerates `a,b`.
     #[test]

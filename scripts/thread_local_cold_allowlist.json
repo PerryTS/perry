@@ -60,7 +60,7 @@
     "crates/perry-runtime/src/node_stream_constructors/birth.rs": 1,
     "crates/perry-runtime/src/node_stream_constructors/birth_memo.rs": 6,
     "crates/perry-runtime/src/node_submodules/blob.rs": 4,
-    "crates/perry-runtime/src/node_submodules/diagnostics.rs": 10,
+    "crates/perry-runtime/src/node_submodules/diagnostics.rs": 9,
     "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs": 2,
     "crates/perry-runtime/src/node_submodules/mod.rs": 2,
     "crates/perry-runtime/src/node_submodules/test.rs": 11,
