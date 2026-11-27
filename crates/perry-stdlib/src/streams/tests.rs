@@ -940,3 +940,70 @@ fn transform_readable_error_clears_the_transformer() {
     let algorithms = with_ts(TsRef(transform_id), |t| (t.transform_cb, t.flush_cb)).unwrap();
     assert_eq!(algorithms, (0, 0));
 }
+
+/// A sink algorithm that runs a moving minor collection, as a JS `write()` /
+/// `close()` that allocates does at one of its safepoints.
+extern "C" fn collecting_sink_algorithm(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    perry_runtime::gc::gc_collect_minor();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// The write and close request promises settle although the sink's write()
+/// and close() move them (Next.js route responses stalled after the body
+/// chunk: the write promise was resolved at its old address).
+#[test]
+fn writable_requests_settle_across_a_moving_sink() {
+    let _serial = serial_guard();
+    perry_runtime::gc::gc_init();
+    struct RestoreGc(i32);
+    impl Drop for RestoreGc {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            perry_runtime::gc::js_gc_force_evacuation_test_override(self.0);
+        }
+    }
+    let _restore = RestoreGc(perry_runtime::gc::js_gc_force_evacuation_test_override(1));
+    perry_runtime::gc::js_gc_write_barriers_emitted(1);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    unsafe {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let sink = || {
+            let cb = js_closure_alloc(
+                perry_runtime::fn_info!(collecting_sink_algorithm, 0; with_declared(0)),
+                0,
+            );
+            f64::from_bits(JSValue::pointer(cb as *const u8).bits())
+        };
+        let write = scope.root_nanbox_f64(sink());
+        let close = scope.root_nanbox_f64(sink());
+        let stream = scope.root_nanbox_f64(js_writable_stream_new(
+            undefined,
+            write.get_nanbox_f64(),
+            close.get_nanbox_f64(),
+            undefined,
+            1.0,
+        ));
+        let writer = scope.root_nanbox_f64(js_writable_stream_get_writer(stream.get_nanbox_f64()));
+        let written = scope.root_raw_mut_ptr(js_writer_write(writer.get_nanbox_f64(), 1.0));
+        for _ in 0..4 {
+            perry_runtime::promise::js_promise_run_microtasks();
+        }
+        assert_eq!(
+            perry_runtime::promise::js_promise_state(written.get_raw_mut_ptr()),
+            1,
+            "the write request settles after a moving write()"
+        );
+        let closed = scope.root_raw_mut_ptr(js_writer_close(writer.get_nanbox_f64()));
+        for _ in 0..4 {
+            perry_runtime::promise::js_promise_run_microtasks();
+        }
+        assert_eq!(
+            perry_runtime::promise::js_promise_state(closed.get_raw_mut_ptr()),
+            1,
+            "the close request settles after a moving close()"
+        );
+    }
+}
