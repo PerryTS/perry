@@ -1555,6 +1555,7 @@ mod native_parent;
 mod e11_null_parent;
 mod native_parent_program_class;
 mod nparg_error_args;
+mod keyset_store;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;
