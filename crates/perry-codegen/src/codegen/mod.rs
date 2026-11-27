@@ -315,7 +315,7 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    AccessorKind, DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep,
+    AccessorKind, DirectAbi, ElisionFacts, FactsArrRep, FactsHostCall, FactsBody, FactsClass, FactsElemRep,
     FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
     FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn,
     FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,

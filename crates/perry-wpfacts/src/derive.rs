@@ -321,13 +321,29 @@ pub enum Verdict {
     /// method, a call), its object or primitive (a data member).
     /// `nullable`: `undefined`/`null` beside them, the operation's own
     /// TypeError arm.
-    HostMember { member: String, nullable: bool },
+    /// `holder`: the holder's place in the run-time prototype registry,
+    /// `(provider_id, object_index)` (`HostTable::registry`), when the
+    /// holder is a provider object (the code at the site reads the member
+    /// from it, HOSTSURF §3.2); `None` for a key on `%Global%` itself.
+    HostMember {
+        member: String,
+        nullable: bool,
+        holder: Option<(u32, u32)>,
+    },
     /// HOSTSURF H2: a read whose receivers resolve the key to one manifest
     /// accessor: its getter runs (`member` names it).
-    HostGet { member: String, nullable: bool },
+    HostGet {
+        member: String,
+        nullable: bool,
+        holder: Option<(u32, u32)>,
+    },
     /// HOSTSURF H2: a named store whose receivers resolve the key to one
     /// manifest accessor with a setter (OrdinarySet 10.1.9.2 step 7).
-    HostSet { member: String, nullable: bool },
+    HostSet {
+        member: String,
+        nullable: bool,
+        holder: Option<(u32, u32)>,
+    },
     No(String),
 }
 

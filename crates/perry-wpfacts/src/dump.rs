@@ -355,9 +355,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::KnownObjectStore => "known-object-store".to_string(),
             Verdict::ProxyTrap => "proxy-trap".to_string(),
             Verdict::IntrinsicCall => "intrinsic-call".to_string(),
-            Verdict::HostMember { member, nullable } => host_verdict("member", member, *nullable),
-            Verdict::HostGet { member, nullable } => host_verdict("get", member, *nullable),
-            Verdict::HostSet { member, nullable } => host_verdict("set", member, *nullable),
+            Verdict::HostMember { member, nullable, .. } => host_verdict("member", member, *nullable),
+            Verdict::HostGet { member, nullable, .. } => host_verdict("get", member, *nullable),
+            Verdict::HostSet { member, nullable, .. } => host_verdict("set", member, *nullable),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(

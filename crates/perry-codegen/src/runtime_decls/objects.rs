@@ -705,6 +705,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, I64, I64, PTR, I64],
     );
     module.declare_function("js_method_lookup", DOUBLE, &[PTR, DOUBLE, I64, I64, I64]);
+    // HOSTSURF H5 (`expr/host_site.rs`): a proven host site's registry load
+    // and own-slot read (perry-runtime `host_registry.rs`,
+    // `perry_host_own_member_v1`), and the provider's endpoint call (the
+    // provider runtime exports it: feather's
+    // `native_function_operation_with_arguments`).
+    module.declare_function("perry_host_prototype_v1", DOUBLE, &[I32, I32]);
+    module.declare_function("perry_host_own_member_v1", DOUBLE, &[DOUBLE, I64, I32]);
+    module.declare_function("perry_binding_native_call_v1", DOUBLE, &[I64, I64, PTR, I32]);
     module.declare_function("js_bm_lookup", DOUBLE, &[PTR, DOUBLE, I64, I64, I64, I64]);
     // A class method site's own-override check by the site's key atom
     // (`object/layout_probe.rs`).

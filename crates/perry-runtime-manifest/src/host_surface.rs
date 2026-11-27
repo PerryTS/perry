@@ -265,6 +265,11 @@ pub struct HostTable {
     pub attributes: BTreeMap<(&'static str, &'static str), u8>,
     /// `named-getter-method` members (by member entry name).
     pub named_getters: BTreeSet<&'static str>,
+    /// Each provider object's place in the run-time prototype registry:
+    /// `(provider_id, object_index)` (`object_index` = its index in the
+    /// provider's `objects`), the pair its installer passes to
+    /// `perry_host_register_prototype_v1` and a proven site's code reads.
+    pub registry: BTreeMap<&'static str, (u32, u32)>,
 }
 
 impl HostTable {
@@ -792,7 +797,7 @@ pub fn load(surfaces: &[HostSurface], realm: &StaticRealm<'_>) -> Result<HostTab
             return Err(format!("{p}: a function-endpoint binding names its endpoint and shim"));
         }
         let c = Ctx { l: &l, s, pl, tag_names: &tag_names };
-        for o in &s.objects {
+        for (index, o) in s.objects.iter().enumerate() {
             let at = format!("{p}: object `{}`", o.name);
             let full = holder_name(&l, p, &o.name)?;
             if let Some((other, local)) = o.name.split_once(':') {
@@ -828,6 +833,9 @@ pub fn load(surfaces: &[HostSurface], realm: &StaticRealm<'_>) -> Result<HostTab
             };
             let n = leak(full.clone());
             t.object_kinds.insert(n, kind);
+            let index = u32::try_from(index)
+                .map_err(|_| format!("{at}: object index does not fit the registry's u32"))?;
+            t.registry.insert(n, (s.provider_id, index));
             if let Some(iface) = &o.interface {
                 if kind == HostObjectKind::Prototype
                     && t.interfaces.insert(leak(format!("{p}:{iface}")), n).is_some()

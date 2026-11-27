@@ -301,6 +301,7 @@ pub(crate) use self::prototype_addr::{
     object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
     realm_array_values_addr, realm_restricted_callee_pair_addr, RealmIntrinsics,
 };
+pub(crate) use prototype_addr::{host_prototype_addr, note_host_prototype};
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
     test_memoized_prototype_addr, test_prototype_addr_cache_wiring, test_prototype_addr_cell_count,

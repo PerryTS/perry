@@ -1933,6 +1933,13 @@ pub(crate) fn try_lower_proven_getter(
     } else {
         crate::codegen::AccessorKind::Get
     };
+    // HOSTSURF H5: a read proven to run a provider accessor's getter.
+    let tested = tested_in_block(ctx, object);
+    if let Some(v) =
+        super::host_site::try_lower_host_getter(ctx, object, property, offset, kind, tested)?
+    {
+        return Ok(Some(v));
+    }
     let Some((fn_name, nullable)) = proven_accessor_fn(ctx, object, property, offset, kind) else {
         return Ok(None);
     };

@@ -783,6 +783,8 @@ fn elision_for(
                         )),
                 "builtin dispatch certificate requires the emitted intrinsic arm"
             );
+            // HOSTSURF H5: the proven host sites.
+            host_sites(pf, module, &mut out);
             // ACCBUILD2 P3: the named sites proven to call one accessor.
             // Every record at an offset must agree, or the offset is left out.
             let mut refused: std::collections::BTreeSet<(
@@ -1770,6 +1772,70 @@ mod native_addon_tests;
 #[path = "program_facts/element_tests.rs"]
 mod element_tests;
 
+/// HOSTSURF H5 (§3.1): this module's proven host sites. A method call with
+/// `Verdict::HostMember`, a read with `HostGet`, a store with `HostSet`, whose
+/// holder is a registered provider object (`holder` is `Some`). Every record
+/// at a site must agree, or the site is left out (it keeps its ordinary
+/// lowering); a key on `%Global%` itself (`holder` `None`) is no host site.
+fn host_sites(
+    pf: &perry_wpfacts::ProgramFacts,
+    module: usize,
+    out: &mut perry_codegen::ElisionFacts,
+) {
+    use perry_codegen::{AccessorKind, FactsHostCall};
+    use perry_wpfacts::derive::Access;
+    use perry_wpfacts::Verdict;
+    use std::collections::btree_map::Entry;
+    use std::collections::BTreeMap;
+    fn merge<K: Ord>(map: &mut BTreeMap<K, Option<FactsHostCall>>, at: K, v: Option<FactsHostCall>) {
+        match map.entry(at) {
+            Entry::Vacant(e) => {
+                e.insert(v);
+            }
+            Entry::Occupied(mut e) => {
+                if *e.get() != v {
+                    e.insert(None);
+                }
+            }
+        }
+    }
+    let host = |holder: &Option<(u32, u32)>, nullable: bool| {
+        holder.map(|(provider_id, object_index)| FactsHostCall {
+            provider_id,
+            object_index,
+            nullable,
+        })
+    };
+    let mut calls: BTreeMap<(u32, String), Option<FactsHostCall>> = BTreeMap::new();
+    let mut accessors: BTreeMap<(u32, String, AccessorKind), Option<FactsHostCall>> =
+        BTreeMap::new();
+    for s in pf.sites.iter().filter(|s| s.module as usize == module) {
+        if s.is_call {
+            let v = match &s.verdict {
+                Verdict::HostMember { holder, nullable, .. } if !s.access.is_store() => {
+                    host(holder, *nullable)
+                }
+                _ => None,
+            };
+            merge(&mut calls, (s.byte_offset, s.key.clone()), v);
+            continue;
+        }
+        let kind = match s.access {
+            Access::Set { .. } => AccessorKind::Set,
+            Access::UpdateGet => AccessorKind::UpdateGet,
+            Access::Read => AccessorKind::Get,
+        };
+        let v = match (&s.verdict, kind) {
+            (Verdict::HostGet { holder, nullable, .. }, AccessorKind::Get | AccessorKind::UpdateGet)
+            | (Verdict::HostSet { holder, nullable, .. }, AccessorKind::Set) => host(holder, *nullable),
+            _ => None,
+        };
+        merge(&mut accessors, (s.byte_offset, s.key.clone(), kind), v);
+    }
+    out.host_member_calls = calls.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+    out.host_accessor_sites = accessors.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+}
+
 fn verification_sites(
     pf: &perry_wpfacts::ProgramFacts,
     path: Option<&str>,
@@ -1902,6 +1968,10 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
 #[cfg(test)]
 #[path = "program_facts/method_call_tests.rs"]
 mod method_call_tests;
+
+#[cfg(test)]
+#[path = "program_facts/host_site_tests.rs"]
+mod host_site_tests;
 
 #[cfg(test)]
 #[path = "program_facts/accessor_kind_tests.rs"]

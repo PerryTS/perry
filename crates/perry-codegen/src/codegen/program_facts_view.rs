@@ -368,6 +368,20 @@ pub enum AccessorKind {
     Set,
 }
 
+/// HOSTSURF H5 (§3.1): one proven host site. The member is an own property
+/// of a provider's registered prototype (`provider_id`, `object_index`, the
+/// pair the provider's installer passed to `perry_host_register_prototype_v1`)
+/// under the site's key: a method (a call), or the getter / setter of an own
+/// accessor (a read / a store). `nullable`: the receiver can also be
+/// `undefined` / `null`; the site keeps its one receiver test, whose nullish
+/// edge is the complete operation (it throws the TypeError).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsHostCall {
+    pub provider_id: u32,
+    pub object_index: u32,
+    pub nullable: bool,
+}
+
 /// The slice-2 elision inputs of one module.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ElisionFacts {
@@ -714,6 +728,17 @@ pub struct ElisionFacts {
     /// to the method its class declares (`SiteFacts::closed_methods`): a
     /// dispatch on the receiver's class alone needs no shadow test.
     pub closed_methods: std::collections::BTreeSet<(u32, String)>,
+    /// HOSTSURF H5: this module's named method calls `r.k(args)` whose
+    /// verdict is `Verdict::HostMember` (keyed like `native_member_calls`,
+    /// by the callee read's offset, with the key): the call reads the method
+    /// from the holder's own slot and calls `perry_binding_native_call_v1`.
+    pub host_member_calls: std::collections::BTreeMap<(u32, String), FactsHostCall>,
+    /// HOSTSURF H5: this module's named reads and stores whose verdict is
+    /// `Verdict::HostGet` / `HostSet` (keyed like `accessors`): the getter or
+    /// setter read from the holder's own accessor, called through
+    /// `perry_binding_native_call_v1` (the method path, no realm entry, §3.4).
+    pub host_accessor_sites:
+        std::collections::BTreeMap<(u32, String, AccessorKind), FactsHostCall>,
 }
 
 impl ElisionFacts {
@@ -751,6 +776,8 @@ impl ElisionFacts {
             && self.method_calls.is_empty()
             && self.late_call_bodies.is_empty()
             && self.closed_methods.is_empty()
+            && self.host_member_calls.is_empty()
+            && self.host_accessor_sites.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

@@ -5251,6 +5251,9 @@ perry_geisterhand_request_tree	ptr	ptr
 perry_geisterhand_request_value	ptr	i64,ptr
 perry_has_work	i32s	
 perry_host_keeps_thread_after_main	void	
+perry_host_own_member_v1	f64	f64,i64,i32u
+perry_host_prototype_v1	f64	i32u,i32u
+perry_host_register_prototype_v1	void	i32u,i32u,i64
 perry_i18n_format_currency	ptr	f64,i32s
 perry_i18n_format_currency_default	ptr	f64
 perry_i18n_format_date	ptr	f64,i32s,i32s

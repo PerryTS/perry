@@ -172,6 +172,10 @@ pub(crate) fn try_lower_proven_setter(
     value: &Expr,
     offset: u32,
 ) -> Result<Option<String>> {
+    // HOSTSURF H5: a store proven to run a provider accessor's setter.
+    if let Some(v) = super::host_site::try_lower_host_setter(ctx, object, property, value, offset)? {
+        return Ok(Some(v));
+    }
     let Some((fn_name, nullable)) = super::wpfacts_access::proven_accessor_fn(
         ctx,
         object,
@@ -206,7 +210,7 @@ pub(crate) fn try_lower_proven_setter(
 /// (6.2.5.6 step 3.a) after the value was evaluated (13.15.2), so it never
 /// returns: the arm ends in `unreachable`. Leaves the current block on the
 /// object edge, where later accesses of the binding need no test.
-fn emit_nullish_store_test(
+pub(crate) fn emit_nullish_store_test(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,

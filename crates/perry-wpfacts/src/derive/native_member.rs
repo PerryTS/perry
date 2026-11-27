@@ -251,7 +251,8 @@ pub(super) fn host_site(
             }
         }
     }
-    let (_, value) = found.filter(|_| any)?;
+    let (holder, value) = found.filter(|_| any)?;
+    let holder = crate::host::current().and_then(|h| h.table.registry.get(holder).copied());
     if nn & UNDEF != 0 {
         receivers.push("primitive:undefined (TypeError)".into());
     }
@@ -266,10 +267,12 @@ pub(super) fn host_site(
         (None, V::Accessor { set: Some(f), .. }, true, _) => Verdict::HostSet {
             member: f.to_string(),
             nullable,
+            holder,
         },
         (None, V::Accessor { get: Some(f), .. }, false, false) => Verdict::HostGet {
             member: f.to_string(),
             nullable,
+            holder,
         },
         (None, V::Accessor { .. }, ..) => {
             Verdict::No("host: an accessor without the part the site runs".into())
@@ -280,11 +283,13 @@ pub(super) fn host_site(
         (None, V::Reference(r), false, _) => Verdict::HostMember {
             member: r.to_string(),
             nullable,
+            holder,
         },
         (None, _, false, true) => Verdict::No("host: a call of a primitive data member".into()),
         (None, _, false, false) => Verdict::HostMember {
             member: format!("{name}:data"),
             nullable,
+            holder,
         },
     };
     Some((receivers, verdict))

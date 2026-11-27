@@ -596,6 +596,10 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // HOSTSURF H5: a call proven to run a provider's native method.
+    if let Some(value) = crate::expr::host_site::try_lower_host_call(ctx, callee, args)? {
+        return Ok(value);
+    }
     if let Expr::PropertyGet {
         object,
         property,

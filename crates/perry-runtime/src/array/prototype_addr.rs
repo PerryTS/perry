@@ -200,6 +200,65 @@ pub(crate) struct RealmIntrinsics {
     /// runtime's own "the builtin namespace" questions read these. Same cell
     /// algebra as the entries.
     namespaces: [Cell<usize>; NAMESPACE_ENTRY_COUNT],
+    /// HOSTSURF §3.2: the native providers' prototype objects
+    /// (`perry_host_register_prototype_v1`), by provider id, then by object
+    /// index. The objects themselves, never copies of their members. `None`
+    /// (all-zero) before the first registration. Same cell algebra as the
+    /// entries.
+    host_prototypes: std::cell::RefCell<Option<Box<HostPrototypes>>>,
+}
+
+/// The registry's cells: one row per provider id, one cell per object index
+/// (0: not registered).
+type HostPrototypes = Vec<(u32, Vec<Cell<usize>>)>;
+
+/// Record this realm's host prototype `(provider_id, object_index)` (its
+/// address). The first registration owns the cell, as the first realm
+/// populated on a thread owns the intrinsic entries.
+pub(crate) fn note_host_prototype(provider_id: u32, object_index: u32, addr: usize) {
+    let mut registry = crate::state::state()
+        .realm_intrinsics
+        .host_prototypes
+        .borrow_mut();
+    let providers = registry.get_or_insert_with(Default::default);
+    let row = match providers.iter().position(|(p, _)| *p == provider_id) {
+        Some(row) => row,
+        None => {
+            providers.push((provider_id, Vec::new()));
+            providers.len() - 1
+        }
+    };
+    let cells = &mut providers[row].1;
+    let index = object_index as usize;
+    if cells.len() <= index {
+        cells.resize_with(index + 1, || Cell::new(0));
+    }
+    let cell = &cells[index];
+    debug_assert!(
+        cell.get() == 0 || cell.get() == addr,
+        "host prototype ({provider_id}, {object_index}) registered twice"
+    );
+    if addr != 0 && cell.get() == 0 {
+        cell.set(addr);
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
+}
+
+/// This realm's host prototype `(provider_id, object_index)` (its address,
+/// healed through any forwarding chain), 0 when it was never registered.
+pub(crate) fn host_prototype_addr(provider_id: u32, object_index: u32) -> usize {
+    let registry = crate::state::state()
+        .realm_intrinsics
+        .host_prototypes
+        .borrow();
+    let cell = registry
+        .as_deref()
+        .and_then(|providers| providers.iter().find(|(p, _)| *p == provider_id))
+        .and_then(|(_, cells)| cells.get(object_index as usize));
+    match cell.map(|c| (c, c.get())) {
+        Some((cell, addr)) if addr != 0 => heal_prototype_addr(cell, addr),
+        _ => 0,
+    }
 }
 
 /// How many namespace intrinsics a realm has: one per global namespace row.
@@ -472,6 +531,15 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
     );
     for cell in &crate::state::state().realm_intrinsics.namespaces {
         rewrite_prototype_addr_slot(cell, visitor);
+    }
+    let registry = crate::state::state()
+        .realm_intrinsics
+        .host_prototypes
+        .borrow();
+    for (_, cells) in registry.iter().flat_map(|providers| providers.iter()) {
+        for cell in cells {
+            rewrite_prototype_addr_slot(cell, visitor);
+        }
     }
 }
 

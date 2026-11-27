@@ -136,7 +136,7 @@ pub use codegen::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
     AccessorKind, AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth,
-    ConstructorContracts, CtorAbi, DefinedClassShape, DirectAbi, ElisionFacts,
+    ConstructorContracts, CtorAbi, DefinedClassShape, DirectAbi, ElisionFacts, FactsHostCall,
     ExportedObjectLiteralCapability, FactsArrRep, FactsBody, FactsClass, FactsElemRep,
     FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
     FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn,

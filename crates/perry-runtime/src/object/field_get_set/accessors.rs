@@ -143,6 +143,39 @@ pub(crate) unsafe fn own_data_field_by_name(
     .map(OwnSlot::data_or_undefined)
 }
 
+/// HOSTSURF §3.2: the member a proven host site calls, read from the
+/// registered prototype `holder` (`perry_host_prototype_v1`) under `key` (an
+/// interned key string): ONE own-slot read, no prototype chain, no
+/// interceptor, no host-kind probe. `part` 0: the own data value (a method);
+/// 1: the own accessor's getter; 2: its setter. The facts prove the key is
+/// that own property of `holder` and nothing writes it (HOSTSURF §2.3), so
+/// any other answer is a provider bug (debug assertion only).
+///
+/// Leaf: no allocation in the Perry heap, no collector poll, no throw, no
+/// JavaScript.
+///
+/// # Safety
+/// `holder` is a registered prototype object; `key` is an interned key
+/// string's address.
+#[no_mangle]
+pub unsafe extern "C" fn perry_host_own_member_v1(holder: f64, key: i64, part: u32) -> f64 {
+    let obj = JSValue::from_bits(holder.to_bits()).as_pointer::<ObjectHeader>();
+    let key = key as usize as *const crate::StringHeader;
+    let slot = own_property_slot(obj, |keys, count| {
+        crate::object::keys_find_property_slot_by_key_ptr(keys, count, key)
+    });
+    let bits = match (slot, part) {
+        (Some(OwnSlot::Data(value)), 0) => value.bits(),
+        (Some(OwnSlot::Accessor { getter, .. }), 1) if getter != 0 => getter,
+        (Some(OwnSlot::Accessor { setter, .. }), 2) if setter != 0 => setter,
+        _ => {
+            debug_assert!(false, "host prototype lacks the proven own member (part {part})");
+            crate::value::TAG_UNDEFINED
+        }
+    };
+    f64::from_bits(bits)
+}
+
 /// Callback-free read of an opaque binding record's own data property.
 /// No string allocation, prototype lookup, accessor invocation or safepoint.
 ///
@@ -238,6 +271,8 @@ enum OwnSlot {
     /// (0 when it has none), read from the holder's slot.
     Accessor {
         getter: u64,
+        /// Its setter (0 when it has none).
+        setter: u64,
     },
 }
 
@@ -245,8 +280,8 @@ impl OwnSlot {
     unsafe fn value_for_receiver(self, receiver: f64) -> JSValue {
         match self {
             Self::Data(value) => value,
-            Self::Accessor { getter: 0 } => JSValue::undefined(),
-            Self::Accessor { getter } => invoke_accessor_getter(getter, receiver),
+            Self::Accessor { getter: 0, .. } => JSValue::undefined(),
+            Self::Accessor { getter, .. } => invoke_accessor_getter(getter, receiver),
         }
     }
 
@@ -303,6 +338,7 @@ unsafe fn own_property_slot(
                 super::super::accessor_pair::slot_accessor_with_live(obj, keys, islot, live);
             return Some(OwnSlot::Accessor {
                 getter: accessor.get,
+                setter: accessor.set,
             });
         }
         if crate::object::overflow::is_table(keys) {

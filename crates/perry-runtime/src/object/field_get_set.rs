@@ -307,7 +307,7 @@ pub(crate) use accessors::{
 };
 pub use accessors::{
     js_object_get_field, js_object_record_get_by_bytes, js_object_record_set_by_bytes,
-    own_property_get_by_bytes,
+    own_property_get_by_bytes, perry_host_own_member_v1,
 };
 pub(crate) use class_object_props::{
     class_evaluation_prototype_class_id, class_object_default_to_string,

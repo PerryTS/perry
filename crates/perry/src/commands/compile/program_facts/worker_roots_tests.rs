@@ -77,7 +77,7 @@ fn worker_activation_retains_owned_import_but_prunes_unrelated_dead_import() {
     let mut ctx = worker_graph();
     let mut roots = vec![PathBuf::from("/fixture/main.ts")];
     roots.extend(module_roots(&ctx).into_iter().map(PathBuf::from));
-    super::super::dynamic_reach::prune(&mut ctx, &roots).unwrap();
+    super::super::dynamic_reach::prune(&mut ctx, &roots, None).unwrap();
     for path in ["main.ts", "file.js", "eval.js", "helper.js"] {
         assert!(ctx
             .native_modules

@@ -201,6 +201,7 @@ pub mod module_hooks;
 pub mod module_require;
 pub mod native_abi;
 pub mod native_arena;
+pub mod host_registry;
 pub mod native_handle;
 pub mod native_payload;
 pub mod native_payload_abi;

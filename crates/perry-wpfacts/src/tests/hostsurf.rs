@@ -39,9 +39,9 @@ fn sites(pf: &crate::ProgramFacts) -> Vec<(u32, String, bool, String)> {
         .filter(|s| s.module == mi)
         .map(|s| {
             let v = match &s.verdict {
-                crate::Verdict::HostMember { member, nullable } => format!("host:member={member}{}", if *nullable { ",nullable" } else { "" }),
-                crate::Verdict::HostGet { member, nullable } => format!("host:get={member}{}", if *nullable { ",nullable" } else { "" }),
-                crate::Verdict::HostSet { member, nullable } => format!("host:set={member}{}", if *nullable { ",nullable" } else { "" }),
+                crate::Verdict::HostMember { member, nullable, .. } => format!("host:member={member}{}", if *nullable { ",nullable" } else { "" }),
+                crate::Verdict::HostGet { member, nullable, .. } => format!("host:get={member}{}", if *nullable { ",nullable" } else { "" }),
+                crate::Verdict::HostSet { member, nullable, .. } => format!("host:set={member}{}", if *nullable { ",nullable" } else { "" }),
                 other => format!("{other:?}"),
             };
             (s.byte_offset, s.key.clone(), s.access.is_store(), format!("{v} top={} recv={:?}", s.top, s.receivers))
