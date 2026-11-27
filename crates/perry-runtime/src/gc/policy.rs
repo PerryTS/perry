@@ -72,14 +72,16 @@ mod major_pacing;
 pub(in crate::gc) use major_pacing::{
     arena_growth_full_escalation_due, major_pacing_live_growth_multiplier,
     note_collection_finished_arena_occupancy, old_gen_growth_since_last_full_bytes,
-    pacing_arena_in_use_bytes, pacing_escalation_reading_bytes,
+    pacing_arena_in_use_bytes,
 };
 #[cfg(test)]
 pub(in crate::gc) use major_pacing::{
     major_pacing_backoff_shift, major_pacing_config, major_pacing_escalation_threshold_for,
 };
 #[cfg(any(perry_diagnostics, test))]
-pub(in crate::gc) use major_pacing::{major_pacing_retaining, major_pacing_snapshot};
+pub(in crate::gc) use major_pacing::{
+    major_pacing_retaining, major_pacing_snapshot, pacing_escalation_reading_bytes,
+};
 use major_pacing::{
     pacing_old_in_use_bytes, update_major_pacing_backoff, MAJOR_PACING_PRODUCTIVE_YIELD_PCT,
     MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER, MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE,
