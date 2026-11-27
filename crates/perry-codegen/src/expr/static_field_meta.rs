@@ -949,19 +949,34 @@ fn static_this_store_slots(
     template: &str,
 ) -> usize {
     fn names<'a>(expr: &'a Expr, is_class: &dyn Fn(&Expr) -> bool, out: &mut Vec<&'a str>) {
-        if let Expr::PropertySet {
-            object, property, ..
-        } = expr
-        {
-            if is_class(object) && !out.contains(&property.as_str()) {
-                out.push(property.as_str());
+        // `this.p = v` lowers to a `PropertySet`, or, in a static field
+        // initializer, to the `PutValueSet` of its assignment chain.
+        let stored = match expr {
+            Expr::PropertySet {
+                object, property, ..
+            } => Some((object.as_ref(), property.as_str())),
+            Expr::PutValueSet { target, key, .. } => match key.as_ref() {
+                Expr::String(name) => Some((target.as_ref(), name.as_str())),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((object, name)) = stored {
+            if is_class(object) && !out.contains(&name) {
+                out.push(name);
             }
         }
         perry_hir::walker::walk_expr_children(expr, &mut |child| names(child, is_class, out));
     }
+    // Static `this`: the evaluation owner (a plain or a boxed local), the
+    // template ref, or `this` in a static block.
     let is_class = |object: &Expr| match object {
         Expr::This => true,
         Expr::LocalGet(id) => Some(*id) == owner,
+        Expr::IndexGet { object, index, .. } => {
+            matches!(object.as_ref(), Expr::LocalGet(id) if Some(*id) == owner)
+                && matches!(index.as_ref(), Expr::Integer(0))
+        }
         Expr::ClassRef(name) => name == template,
         _ => false,
     };

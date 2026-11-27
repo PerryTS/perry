@@ -447,7 +447,14 @@ fn accessor_spread_calls_each_getter_once_and_births_data_keys_in_order() {
     let _suppress = crate::gc::GcSuppressScope::new();
     unsafe {
         let source = object(&[("first", 1.0)]);
-        define_getter(source, "got", closure_value(crate::closure::js_closure_alloc(crate::fn_info!(seven, 0), 0)));
+        define_getter(
+            source,
+            "got",
+            closure_value(crate::closure::js_closure_alloc(
+                crate::fn_info!(seven, 0),
+                0,
+            )),
+        );
         js_object_set_field_by_name(receiver(source), key_ptr("last"), 3.0);
         GETTER_CALLS.with(|c| c.set(0));
         let result = js_object_spread_fresh_leading(empty_prefix(), source, 1);
@@ -471,7 +478,14 @@ fn accessor_spread_skips_a_key_its_getter_deleted() {
     let _suppress = crate::gc::GcSuppressScope::new();
     unsafe {
         let source = object(&[("first", 1.0)]);
-        define_getter(source, "deleter", closure_value(crate::closure::js_closure_alloc(crate::fn_info!(delete_later, 0), 0)));
+        define_getter(
+            source,
+            "deleter",
+            closure_value(crate::closure::js_closure_alloc(
+                crate::fn_info!(delete_later, 0),
+                0,
+            )),
+        );
         js_object_set_field_by_name(receiver(source), key_ptr("later"), 2.0);
         js_object_set_field_by_name(receiver(source), key_ptr("end"), 4.0);
         ACCESSOR_SOURCE.with(|s| s.set(source));

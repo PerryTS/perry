@@ -216,6 +216,7 @@ impl LoweringContext {
             class_env_classes: HashSet::new(),
             class_env_guarded: HashSet::new(),
             pending_fresh_class_expr: false,
+            pending_class_static_this: None,
             body_class_expr_captures: Vec::new(),
             let_class_aliases: Vec::new(),
             global_class_aliases: HashSet::new(),

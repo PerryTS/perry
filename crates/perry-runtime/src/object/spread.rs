@@ -247,7 +247,14 @@ const ACCESSOR_SPREAD_MAX_KEYS: u32 = 4096;
 #[optimize(size)]
 unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
     let (src, word) = ordinary_shape(source)?;
-    if word & overflow::SHADOW_BIT != 0 || !overflow::table(src).is_null() || (*src).class_id != 0 {
+    // A class id is admitted when the identity is a plain record (an object
+    // literal's shape class: no class prototype, ordinary kind). Its
+    // runtime-internal keys are still hidden, by name, as every enumeration
+    // of a class-id object hides them.
+    if word & overflow::SHADOW_BIT != 0
+        || !overflow::table(src).is_null()
+        || !shapes::object_is_plain_record(src)
+    {
         return None;
     }
     let header = crate::gc::header_from_trusted_user_ptr(src.cast());
@@ -291,6 +298,9 @@ unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
     let source_h = scope.root_nanbox_f64(source);
     let src_h = scope.root_raw_const_ptr(src);
     let keys_h = scope.root_raw_mut_ptr(keys);
+    // The key list is taken before any getter runs (CopyDataProperties step
+    // 3): the string part is the record's list, the symbol part this snapshot.
+    let symbols = super::assign::symbol_key_snapshot(&source_h, proves_no_symbols(source));
     let mut taken: Vec<u32> = Vec::with_capacity(count as usize);
     let mut values = Vec::with_capacity(count as usize);
     let mut getter_ran = false;
@@ -302,6 +312,14 @@ unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
             continue;
         }
         let src = src_h.get_raw_const_ptr::<ObjectHeader>();
+        if (*src).class_id != 0 {
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if crate::string::js_string_key_bytes(JSValue::from_bits(key), &mut buf)
+                .is_some_and(field_get_set::is_internal_runtime_key_bytes)
+            {
+                continue;
+            }
+        }
         // CopyDataProperties step 4.c's re-check, after any getter.
         by_name = by_name || (*src).shape_word() != word;
         let value = if by_name {
@@ -365,12 +383,12 @@ unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
         }
         crate::value::js_nanbox_pointer(object as i64)
     };
-    if proves_no_symbols(source_h.get_nanbox_f64()) {
+    if symbols.is_empty() {
         return Some(result);
     }
     let target_h = scope
         .root_raw_mut_ptr((result.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader);
-    super::assign::copy_symbol_keys(true, &target_h, &src_h, &source_h, false, getter_ran);
+    super::assign::copy_symbol_keys(true, &target_h, &src_h, &source_h, symbols, getter_ran);
     Some(target_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)))
 }
 
