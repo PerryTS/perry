@@ -144,6 +144,27 @@ All host imports are wrapped via `wrapImportsForI64()` so they automatically rei
 
 Each worker instantiates its own WASM module with the same bytecode and bridge. Values cross between the main thread and workers via structured-clone serialization. See [Threading](../threading/overview.md).
 
+## Prerendering for crawlers
+
+A Perry page ships an empty `<div id="perry-root"></div>` and builds every
+element after the WASM boots, so a crawler, a link preview, or a reader on a
+slow connection sees a blank page until then. `scripts/web_prerender.mjs`
+loads the page in headless Chrome, takes the rendered root, and writes it into
+the HTML as `<div id="perry-root" data-perry-prerendered>…</div>`. At boot,
+`App` sees the attribute and replaces the snapshot with the live UI.
+
+```bash
+perry app.ts -o app --target web
+node scripts/web_prerender.mjs app.html                       # snapshot in place
+node scripts/web_prerender.mjs app.html --url http://localhost:8765/app.html --out app.prerendered.html
+```
+
+`--url` renders a served page: one whose content comes from `fetch()`, or a
+route other than `/`. The snapshot is still written into the given HTML file
+(or `--out`). The script needs Chrome or Chromium (`--chrome <exe>` or the
+`CHROME` environment variable). The snapshot is static HTML: it carries no
+event handlers, and a page that is already prerendered is refused.
+
 ## Limitations
 
 - **No file system access** beyond the File System Access API (`window.showDirectoryPicker()`)

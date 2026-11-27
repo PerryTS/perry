@@ -1,0 +1,1 @@
+Add `scripts/web_prerender.mjs`, which snapshots a `--target web` page's rendered UI into its HTML so crawlers and readers see content before the WASM boots. At boot, `App` replaces a root marked `data-perry-prerendered` with the live UI instead of rendering beside the snapshot.

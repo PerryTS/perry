@@ -4161,6 +4161,11 @@ function perry_ui_app_create(titleOrOpts, _width, _height) {
   // the viewport instead of drawing a fixed-size box inside it.
   const root = uiGetRoot();
   root.style.width = "100%"; root.style.height = "100%";
+  // A page snapshotted by scripts/web_prerender.mjs ships its rendered DOM inside the root
+  // for crawlers and for readers before the WASM boots; the live UI replaces it.
+  if (root.hasAttribute("data-perry-prerendered")) {
+    root.replaceChildren(); root.removeAttribute("data-perry-prerendered");
+  }
   const h = uiAlloc(root);
   if (bodyH !== undefined) { const bodyEl = uiGet(bodyH); if (bodyEl) root.appendChild(bodyEl); }
   return h;
