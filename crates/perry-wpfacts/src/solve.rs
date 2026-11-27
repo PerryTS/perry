@@ -35,6 +35,7 @@ use crate::model::*;
 mod apply;
 mod arr_len;
 mod builtin_fields;
+mod chain;
 pub(crate) mod proxy;
 
 #[path = "solve/store.rs"]
