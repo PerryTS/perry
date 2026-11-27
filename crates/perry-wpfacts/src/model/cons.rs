@@ -1595,6 +1595,7 @@ impl Cons {
             | Cons::IterNext { .. }
             | Cons::NewTargetHard { .. }
             | Cons::IdxLoad { .. }
+            | Cons::MapEntryAt { .. }
             | Cons::IdxOwnLoad { .. }
             | Cons::IdxMCall { .. }
             | Cons::ForInKeys { .. }
