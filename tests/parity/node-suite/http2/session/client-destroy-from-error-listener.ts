@@ -11,7 +11,7 @@ await new Promise<void>((resolve) => probe.close(() => resolve()));
 await new Promise<void>((resolve) => {
   const client = http2.connect(`http://127.0.0.1:${port}`);
   client.on("error", (error: any) => {
-    console.log("error", error.code);
+    console.log("error", error.code, client.destroyed, client.closed);
     client.destroy();
     setImmediate(() => console.log("immediate"));
   });

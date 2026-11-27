@@ -1309,6 +1309,7 @@ pub(super) fn on_eof(id: impl Into<Target>) {
         });
     }
     with_owned(id, |conn| {
+        crate::server::http2_server::mark_turnloop_session_ended(conn.session_handle);
         crate::server::http2_server::mark_turnloop_session_closed(conn.session_handle);
     });
     finish_and_close(id);

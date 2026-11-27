@@ -475,6 +475,8 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
     // connection. No runtime, no thread, no `SendRequest` to race for.
     if let Some((session_handle, conn_id)) = get_handle::<Http2StreamHandle>(stream_handle)
         .map(|stream| stream.session_handle)
+        // A destroyed session's connection takes no new stream.
+        .filter(|&session| !get_handle::<Http2SessionHandle>(session).is_some_and(|s| s.destroyed))
         .and_then(|session| super::turnloop_conn_of_session(session).map(|conn| (session, conn)))
     {
         let headers = client_request_headers(stream_handle, session_handle);

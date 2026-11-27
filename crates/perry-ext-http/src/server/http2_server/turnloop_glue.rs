@@ -143,6 +143,22 @@ pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
     }
 }
 
+/// A transport failure destroys the session before its `'error'`, as Node's
+/// `destroy(err)` does; its `'close'` still waits for the transport's close.
+fn mark_failed(session_handle: i64) {
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+        session.mark_destroyed();
+    }
+}
+
+/// The peer ended the connection: Node closes the session, so `closed` holds
+/// at its `'close'`.
+pub(crate) fn mark_turnloop_session_ended(session_handle: i64) {
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+        session.closed = true;
+    }
+}
+
 /// The session's transport is gone: no frame reaches a wire again.
 pub(crate) fn detach_turnloop_session(session_handle: i64) {
     if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
@@ -161,6 +177,7 @@ pub(crate) fn queue_turnloop_session_error(
     if session_handle == 0 {
         return;
     }
+    mark_failed(session_handle);
     push_h2_event(Http2PendingEvent::SessionSocketError {
         session_handle,
         syscall: syscall.to_string(),
@@ -176,6 +193,7 @@ pub(crate) fn queue_turnloop_session_tls_error(session_handle: i64, failure: &st
     if session_handle == 0 {
         return;
     }
+    mark_failed(session_handle);
     let (code, message) = perry_ext_net::turnloop_tls::node_failure(failure);
     push_h2_event(Http2PendingEvent::ClientError {
         handle: session_handle,
