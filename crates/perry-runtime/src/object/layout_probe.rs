@@ -1158,11 +1158,12 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
         return if SITE {
             site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
         } else {
-            absent_from::<ABSENT>(
+            own_miss::<ABSENT>(
                 dir,
                 obj,
                 key_bits,
                 site_key_hash::<LAZY_HASH>(key_bits, hash),
+                r,
             )
         };
     }
@@ -1183,11 +1184,12 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             return if SITE {
                 site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
             } else {
-                absent_from::<ABSENT>(
+                own_miss::<ABSENT>(
                     dir,
                     obj,
                     key_bits,
                     site_key_hash::<LAZY_HASH>(key_bits, hash),
+                    r,
                 )
             };
         }
@@ -1434,6 +1436,7 @@ use inherited::link_of;
 use inherited::list_position;
 use inherited::listed;
 use inherited::object_prototype;
+use inherited::own_miss;
 use inherited::prototype_of;
 use inherited::realm_default_link;
 use inherited::walks_from;

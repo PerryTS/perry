@@ -572,3 +572,189 @@ fn array_intrinsic_length_precedes_named_bag_and_prototypes() {
         );
     });
 }
+
+/// A fresh ordinary object whose [[Prototype]] is `proto` (an object
+/// address, or 0 for null).
+unsafe fn create(proto: usize) -> usize {
+    let p = if proto == 0 {
+        f64::from_bits(crate::value::TAG_NULL)
+    } else {
+        f64::from_bits(POINTER_TAG | proto as u64)
+    };
+    (crate::object::js_object_create(p).to_bits() & POINTER_MASK) as usize
+}
+
+/// The probe's own miss on a literal of at most eight keys, read as absent
+/// through `%Object.prototype%`.
+#[test]
+fn own_miss_on_a_small_literal_reads_absent() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let o = crate::object::js_object_alloc(0, 4) as usize;
+        for (k, v) in [("a", 1.0), ("b", 2.0), ("c", 3.0), ("d", 4.0)] {
+            set(o, k, v);
+        }
+        assert_eq!(probe(o, "zz"), TAG_UNDEFINED);
+        assert_eq!(probe(o, "c"), 3.0f64.to_bits());
+        assert_eq!(agrees(o, "toString"), get(o, "toString"));
+    });
+}
+
+/// `Object.create(P)`: the own miss answers P's value.
+#[test]
+fn own_miss_reads_the_prototype_value() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let p = crate::object::js_object_alloc(0, 2) as usize;
+        set(p, "inh", 7.0);
+        set(p, "other", 8.0);
+        let o = create(p);
+        set(o, "a", 1.0);
+        assert_eq!(probe(o, "inh"), 7.0f64.to_bits());
+        assert_eq!(probe(o, "other"), 8.0f64.to_bits());
+        assert_eq!(probe(o, "zz"), TAG_UNDEFINED);
+    });
+}
+
+/// A deleted prototype key: the read continues to the next holder.
+#[test]
+fn own_miss_past_a_deleted_prototype_key_reads_the_next_holder() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let g = crate::object::js_object_alloc(0, 1) as usize;
+        set(g, "k", 1.0);
+        let p = create(g);
+        set(p, "k", 2.0);
+        set(p, "j", 3.0);
+        let o = create(p);
+        set(o, "a", 0.0);
+        assert_eq!(probe(o, "k"), 2.0f64.to_bits());
+        crate::object::js_object_delete_field(
+            p as *mut ObjectHeader,
+            (atom("k") & POINTER_MASK) as *const crate::StringHeader,
+        );
+        assert_eq!(probe(o, "k"), 1.0f64.to_bits(), "the walk reaches g's k");
+        assert_eq!(probe(o, "j"), 3.0f64.to_bits());
+    });
+}
+
+/// A receiver with an overflow holding the key answers the overflow value.
+#[test]
+fn own_miss_with_an_overflow_reads_the_overflow() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let p = crate::object::js_object_alloc(0, 1) as usize;
+        set(p, "k", 5.0);
+        let o = create(p);
+        set(o, "a", 1.0);
+        crate::object::overflow::insert_key_bits(
+            o as *mut ObjectHeader,
+            atom("k"),
+            9.0f64.to_bits(),
+            0,
+        );
+        assert_ne!(
+            (*(o as *const ObjectHeader)).parent_class_id & crate::object::overflow::SHADOW_BIT,
+            0
+        );
+        assert_eq!(agrees(o, "k"), 9.0f64.to_bits());
+        assert_eq!(agrees(o, "zz"), TAG_UNDEFINED);
+    });
+}
+
+/// An own list with a TEXT key: an atom read of its text answers the value
+/// (or declines), and a list whose probe word lacks `PROBE_ATOMS` (a word no
+/// compare can match) proves nothing by a miss.
+#[test]
+fn own_miss_on_a_text_key_list_declines() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let o = crate::object::js_object_alloc(0, 2) as usize;
+        set(o, "p2r_text_a", 1.0);
+        let text = crate::string::js_string_from_bytes(b"p2r_xy".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(o as *mut ObjectHeader, text, 4.0);
+        let p = probe(o, "p2r_xy");
+        assert!(p == TAG_HOLE || p == 4.0f64.to_bits(), "p2r_xy read {p:#x}");
+        assert_eq!(get(o, "p2r_xy"), 4.0f64.to_bits());
+        assert_eq!(agrees(o, "zz"), TAG_UNDEFINED);
+        // With `PROBE_ATOMS` clear on the record (restored after; the layout
+        // is this test's own) the own miss declines.
+        let r = record_of(
+            test_dir(),
+            LayoutWord((*(o as *const ObjectHeader)).parent_class_id),
+        );
+        let pw = probe_word(r);
+        assert!(pw & PROBE_READY != 0);
+        (*r).probe = pw & !PROBE_ATOMS;
+        let miss = probe(o, "zz");
+        (*r).probe = pw;
+        assert_eq!(
+            miss, TAG_HOLE,
+            "a list without PROBE_ATOMS proves nothing by a miss"
+        );
+    });
+}
+
+/// A non-ordinary receiver (an arguments object) keeps today's answer.
+#[test]
+fn own_miss_on_an_arguments_object_keeps_its_answer() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let raw = crate::array::js_array_alloc(0) as usize;
+        let args = crate::object::js_arguments_object_alloc(
+            f64::from_bits(POINTER_TAG | raw as u64),
+            f64::from_bits(TAG_UNDEFINED),
+            1,
+        ) as usize;
+        for k in ["zz", "length", "toString", "callee"] {
+            agrees(args, k);
+        }
+        assert_eq!(get(args, "zz"), TAG_UNDEFINED);
+    });
+}
+
+/// A Proxy prototype is a boundary: the miss past the receiver declines.
+#[test]
+fn own_miss_before_a_proxy_prototype_declines() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let target = crate::object::js_object_alloc(0, 0) as usize;
+        let handler = crate::object::js_object_alloc(0, 0) as usize;
+        let px = crate::proxy::js_proxy_new(
+            f64::from_bits(POINTER_TAG | target as u64),
+            f64::from_bits(POINTER_TAG | handler as u64),
+        );
+        let p = create(0);
+        set(p, "q", 1.0);
+        crate::object::js_object_set_prototype_of(f64::from_bits(POINTER_TAG | p as u64), px);
+        let o = create(p);
+        set(o, "a", 1.0);
+        assert_eq!(probe(o, "q"), 1.0f64.to_bits());
+        assert_eq!(probe(o, "zz"), TAG_HOLE, "the Proxy boundary declines");
+    });
+}
+
+/// A getter on the prototype: the accessor arm answers (or declines).
+#[test]
+fn own_miss_reaching_a_prototype_getter_takes_the_accessor_arm() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let p = crate::object::js_object_alloc(0, 1) as usize;
+        set(p, "d", 1.0);
+        let getter = global("Object");
+        crate::object::js_object_define_getter(
+            f64::from_bits(POINTER_TAG | p as u64),
+            f64::from_bits(atom("g")),
+            f64::from_bits(POINTER_TAG | getter as u64),
+        );
+        let o = create(p);
+        set(o, "a", 1.0);
+        let v = probe(o, "g");
+        assert_ne!(v, TAG_UNDEFINED, "a getter is no absence");
+        assert!(
+            v == TAG_HOLE || v & !POINTER_MASK == POINTER_TAG,
+            "g read {v:#x}"
+        );
+        assert_eq!(probe(o, "d"), 1.0f64.to_bits());
+    });
+}
