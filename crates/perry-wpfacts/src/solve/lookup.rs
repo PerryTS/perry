@@ -1354,6 +1354,7 @@ impl Model {
             self.builtin_field_use(t, key, ChainAct::Load(dst, self.thrown));
         }
         self.proto_value_at(t, dst);
+        self.with_b(|m| builtins::intrinsic_proto_values(m, t, dst));
         // A program function born with another intrinsic prototype
         // (`%AsyncGeneratorFunction.prototype%`, a generator object's
         // `%GeneratorPrototype%` chain) has one the model does not

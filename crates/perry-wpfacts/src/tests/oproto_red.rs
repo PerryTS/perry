@@ -142,28 +142,62 @@ function fn(this: unknown, x: unknown): unknown {{ return x; }}\n\
         .clone()
 }
 
+/// DEC 250 (`perry_abi::lock` `add_locked`): %Object.prototype% is
+/// add-locked, so a program store of a new key on it throws a TypeError at
+/// the store (runtime `builtin_proto.rs` `throw_locked`; PROTOW1 probes,
+/// every store form), and the solver reads `Object.prototype` from the same
+/// lock decision (`members::locked_read`): the stored function is never on
+/// the chain, `q.hook` has no call target, and `payload` does not escape.
+/// These flip back to `escapes` if owner 2026-11-16 item 3 (remove the
+/// builtin-prototype store refusal) lands.
+fn stays(tag: &str, body: &str) {
+    let e = payload_escape(body);
+    eprintln!("=== OPROTO {tag} escape={e:?}");
+    assert!(e.is_none(), "OPROTO {tag}: payload must not escape (DEC 250 add lock): {e:?}");
+    let src = format!(
+        "class Payload {{ pb = 1; }}\nconst payload = new Payload();\n\
+const u: any = new Function(process.argv[2]);\n\
+class D {{ m(x: any) {{ return x; }} }}\n\
+function fn(this: unknown, x: unknown): unknown {{ return x; }}\n\
+{body}\nconsole.log(payload.pb);\n"
+    );
+    let pf = crate::tests::facts(&src);
+    for s in pf.sites.iter().filter(|s| s.is_call && s.key == "hook") {
+        assert!(s.targets.is_empty(), "OPROTO {tag}: hook call has targets {:?}", s.targets);
+    }
+}
+
 fn escapes(tag: &str, body: &str) {
     let e = payload_escape(body);
     eprintln!("=== OPROTO {tag} escape={e:?}");
     assert!(e.is_some(), "OPROTO {tag}: payload must escape");
 }
 
-/// S0 (control): a store onto Object.prototype by name is seen by `{}`.
+/// S0: a store onto Object.prototype by name throws (DEC 250, `stays`).
 #[test]
-#[ignore = "OPROTO2: red on base e227d44179 too (a store onto Object.prototype is not seen by a literal {} lookup); open"]
 fn oproto_s0_object_prototype_store_by_name() {
-    escapes("S0", "(Object.prototype as any).hook = u;\nconst q: any = {};\nq.hook(payload);\n");
-    escapes("S0b", "const OP: any = Object.prototype;\nOP.hook = u;\nconst q: any = {};\nq.hook(payload);\n");
+    stays("S0", "(Object.prototype as any).hook = u;\nconst q: any = {};\nq.hook(payload);\n");
+    stays("S0b", "const OP: any = Object.prototype;\nOP.hook = u;\nconst q: any = {};\nq.hook(payload);\n");
 }
 
 /// S1: after `setPrototypeOf(f, Object.prototype)` the prototype of `f` is
-/// %Object.prototype% itself: a store through it is seen by `{}`.
+/// %Object.prototype% itself: a store through it throws (DEC 250, `stays`).
 #[test]
-#[ignore = "OPROTO2: red on base e227d44179 too (a store onto Object.prototype is not seen by a literal {} lookup); open"]
 fn oproto_s1_set_proto_of_fn_to_object_prototype() {
-    escapes("S1", "function f() {}\nObject.setPrototypeOf(f, Object.prototype);\n\
+    stays("S1", "function f() {}\nObject.setPrototypeOf(f, Object.prototype);\n\
 const P: any = Object.getPrototypeOf(f);\nP.hook = u;\nconst q: any = {};\nq.hook(payload);\n");
-    escapes("S1b", "function f() {}\nObject.setPrototypeOf(f, Object.prototype);\n\
+}
+
+/// S1b: the store onto %Object.prototype% throws (DEC 250) at run time, but
+/// the solve books it, and the read `P.hook` on the prototype value itself
+/// (`ObjectProto`, and `f`'s birth `%Function.prototype%` token, which the
+/// flow-insensitive `setPrototypeOf` does not remove) answers the stored
+/// `u` without the lock decision a `{}` lookup takes (`members::locked_read`).
+/// Sound, imprecise; open (OPROTO4 report).
+#[test]
+#[ignore = "OPROTO4: DEC 250 expectation; red: a read on the prototype value itself answers the refused store (sound over-approximation)"]
+fn oproto_s1b_object_prototype_store_read_through_set_proto() {
+    stays("S1b", "function f() {}\nObject.setPrototypeOf(f, Object.prototype);\n\
 (Object.prototype as any).hook = u;\nconst P: any = Object.getPrototypeOf(f);\nP.hook(payload);\n");
 }
 
@@ -179,11 +213,11 @@ const AP: any = Object.getPrototypeOf([1]);\nAP.hook(payload);\n");
 const a: any = [1];\na.hook(payload);\n");
 }
 
-/// S2c: a store through getPrototypeOf(getPrototypeOf([])) is seen by {}.
+/// S2c: a store through getPrototypeOf(getPrototypeOf([])), %Object.prototype%,
+/// throws (DEC 250, `stays`).
 #[test]
-#[ignore = "OPROTO2: red on base e227d44179 too (a store onto Object.prototype is not seen by a literal {} lookup); open"]
 fn oproto_s2c_object_prototype_write_by_value() {
-    escapes("S2c", "const OP: any = Object.getPrototypeOf(Object.getPrototypeOf([]));\nOP.hook = u;\n\
+    stays("S2c", "const OP: any = Object.getPrototypeOf(Object.getPrototypeOf([]));\nOP.hook = u;\n\
 const q: any = {};\nq.hook(payload);\n");
 }
 
