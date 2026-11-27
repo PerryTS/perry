@@ -110,10 +110,12 @@ const holed: any = JSON.parse(text);
 fullyMaterialize(holed);
 holed.length = 8;
 holed.length = 16;
-try { (Array.prototype as any)[12] = "from prototype"; } catch (e) { console.log("DEC 250: " + (e as Error).message); }
-if (holed[12] !== "from prototype") throw new Error("prototype override ignored");
+let overridden = true;
+try { (Array.prototype as any)[12] = "from prototype"; } catch (e) { overridden = false; console.log("DEC 250: " + (e as Error).message); }
+// DEC 250 refuses the index on Array.prototype: the hole reads undefined.
+if (holed[12] !== (overridden ? "from prototype" : undefined)) throw new Error("prototype override ignored");
 if (holed[3].id !== 3) throw new Error("dense read broken under override");
-delete (Array.prototype as any)[12];
+if (overridden) delete (Array.prototype as any)[12];
 if (holed[12] !== undefined) throw new Error("prototype override not retired");
 
 for (let round = 0; round < retained.length; round++) {
