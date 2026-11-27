@@ -1822,6 +1822,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_new_function_construct", "js_new_function_construct_with_new_target",
     "js_node_stream_duplex_new", "js_node_stream_readable_new",
     "js_node_stream_writable_new",
+    # NX-STREAMS-GC P2a: the constructor reads the source option getters
+    # (start/pull/cancel/type/highWaterMark), which can run user JS.
+    "js_readable_stream_new_from_source_object",
     "js_object_assign_one", "js_object_assign_validate_target",
     "js_object_entries", "js_object_values",
     "js_object_from_entries", "js_object_group_by",
