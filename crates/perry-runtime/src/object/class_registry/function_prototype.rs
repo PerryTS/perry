@@ -3,6 +3,15 @@ use super::*;
 
 /// Does this function have an own `.prototype` slot? This intentionally does
 /// not materialize the prototype, so `hasOwnProperty` cannot freeze its attrs.
+/// A builtin constructor whose family declares `no_prototype` (the Proxy
+/// constructor, ECMA-262 28.2): a constructor with no own `prototype`, so the
+/// ordinary function's own-from-birth `prototype` does not apply. The fact is
+/// the closure header's constructor identity and its declaration.
+fn builtin_constructor_without_prototype(func_value: f64) -> bool {
+    crate::object::constructor_identity(func_value)
+        .is_some_and(|identity| identity.declaration().no_prototype)
+}
+
 pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
     if !is_callable_function_value(func_value)
         || is_arrow_function_value(func_value)
@@ -25,7 +34,9 @@ pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
     {
         return true;
     }
-    if super::super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+    if super::super::native_module::builtin_closure_is_non_constructable_value(func_value)
+        || builtin_constructor_without_prototype(func_value)
+    {
         return false;
     }
     if jv.is_pointer() {
@@ -66,7 +77,9 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
             }
         }
     }
-    if super::super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+    if super::super::native_module::builtin_closure_is_non_constructable_value(func_value)
+        || builtin_constructor_without_prototype(func_value)
+    {
         return None;
     }
     let proto = ensure_function_prototype_object(func_value);
