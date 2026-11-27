@@ -667,6 +667,7 @@ pub unsafe fn tcp_connect(
             subsystem: c.route,
             nodelay,
             op: Some(op),
+            incarnation: next_incarnation(),
             ..ConnectPlan::default()
         }));
         hold(link);
@@ -704,6 +705,7 @@ pub unsafe fn tcp_connect_addrs(
         nodelay,
         remaining: addrs.into(),
         attempt_timeout: attempt_timeout.filter(|_| multi),
+        incarnation: next_incarnation(),
         ..ConnectPlan::default()
     }));
     if multi {
@@ -789,11 +791,23 @@ fn emit_attempt(route: u8, link: OwnerLink, kind: u64, addr: SocketAddr, err: Op
     );
 }
 
-/// Whether `link` still runs the plan at `plan_id`.
-unsafe fn plan_is(link: OwnerLink, plan_id: *const ConnectPlan) -> bool {
+thread_local! {
+    /// The last link plan's incarnation; a reconnect's plan never reuses one.
+    static PLANS: Cell<u64> = const { Cell::new(0) };
+}
+
+fn next_incarnation() -> u64 {
+    PLANS.with(|plans| {
+        plans.set(plans.get() + 1);
+        plans.get()
+    })
+}
+
+/// Whether `link` still runs the plan `incarnation` names.
+unsafe fn plan_is(link: OwnerLink, incarnation: u64) -> bool {
     core_of(link)
         .and_then(|c| c.plan.as_deref())
-        .is_some_and(|plan| std::ptr::eq(plan, plan_id))
+        .is_some_and(|plan| plan.incarnation == incarnation)
 }
 
 unsafe fn dispatch_attempt_timer(link: OwnerLink, handle: Option<Handle>, result: OpResult) {
@@ -817,7 +831,7 @@ unsafe fn dispatch_attempt_timer(link: OwnerLink, handle: Option<Handle>, result
             let Some(plan) = c.plan.as_deref_mut() else {
                 return;
             };
-            let plan_id: *const ConnectPlan = plan;
+            let plan_id = plan.incarnation;
             let Some(addr) = plan.attempt else {
                 return;
             };
@@ -1745,7 +1759,7 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
                 };
                 plan.op = None;
                 plan.remaining = addresses.into_iter().collect();
-                let plan_id: *const ConnectPlan = &**plan;
+                let plan_id = plan.incarnation;
                 sink::emit(
                     route,
                     NetCompletion::lookup(link.0 as i64, &text.join("\n")).linked(),
@@ -1756,7 +1770,7 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
                     c.entry.is_none()
                         && c.plan
                             .as_deref()
-                            .is_some_and(|plan| std::ptr::eq(plan, plan_id) && plan.op.is_none())
+                            .is_some_and(|plan| plan.incarnation == plan_id && plan.op.is_none())
                 });
                 if same_plan {
                     attempt_next_address(link);
@@ -1828,7 +1842,7 @@ unsafe fn attempt_next_address(link: OwnerLink) {
         let Some(plan) = c.plan.as_deref_mut() else {
             return;
         };
-        let plan_id: *const ConnectPlan = plan;
+        let plan_id = plan.incarnation;
         let multi = plan.attempt_timeout.is_some();
         let (nodelay, next, last_error) =
             (plan.nodelay, plan.remaining.pop_front(), plan.last_error);
@@ -1892,7 +1906,7 @@ unsafe fn connect_failed(c: &mut TransportCore, link: OwnerLink, err: NodeError)
         return true;
     }
     plan.last_error = Some(err);
-    let plan_id: *const ConnectPlan = plan;
+    let plan_id = plan.incarnation;
     if let (Some(addr), true) = (plan.attempt, plan.attempt_timeout.is_some()) {
         emit_attempt(route, link, sink::NET_ATTEMPT_FAILED, addr, Some(err));
         if !plan_is(link, plan_id) {

@@ -55,15 +55,25 @@ impl Default for Wanted {
 }
 
 pub(crate) fn wanted(options: f64) -> Wanted {
-    let family = family_number(dns_family(options));
-    let auto_select = JsValue::from_bits(field(options, "autoSelectFamily").to_bits());
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let family = scope.root_nanbox(dns_family(options.get()));
+    wanted_for(family.get(), options.get())
+}
+
+/// [`wanted`] for the `family` already read from `options`.
+fn wanted_for(family: f64, options: f64) -> Wanted {
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let family = family_number(family);
+    let auto_select = JsValue::from_bits(field(options.get(), "autoSelectFamily").to_bits());
     let auto_select = if auto_select.is_bool() {
         auto_select.to_bool()
     } else {
         crate::ip::auto_select_family_default()
     };
     match family {
-        None if auto_select => Wanted::All(attempt_timeout(options)),
+        None if auto_select => Wanted::All(attempt_timeout(options.get())),
         family => Wanted::One(family.unwrap_or(0)),
     }
 }
@@ -142,21 +152,28 @@ pub(crate) fn resolved(owner: f64, addresses: &[u8]) {
     let family = |ip: &IpAddr| if ip.is_ipv4() { 4 } else { 6 };
     let reported: Vec<IpAddr> = match wanted {
         Wanted::All(_) => ips,
-        Wanted::One(want) => ips
-            .iter()
-            .find(|ip| want == 0 || family(ip) == want)
-            .or(ips.first())
-            .copied()
-            .into_iter()
-            .collect(),
+        Wanted::One(0) => ips.first().copied().into_iter().collect(),
+        Wanted::One(want) => match ips.iter().find(|ip| family(ip) == want) {
+            Some(&ip) => vec![ip],
+            // The resolver is not asked for one family; Node's is, and finds nothing.
+            None => {
+                let error = super::payload_io::socket_error_value("getaddrinfo", "ENOTFOUND", None);
+                let scope = TransientRootScope::enter();
+                let error = scope.root_nanbox(error);
+                failed(owner, error.get());
+                socket::destroy(owner, error.get());
+                return;
+            }
+        },
     };
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    let token = scope.root_nanbox(connection(owner.get()));
     let host = scope.root_nanbox(events::string(&host));
     let null = f64::from_bits(JsValue::NULL.bits());
     let mut destinations = Destinations::default();
     for ip in reported {
-        if !connecting(owner.get()) {
+        if !is_current(owner.get(), token.get()) {
             return;
         }
         let address = scope.root_nanbox(events::string(&ip.to_string()));
@@ -167,7 +184,7 @@ pub(crate) fn resolved(owner: f64, addresses: &[u8]) {
         );
         destinations.push(SocketAddr::new(ip, port), family(&ip));
     }
-    if connecting(owner.get()) && !destinations.is_empty() {
+    if is_current(owner.get(), token.get()) && !destinations.is_empty() {
         connect(owner.get(), &destinations.order(), wanted);
     }
 }
@@ -246,7 +263,7 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
     let lookup = scope.root_nanbox(lookup);
     let family = scope.root_nanbox(dns_family(options.get()));
     let hints = scope.root_nanbox(field(options.get(), "hints"));
-    let wanted = wanted(options.get());
+    let wanted = wanted_for(family.get(), options.get());
     let all = matches!(wanted, Wanted::All(_));
     let dns_options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     p::own_set(dns_options.get(), "family", family.get());
@@ -265,9 +282,9 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
     let host = scope.root_nanbox(events::string(host));
     let callback = scope.root_addr(perry_ffi::alloc_closure(
         perry_ffi::js_function_info!(answer, 3; with_flags(perry_ffi::FN_BUILTIN)),
-        4,
+        5,
     ) as i64);
-    // SAFETY: The rooted closure was allocated above with four capture slots.
+    // SAFETY: The rooted closure was allocated above with five capture slots.
     unsafe {
         let callback_ptr = callback.get() as *mut RawClosureHeader;
         perry_ffi::set_closure_capture_f64(callback_ptr, 0, owner.get());
@@ -278,9 +295,8 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
             Wanted::One(_) => -1.0,
         };
         perry_ffi::set_closure_capture_f64(callback_ptr, 3, timeout);
+        perry_ffi::set_closure_capture_f64(callback_ptr, 4, connection(owner.get()));
     }
-    let state = scope.root_nanbox(socket::state(owner.get()));
-    p::record_set(state.get(), ATTEMPT, p::boxed_addr(callback.get()));
     events::call(
         lookup.get(),
         JsThis::UNDEFINED,
@@ -307,7 +323,7 @@ unsafe extern "C" fn answer(
     };
     let attempt = Attempt {
         owner,
-        token: scope.root_nanbox(p::boxed_addr(closure as i64)),
+        token: scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 4)),
     };
     let err = scope.root_nanbox(err);
     let address = scope.root_nanbox(address);
@@ -344,9 +360,8 @@ unsafe extern "C" fn answer(
     undefined()
 }
 
-/// The `connect` a lookup answers, named by its answer callback, which the
-/// socket state holds until the socket reopens. A late answer or error for an
-/// earlier connect must not touch a later one.
+/// The `connect` a lookup answers, named by its [`CONNECTION`] token. A late
+/// answer or error for an earlier connect must not touch a later one.
 struct Attempt {
     owner: TransientRootedNanbox,
     token: TransientRootedNanbox,
@@ -485,6 +500,7 @@ fn invalid(address: f64, family: f64, host: &str, port: u16) -> Option<f64> {
 fn connect(owner: f64, endpoints: &[SocketAddr], wanted: Wanted) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    let token = scope.root_nanbox(connection(owner.get()));
     let timeout = match (wanted, endpoints) {
         (Wanted::All(timeout), [_, _, ..]) => timeout,
         _ => 0,
@@ -499,7 +515,7 @@ fn connect(owner: f64, endpoints: &[SocketAddr], wanted: Wanted) {
             "connectionAttempt",
             &[address.get(), f64::from(first.port()), ip_family(first)],
         );
-        if !connecting(owner.get()) {
+        if !is_current(owner.get(), token.get()) {
             return;
         }
     } else {
@@ -675,7 +691,10 @@ pub(crate) fn cancel_attempt(owner: f64, link: perry_ffi::native_payload::OwnerL
 /// The error a failed connect destroys the socket with: Node's
 /// `AggregateError` of every attempt's error when attempts raced, else the
 /// attempt's own error after `'connectionAttemptFailed'`.
-pub(crate) fn connect_error(owner: f64, error: f64, target: Option<&tl::Endpoint>) -> f64 {
+///
+/// `None` when a `'connectionAttemptFailed'` listener already replaced the
+/// failed connect with another one, which the failure must not destroy.
+pub(crate) fn connect_error(owner: f64, error: f64, target: Option<&tl::Endpoint>) -> Option<f64> {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let error = scope.root_nanbox(error);
@@ -683,6 +702,7 @@ pub(crate) fn connect_error(owner: f64, error: f64, target: Option<&tl::Endpoint
     let errors = scope.root_nanbox(p::record_get(state.get(), ERRORS));
     let errors_value = JsValue::from_bits(errors.get().to_bits());
     if !errors_value.is_pointer() {
+        let token = scope.root_nanbox(connection(owner.get()));
         if let Some(target) = target {
             let address = scope.root_nanbox(events::string(&target.address));
             events::emit(
@@ -696,7 +716,7 @@ pub(crate) fn connect_error(owner: f64, error: f64, target: Option<&tl::Endpoint
                 ],
             );
         }
-        return error.get();
+        return is_current(owner.get(), token.get()).then(|| error.get());
     }
     // SAFETY: The errors array is a live array on this agent; the read cannot collect.
     let first = scope.root_nanbox(f64::from_bits(
@@ -715,15 +735,21 @@ pub(crate) fn connect_error(owner: f64, error: f64, target: Option<&tl::Endpoint
     p::own_set(aggregate.get(), "code", code.get());
     // The race is over: no attempt is left for a destroy to cancel.
     p::record_set(state.get(), ERRORS, undefined());
-    aggregate.get()
+    Some(aggregate.get())
 }
 
-/// The socket state key naming the pending lookup's answer callback.
-pub(crate) const ATTEMPT: &str = "lookupAttempt";
+/// The socket state key holding the current connect's token, a fresh object
+/// each `connect` installs. A socket destroyed and connected again from a
+/// listener gets another, so work begun for the earlier connect can tell.
+pub(crate) const CONNECTION: &str = "connection";
 
-/// A lookup answered after `destroy()`, or for an earlier connect, is ignored.
+fn connection(owner: f64) -> f64 {
+    p::record_get(socket::state(owner), CONNECTION)
+}
+
+/// Whether `token`'s connect is still the socket's pending one.
 fn is_current(owner: f64, token: f64) -> bool {
-    connecting(owner) && p::record_get(socket::state(owner), ATTEMPT).to_bits() == token.to_bits()
+    connecting(owner) && connection(owner).to_bits() == token.to_bits()
 }
 
 fn connecting(owner: f64) -> bool {

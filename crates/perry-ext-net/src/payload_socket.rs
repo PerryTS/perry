@@ -406,7 +406,7 @@ fn initialize_open_state(owner: f64, state: f64) {
         "cipher",
         "tlsWrapper",
         "tlsParent",
-        super::payload_lookup::ATTEMPT,
+        super::payload_lookup::CONNECTION,
         super::payload_lookup::ERRORS,
     ] {
         p::record_set(state.get(), key, p::undefined());
@@ -545,6 +545,12 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         fields.port = port as u16;
         fields.wanted = wanted;
     }
+    let connection = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    p::record_set(
+        state.get(),
+        super::payload_lookup::CONNECTION,
+        connection.get(),
+    );
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let needs_tcp = unsafe {

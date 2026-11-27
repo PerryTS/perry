@@ -642,7 +642,12 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 protocol::on_error(conn, code, syscall, event.errno as i64)
             })
             .unwrap_or_default();
-            net::destroy_error(socket.value(), code, &format!("{syscall} {code}"));
+            let message = format!("{syscall} {code}");
+            if syscall == "getaddrinfo" {
+                net::destroy_lookup_error(socket.value(), code, &message);
+            } else {
+                net::destroy_error(socket.value(), code, &message);
+            }
             run(&socket, effects);
         }
         tl::NET_CLOSED => {

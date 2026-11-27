@@ -352,6 +352,8 @@ struct ConnectPlan {
     attempt: Option<SocketAddr>,
     /// The pending attempt's `attempt_timeout` timer.
     timer: Option<Handle>,
+    /// Names a link plan across sink calls that may replace it.
+    incarnation: u64,
 }
 
 /// A subsystem-owned one-shot deadline (P5).

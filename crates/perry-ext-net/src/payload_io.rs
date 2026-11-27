@@ -283,11 +283,14 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                         super::payload_lookup::failed(owner.get(), error.get());
                         error
                     }
-                    Some("connect") => scope.root_nanbox(super::payload_lookup::connect_error(
+                    Some("connect") => match super::payload_lookup::connect_error(
                         owner.get(),
                         error.get(),
                         target.as_ref(),
-                    )),
+                    ) {
+                        Some(error) => scope.root_nanbox(error),
+                        None => return,
+                    },
                     _ => error,
                 };
                 socket::destroy(owner.get(), error.get());

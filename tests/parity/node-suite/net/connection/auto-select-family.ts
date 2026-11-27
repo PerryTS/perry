@@ -74,13 +74,16 @@ const stopped = net.connect({
   host: "eyeballs.test",
   autoSelectFamilyAttemptTimeout: 200,
   lookup(_host: string, _options: any, callback: any) {
-    setTimeout(() => callback(null, [{ address: blackhole, family: 4 }, v4]), 1);
+    const second = { address: "192.0.2.2", family: 4 };
+    setTimeout(() => callback(null, [{ address: blackhole, family: 4 }, second]), 1);
   },
 });
-stopped.on("connectionAttempt", (address: string) => {
+// Neither TEST-NET address can connect, so the destroy below is never late.
+stopped.once("connectionAttempt", (address: string) => {
   console.log("stopped attempt", address === blackhole ? "blackhole" : address);
   setTimeout(() => stopped.destroy(), 20);
 });
+stopped.on("error", (err: any) => console.log("stopped error", err.name));
 stopped.on("connectionAttemptTimeout", () => console.log("stopped timeout"));
 stopped.on("connectionAttemptFailed", () => console.log("stopped failed"));
 stopped.on("connect", () => console.log("stopped connect"));

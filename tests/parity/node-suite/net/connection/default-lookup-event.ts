@@ -1,6 +1,7 @@
 // The system resolver's answer is reported through 'lookup' events, as a
 // custom `options.lookup` answer is. Which addresses `localhost` has depends
 // on the host, so the case checks the IPv4 one and the event shape.
+import * as http from "node:http";
 import * as net from "node:net";
 
 const server = net.createServer((socket) => socket.end());
@@ -38,5 +39,17 @@ destroyed.on("lookup", () => {
 destroyed.on("connect", () => console.log("destroyed connect"));
 await new Promise((resolve) => destroyed.on("close", resolve));
 console.log("destroyed close");
+
+// An HTTP request's socket reports a failed resolve the same way.
+await new Promise<void>((resolve) => {
+  const req = http.get({ host: "no-such-host.invalid", port });
+  req.on("socket", (socket) => {
+    socket.on("lookup", (err: any, address: any) => console.log("http lookup", err?.code, address));
+  });
+  req.on("error", (err: any) => {
+    console.log("http error", err.code);
+    resolve();
+  });
+});
 
 server.close();

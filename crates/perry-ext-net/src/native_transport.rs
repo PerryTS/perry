@@ -389,6 +389,14 @@ pub fn has_ref(owner: f64) -> bool {
 pub fn destroy(owner: f64) {
     socket::destroy(owner, p::undefined());
 }
+/// Destroy a socket whose name did not resolve, after its `'lookup'` event.
+pub fn destroy_lookup_error(owner: f64, code: &str, message: &str) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let error = scope.root_nanbox(socket::error(code, message));
+    crate::payload_lookup::failed(owner.get(), error.get());
+    socket::destroy(owner.get(), error.get());
+}
 pub fn destroy_error(owner: f64, code: &str, message: &str) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
