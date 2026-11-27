@@ -1107,30 +1107,124 @@ fn component_wait_preserves_foreign_completions_and_other_component_operations()
     reset_for_test();
 }
 
-/// A close-phase `Closed` comes back with the earlier acknowledgements of its
-/// cell, and stays staged behind any other completion of its cell; every
-/// other completion keeps its place.
+/// A close-phase `Closed` comes back with the earlier completions of its cell
+/// that retire with it (acknowledgements, and results of its own handle), and
+/// stays staged behind any other; every other completion keeps its place.
 #[test]
-fn a_closed_is_taken_with_its_cells_acknowledgements_only() {
-    // (cell, kind): 'c' is a queued Closed, 'a' an acknowledgement, 'd' data.
+fn a_closed_is_taken_with_the_completions_it_retires() {
+    // (cell, kind, handle): 'c' is a queued Closed, 'a' an acknowledgement,
+    // 'd' a result.
     let mut staged = vec![
-        (Some(1), 'a'),
-        (Some(2), 'd'),
-        (None, 'd'),
-        (Some(1), 'c'),
-        (Some(2), 'a'),
-        (Some(2), 'c'),
-        (Some(3), 'c'),
+        (Some(1), 'a', 10),
+        (Some(2), 'd', 20),
+        (None, 'd', 0),
+        (Some(4), 'd', 40),
+        (Some(1), 'c', 10),
+        (Some(2), 'd', 21),
+        (Some(2), 'c', 20),
+        (Some(4), 'c', 40),
+        (Some(3), 'c', 30),
     ];
-    let taken = take_after_acknowledgements(
+    let taken = take_with_retired(
         &mut staged,
         |item| item.0,
         |item| item.1 == 'c',
-        |item| item.1 != 'd',
+        |earlier, closed| earlier.1 == 'a' || earlier.2 == closed.2,
     );
-    assert_eq!(taken, [(Some(1), 'a'), (Some(1), 'c'), (Some(3), 'c')]);
+    assert_eq!(
+        taken,
+        [
+            (Some(1), 'a', 10),
+            (Some(4), 'd', 40),
+            (Some(1), 'c', 10),
+            (Some(4), 'c', 40),
+            (Some(3), 'c', 30),
+        ]
+    );
     assert_eq!(
         staged,
-        [(Some(2), 'd'), (None, 'd'), (Some(2), 'a'), (Some(2), 'c')]
+        [
+            (Some(2), 'd', 20),
+            (None, 'd', 0),
+            (Some(2), 'd', 21),
+            (Some(2), 'c', 20),
+        ]
     );
+}
+
+/// A component completion waits in STAGED for its guest, which may never ask
+/// while the host loop idles: the park must still block instead of returning
+/// at once on every turn.
+#[test]
+fn a_staged_component_completion_does_not_keep_the_park_from_waiting() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        STAGED.with(|staged| {
+            staged.borrow_mut().push(turnloop::Completion {
+                token: COMPONENT_IO_TOKEN,
+                op: None,
+                handle: None,
+                terminal: true,
+                result: turnloop::OpResult::Closed,
+            })
+        });
+        let start = Instant::now();
+        let park = park_until(start + Duration::from_millis(30));
+        assert_eq!(park, Park::Waited, "the park returned without waiting");
+        assert!(start.elapsed() >= Duration::from_millis(20));
+        assert_eq!(
+            STAGED.with(|staged| staged.borrow().len()),
+            1,
+            "the guest's completion stays staged"
+        );
+        STAGED.with(|staged| staged.borrow_mut().clear());
+    })
+    .join()
+    .unwrap();
+}
+
+fn expiry() -> turnloop::Completion {
+    turnloop::Completion {
+        token: TIMER_TOKEN,
+        op: None,
+        handle: None,
+        terminal: true,
+        result: turnloop::OpResult::Timer,
+    }
+}
+
+/// A staged completion is work even when the driver has nothing else: the
+/// loop counts it and a fast turn dispatches it.
+#[test]
+fn staged_completions_are_dispatched_by_a_loop_that_is_not_alive() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        STAGED.with(|staged| staged.borrow_mut().push(expiry()));
+        assert!(has_outstanding_work(), "a staged completion is outstanding");
+        fast_turn();
+        assert_eq!(stats().timer_expiries, 1, "the fast turn dispatched it");
+        assert!(STAGED.with(|staged| staged.borrow().is_empty()));
+        assert!(!has_outstanding_work());
+    })
+    .join()
+    .unwrap();
+}
+
+/// The close-phase turn retires the JS-timer expiry it reads instead of
+/// leaving it staged behind the timer arming that follows the check phase.
+#[test]
+fn the_close_phase_turn_retires_a_timer_expiry() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        STAGED.with(|staged| staged.borrow_mut().push(expiry()));
+        let taken = take_closed_completions(|_| true, |_| None, |_, _| true);
+        assert!(taken.is_empty());
+        assert_eq!(stats().timer_expiries, 1);
+        assert!(STAGED.with(|staged| staged.borrow().is_empty()));
+    })
+    .join()
+    .unwrap();
 }
