@@ -431,37 +431,20 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
         crate::path::throw_invalid_path_arg_type()
     };
     let path_join_value = |win32: bool| -> f64 {
-        if args_len == 0 {
-            let result = if win32 {
-                crate::path::js_path_win32_join_unchecked(std::ptr::null(), std::ptr::null())
-            } else {
-                crate::path::js_path_join_unchecked(std::ptr::null(), std::ptr::null())
-            };
-            return str_to_f64(result);
-        }
-        let first = require_path_str_ptr(0);
-        let mut result = if win32 {
-            crate::path::js_path_win32_join_unchecked(first, std::ptr::null())
+        let args: &[f64] = if args_len == 0 || args_ptr.is_null() {
+            &[]
         } else {
-            crate::path::js_path_join_unchecked(first, std::ptr::null())
+            std::slice::from_raw_parts(args_ptr, args_len)
         };
-        for i in 1..args_len {
-            let segment = require_path_str_ptr(i);
-            result = if win32 {
-                crate::path::js_path_win32_join_unchecked(result, segment)
-            } else {
-                crate::path::js_path_join_unchecked(result, segment)
-            };
-        }
-        str_to_f64(result)
+        str_to_f64(if win32 {
+            crate::path::join::win32_join_values(args)
+        } else {
+            crate::path::join::posix_join_values(args)
+        })
     };
     let path_resolve_value = |win32: bool| -> f64 {
         let mut result = if args_len == 0 {
-            if win32 {
-                crate::path::js_path_win32_join_unchecked(std::ptr::null(), std::ptr::null())
-            } else {
-                crate::path::js_path_join_unchecked(std::ptr::null(), std::ptr::null())
-            }
+            crate::string::js_string_from_bytes(b".".as_ptr(), 1)
         } else {
             require_path_str_ptr(0) as *mut crate::StringHeader
         };

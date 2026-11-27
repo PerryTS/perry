@@ -724,12 +724,7 @@ pub(super) fn try_global_builtins(
                                 args.into_iter().next().unwrap(),
                             ))));
                         }
-                        let mut iter = args.into_iter();
-                        let mut result = iter.next().unwrap();
-                        for next_arg in iter {
-                            result = Expr::PathJoin(Box::new(result), Box::new(next_arg));
-                        }
-                        return Ok(Ok(result));
+                        return Ok(Ok(Expr::PathJoin(args)));
                     }
                     "dirname" if !args.is_empty() => {
                         return Ok(Ok(Expr::PathDirname(Box::new(

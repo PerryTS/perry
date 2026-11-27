@@ -3552,7 +3552,7 @@ const __memDispatch = {
   crypto_md5: () => undefined,
 
   // Path — args are plain JS strings
-  path_join: (a, b) => (String(a) + '/' + String(b)).replace(/\/+/g, '/'),
+  path_join: (...parts) => parts.map(String).join('/').replace(/\/+/g, '/'),
   path_dirname: (str) => { const s = String(str); const idx = s.lastIndexOf('/'); return idx >= 0 ? (s.substring(0, idx) || '/') : '.'; },
   path_basename: (str) => { const s = String(str); const idx = s.lastIndexOf('/'); return idx >= 0 ? s.substring(idx + 1) : s; },
   path_extname: (str) => { const s = String(str); const base = s.substring(s.lastIndexOf('/') + 1); const idx = base.lastIndexOf('.'); return idx > 0 ? base.substring(idx) : ''; },

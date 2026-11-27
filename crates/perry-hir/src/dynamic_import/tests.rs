@@ -669,15 +669,15 @@ fn resolve_path_join_over_replaced_dirname() {
     // `__dirname` is already lowered to a string by the parser; the path
     // resolver still needs to fold the replace + join chain to a single
     // deterministic worker module.
-    let expr = Expr::PathJoin(
-        Box::new(Expr::StringReplace {
+    let expr = Expr::PathJoin(vec![
+        Expr::StringReplace {
             string: Box::new(Expr::String(
                 "D:/tmp/probe/node_modules/node-pty/lib".to_string(),
             )),
             pattern: Box::new(Expr::String("node_modules.asar".to_string())),
             replacement: Box::new(Expr::String("node_modules.asar.unpacked".to_string())),
-        }),
-        Box::new(Expr::String("worker/conoutSocketWorker.js".to_string())),
+        },
+        Expr::String("worker/conoutSocketWorker.js".to_string()),
     );
 
     let mut visiting = HashSet::new();
@@ -760,10 +760,10 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
 
 #[test]
 fn resolve_path_join_normalizes_relative_segments() {
-    let expr = Expr::PathJoin(
-        Box::new(Expr::String("/project/src/lib".to_string())),
-        Box::new(Expr::String("../worker.js".to_string())),
-    );
+    let expr = Expr::PathJoin(vec![
+        Expr::String("/project/src/lib".to_string()),
+        Expr::String("../worker.js".to_string()),
+    ]);
 
     let mut visiting = HashSet::new();
     match resolve_import_path_with_context(
