@@ -192,6 +192,9 @@ const originalSet = IntrinsicMap.prototype.set;
 let setGetterReads = 0;
 let setReceiverIsMap = false;
 let setCalls = 0;
+// DEC 250 locks Map.prototype.set: the refusal is the expected output, and the
+// getter assertions run only where the redefinition lands.
+let setLocked = false;
 try { Object.defineProperty(IntrinsicMap.prototype, "set", {
   configurable: true,
   get() {
@@ -202,25 +205,25 @@ try { Object.defineProperty(IntrinsicMap.prototype, "set", {
       return originalSet.call(this, key, value);
     };
   },
-}); } catch (e) { console.log("DEC 250: " + (e as Error).message); }
+}); } catch (e) { setLocked = true; console.log("DEC 250: " + (e as Error).message); }
 const accessorInitialized = new IntrinsicMap([[9, 10], [11, 12]]);
 if (
-  setGetterReads !== 1 ||
+  !setLocked && (setGetterReads !== 1 ||
   setCalls !== 2 ||
   !setReceiverIsMap ||
-  accessorInitialized.get(9) !== 10
+  accessorInitialized.get(9) !== 10)
 ) {
   throw new Error(
     `Map.prototype.set getter: reads=${setGetterReads} calls=${setCalls} receiver=${setReceiverIsMap}`,
   );
 }
-if (originalSetDescriptor) {
+if (!setLocked && originalSetDescriptor) {
   Object.defineProperty(IntrinsicMap.prototype, "set", originalSetDescriptor);
 }
 
 let iteratorGetterReads = 0;
 let setGetterThrew = false;
-Object.defineProperty(IntrinsicMap.prototype, "set", {
+if (!setLocked) Object.defineProperty(IntrinsicMap.prototype, "set", {
   configurable: true,
   get() {
     throw new Error("Map.prototype.set getter");
@@ -238,10 +241,10 @@ try {
 } catch (error) {
   setGetterThrew = String(error).includes("Map.prototype.set getter");
 }
-if (!setGetterThrew || iteratorGetterReads !== 0) {
+if (!setLocked && (!setGetterThrew || iteratorGetterReads !== 0)) {
   throw new Error(`Map.prototype.set throw order: iterator reads=${iteratorGetterReads}`);
 }
-if (originalSetDescriptor) {
+if (!setLocked && originalSetDescriptor) {
   Object.defineProperty(IntrinsicMap.prototype, "set", originalSetDescriptor);
 }
 

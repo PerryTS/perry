@@ -17,8 +17,10 @@ function ownObjectMembers(p: any): string {
 // Every global constructor's prototype: the Object.prototype members it owns.
 const ctors = Object.getOwnPropertyNames(G)
   .filter((n) => {
+    // Test the name first: reading `localStorage` makes node warn on stderr.
+    if (!/^[A-Z]/.test(n)) return false;
     const v = G[n];
-    return typeof v === "function" && /^[A-Z]/.test(n) && v !== Object && v.prototype && typeof v.prototype === "object";
+    return typeof v === "function" && v !== Object && v.prototype && typeof v.prototype === "object";
   })
   .sort();
 const owners: string[] = [];
