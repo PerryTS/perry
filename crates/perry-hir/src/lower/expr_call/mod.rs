@@ -670,7 +670,9 @@ fn lower_call_inner(
                         byte_offset: crate::lower::call_token(call),
                     });
                 }
-                if native_module::namespace_call_needs_esm_binding(ctx, expr) {
+                if native_module::namespace_call_needs_esm_binding(ctx, expr)
+                    || native_module::node_namespace_call_patched(ctx, expr)
+                {
                     return Ok(Expr::Call {
                         callee: Box::new(lower_expr(ctx, expr)?),
                         args,

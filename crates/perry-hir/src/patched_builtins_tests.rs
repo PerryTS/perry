@@ -168,9 +168,11 @@ fn reads_and_ordinary_objects_are_not_patches() {
         "#,
     );
     assert_array_iteration_facts(&s, &["write"]);
+    // NXCALL3: `process.stdout.write = f` is a store into node:process.
+    assert!(s.contains(&pair("node:process", "stdout.write")), "{s:?}");
     assert_eq!(
         s.len(),
-        1,
+        2,
         "ordinary writes add no namespace/prototype patch: {s:?}"
     );
 }
@@ -660,4 +662,113 @@ fn dynamic_code_reach_rebinds_only_global_functions() {
     clear_patched_builtins();
     assert!(!foo);
     assert!(st);
+}
+
+// NXCALL3: node-core namespaces under the same program-wide no-store fact.
+#[test]
+fn node_core_namespace_writes_and_escapes() {
+    let s = scan(
+        r#"
+        const path = require("path");
+        import * as fs from "node:fs";
+        const { promises: fsp } = require("fs");
+        path.join = () => "";
+        path.posix.relative = () => "";
+        Object.assign(fs, { existsSync: () => true });
+        delete fsp.readFile;
+        function f(o: any) {}
+        f(require("os"));
+        const { sep } = path;
+        typeof path;
+        path.resolve("a");
+        (0, path.normalize)("a");
+        "#,
+    );
+    for (k, m) in [
+        ("node:path", "join"),
+        ("node:path", "relative"),
+        ("node:fs", "existsSync"),
+        ("node:fs", "promises.readFile"),
+        ("node:os", "*"),
+    ] {
+        assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
+    }
+    assert!(
+        !s.iter().any(|(k, m)| k == "node:path"
+            && matches!(m.as_str(), "*" | "resolve" | "sep" | "normalize")),
+        "{s:?}"
+    );
+    let set: &BTreeSet<(String, String)> = &s;
+    assert!(node_ns::member_patched(set, "path", &["join"]));
+    assert!(node_ns::member_patched(
+        set,
+        "node:path",
+        &["posix", "join"]
+    ));
+    assert!(node_ns::member_patched(set, "path", &["win32", "relative"]));
+    assert!(!node_ns::member_patched(set, "path", &["resolve"]));
+    assert!(node_ns::member_patched(
+        set,
+        "fs",
+        &["promises", "readFile"]
+    ));
+    assert!(node_ns::member_patched(set, "fs/promises", &["readFile"]));
+    assert!(!node_ns::member_patched(set, "fs", &["promises", "stat"]));
+    assert!(node_ns::member_patched(set, "os", &["cpus"]));
+}
+
+#[test]
+fn node_core_namespace_handed_on_is_any_member() {
+    let s = scan(
+        r#"
+        import path from "path";
+        const w = path.win32;
+        export { w };
+        module.exports = { fs: require("fs") };
+        export * from "util";
+        "#,
+    );
+    // `path.win32` folds into the root on the host it equals.
+    for (k, m) in [("node:path", "*"), ("node:fs", "*"), ("node:util", "*")] {
+        assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
+    }
+}
+
+#[test]
+fn node_core_namespace_reads_are_not_patches() {
+    let s = scan(
+        r#"
+        const path = require("path");
+        const { join } = path;
+        const j = path.join;
+        path.join("a", "b");
+        process.nextTick(() => {});
+        if (typeof process !== "undefined") {}
+        "#,
+    );
+    assert!(
+        !s.iter()
+            .any(|(k, m)| k.starts_with("node:") && !m.ends_with(".*")),
+        "{s:?}"
+    );
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(&s, "process", &["nextTick"]));
+}
+
+#[test]
+fn node_core_escape_in_the_open_loader_arm_counts_only_when_open() {
+    let mut s = scan(
+        r#"
+        import _path from "path";
+        function require(specifier) {
+            if (__perry_cjs_open()) { if (specifier === "path") { return _path; } }
+            throw new Error("closed");
+        }
+        "#,
+    );
+    assert!(s.contains(&pair("node:path", "$open")), "{s:?}");
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(promote_open_node_escapes(&mut s));
+    assert!(node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!promote_open_node_escapes(&mut s));
 }
