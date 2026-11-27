@@ -3092,6 +3092,12 @@
       "name": "PICK_SEQ",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic sequence number that discards stale image-picker deliveries; a counter, never a GC address."
+    },
+    {
+      "file": "crates/perry-runtime/src/turnloop_net/transport.rs",
+      "name": "PLANS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A per-thread u64 counter of link-plan incarnations (next_incarnation); it holds no JS value or heap address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

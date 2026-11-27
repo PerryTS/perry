@@ -19,7 +19,7 @@ const PTR_TAG: u64 = 0x7FFD_0000_0000_0000;
 /// internal band.
 const NODE_TAG: u64 = crate::value::INTERNAL_WORD_TAG;
 
-thread_local! {
+crate::perry_thread_local! {
     static ALL: std::cell::Cell<*mut ChainNode> = const { std::cell::Cell::new(std::ptr::null_mut()) };
     /// The nodes whose [[Prototype]] is an object without a node yet
     /// (`ChainNode::waiting`); intrusive through `wait_next`/`wait_prev`.
