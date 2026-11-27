@@ -1052,14 +1052,14 @@ pub unsafe fn read_start(core: *mut TransportCore, link: OwnerLink) -> NetResult
     let (c, name) = bind(core, link, "read")?;
     with_driver(|driver| {
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
-        if entry.read_op.is_some() || entry.closing || entry.ended {
+        if entry.read_op.is_some() || entry.closing || entry.read_halt == ReadHalt::Eof {
             return Ok(());
         }
         let op = driver
             .read_start(entry.handle, name.token(OP_READ))
             .map_err(|e| map_error(e, "read"))?;
         entry.read_op = Some(op);
-        entry.read_stopped = false;
+        entry.read_halt = ReadHalt::Running;
         census::note_submit(OP_READ);
         settle_ref(driver, c);
         Ok(())
@@ -1080,7 +1080,7 @@ pub unsafe fn read_stop(core: *mut TransportCore, link: OwnerLink) -> NetResult<
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
         let op = entry.read_op.take().ok_or_else(|| not_found("read"))?;
         driver.stop(op);
-        entry.read_stopped = true;
+        entry.read_halt = ReadHalt::Stopped;
         settle_ref(driver, c);
         Ok(())
     })
@@ -1238,7 +1238,7 @@ fn holds_loop(entry: &Entry, backlog: &Backlog) -> bool {
     if entry.pipe_drain.is_some() || entry.pipe_eof_timer.is_some() {
         return true;
     }
-    !(entry.ended || entry.read_stopped)
+    !(entry.ended || entry.read_halt == ReadHalt::Stopped)
         || entry.closing
         || entry.posted
         || entry.inflight > 0
@@ -1610,6 +1610,9 @@ unsafe fn complete_posted(link: OwnerLink) {
             retire_posted(entry, &mut retired);
         }
         emit_wrote(route, link, &retired);
+        if let Some(c) = core_of(link) {
+            with_driver(|driver| settle_ref(driver, c));
+        }
     }
     release(link);
 }
@@ -1737,7 +1740,7 @@ pub(super) fn dispatch(completion: Completion) {
             _ => {
                 let idle = core_of(link)
                     .and_then(|c| c.entry.as_ref())
-                    .is_some_and(|entry| entry.ended || entry.read_stopped);
+                    .is_some_and(|entry| entry.ended || entry.read_halt == ReadHalt::Stopped);
                 if idle {
                     hold(link);
                 }
@@ -2135,6 +2138,7 @@ unsafe fn dispatch_stream(
                     };
                     let _ = with_driver(|driver| windows_pipe::cancel_eof(driver, name, entry));
                 }
+                entry.read_halt = ReadHalt::Eof;
                 // A stopped read's EOF ends a read restarted behind it.
                 if let Some(restarted) = entry.read_op.take().filter(|&id| Some(id) != op_id) {
                     let _ = with_driver(|driver| driver.cancel(restarted));

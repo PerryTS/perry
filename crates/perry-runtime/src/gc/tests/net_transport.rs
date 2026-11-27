@@ -1504,7 +1504,10 @@ fn a_stopped_read_releases_the_loop_and_a_restart_reads_again() {
 
 /// An accepted connection whose peer sent `bytes` and then its FIN before the
 /// child started reading, so one poll reads both.
-fn accepted_after_fin(scope: &RuntimeHandleScope, bytes: &[u8]) -> (OwnerLink, OwnerLink) {
+fn accepted_after_fin(
+    scope: &RuntimeHandleScope,
+    bytes: &[u8],
+) -> (OwnerLink, OwnerLink, std::net::TcpStream) {
     use std::io::Write;
     let server = scope.root_nanbox_f64(fresh());
     let link = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
@@ -1520,7 +1523,7 @@ fn accepted_after_fin(scope: &RuntimeHandleScope, bytes: &[u8]) -> (OwnerLink, O
     peer.write_all(bytes).unwrap();
     peer.shutdown(std::net::Shutdown::Write).unwrap();
     assert!(pump_until(|| CHILD.with(Cell::get) != 0));
-    (link, OwnerLink(CHILD.with(Cell::get)))
+    (link, OwnerLink(CHILD.with(Cell::get)), peer)
 }
 
 /// [`pump_until`] with a check phase per iteration, which delivers an EOF
@@ -1546,7 +1549,7 @@ fn an_ended_read_neither_stops_nor_restarts() {
     let _fixture = Fixture::start();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let scope = RuntimeHandleScope::new();
-    let (link, child) = accepted_after_fin(&scope, b"x");
+    let (link, child, _peer) = accepted_after_fin(&scope, b"x");
     unsafe { transport::read_start(child_core(child), child).unwrap() };
     assert!(pump_phases_until(|| count(NET_EOF, child) == 1));
     unsafe {
@@ -1574,7 +1577,7 @@ fn a_stopped_reads_eof_cancels_the_restart_behind_it() {
     let _fixture = Fixture::start();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let scope = RuntimeHandleScope::new();
-    let (link, child) = accepted_after_fin(&scope, b"x");
+    let (link, child, _peer) = accepted_after_fin(&scope, b"x");
     ON_DATA.with(|hook| {
         hook.set(Some(|link| unsafe {
             ON_DATA.with(|hook| hook.set(None));
@@ -1590,6 +1593,73 @@ fn a_stopped_reads_eof_cancels_the_restart_behind_it() {
     assert_eq!(count(NET_DATA, child), 1, "the hook ran");
     assert_eq!(count(NET_EOF, child), 1, "the restart reads no second EOF");
     assert_eq!(unsafe { (*child_core(child)).read_operation() }, None);
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
+/// While an EOF read behind data waits for its check phase, the socket starts
+/// no read that could read that FIN a second time.
+#[test]
+fn a_parked_eof_refuses_a_new_read() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let (link, child, _peer) = accepted_after_fin(&scope, b"x");
+    unsafe { transport::read_start(child_core(child), child).unwrap() };
+    assert!(pump_until(|| count(NET_DATA, child) == 1));
+    assert!(pump_until(|| unsafe {
+        (*child_core(child)).read_operation()
+    }
+    .is_none()));
+    assert_eq!(
+        count(NET_EOF, child),
+        0,
+        "the EOF behind the data is parked"
+    );
+    unsafe {
+        transport::read_start(child_core(child), child).unwrap();
+        assert_eq!((*child_core(child)).read_operation(), None);
+    }
+    assert!(pump_phases_until(|| count(NET_EOF, child) == 1));
+    let deadline = Instant::now() + Duration::from_millis(50);
+    pump_phases_until(|| Instant::now() >= deadline);
+    assert_eq!(count(NET_EOF, child), 1);
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
+/// A write the kernel took whole on a stopped socket owes its completion,
+/// then lets the loop go.
+#[test]
+fn a_stopped_sockets_whole_write_releases_the_loop_once_reported() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let (link, child, _peer) = accepted_after_fin(&scope, b"");
+    unsafe {
+        transport::set_ref(core(np::link_event_owner(link).unwrap()), link, false).unwrap();
+        transport::read_start(child_core(child), child).unwrap();
+        transport::read_stop(child_core(child), child).unwrap();
+    }
+    assert!(pump_until(|| !crate::turnloop_net::loop_alive()));
+    unsafe { transport::write(child_core(child), child, b"answer".to_vec(), 7).unwrap() };
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "an owed write holds the loop"
+    );
+    // The kernel took the write whole; its completion runs as a tick.
+    assert!(pump_until(|| {
+        crate::promise::js_promise_run_microtasks();
+        count(crate::turnloop_net::NET_WROTE, child) == 1
+    }));
+    assert!(
+        !crate::turnloop_net::loop_alive(),
+        "the write's own completion lets the loop go; no later event has to"
+    );
     assert!(destroy(child));
     assert!(destroy(link));
     assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
