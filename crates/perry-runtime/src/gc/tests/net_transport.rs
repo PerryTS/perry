@@ -1665,6 +1665,68 @@ fn a_stopped_sockets_whole_write_releases_the_loop_once_reported() {
     assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
 }
 
+/// libuv's handle activity: a listener and a reading stream hold the loop,
+/// an open stream that does not read holds nothing, and `unref()` gives up
+/// only the reading, never an owed write.
+#[test]
+fn only_listening_reading_or_owed_requests_hold_the_loop() {
+    use std::io::Read;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let server = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        transport::tcp_listen(c, link, "127.0.0.1:0".parse().unwrap(), 16, false, true).unwrap()
+    };
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "a listener holds the loop"
+    );
+    unsafe { transport::accept_start(core(server.get_nanbox_f64()), link).unwrap() };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    let child = OwnerLink(CHILD.with(Cell::get));
+    unsafe { transport::set_ref(core(server.get_nanbox_f64()), link, false).unwrap() };
+    assert!(
+        pump_until(|| !crate::turnloop_net::loop_alive()),
+        "an accepted stream that never reads holds nothing"
+    );
+    unsafe { transport::read_start(child_core(child), child).unwrap() };
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "a reading stream holds the loop"
+    );
+    unsafe { transport::set_ref(child_core(child), child, false).unwrap() };
+    assert!(
+        !crate::turnloop_net::loop_alive(),
+        "unref() gives up the reading"
+    );
+    let big = vec![b'w'; 16 * 1024 * 1024];
+    unsafe { transport::write(child_core(child), child, big.clone(), 9).unwrap() };
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "an owed write holds the loop whatever the handle's ref"
+    );
+    let reader = std::thread::spawn(move || {
+        let mut sink = vec![0; big.len()];
+        peer.read_exact(&mut sink).unwrap();
+        peer
+    });
+    assert!(pump_until(|| {
+        crate::promise::js_promise_run_microtasks();
+        count(crate::turnloop_net::NET_WROTE, child) == 1
+    }));
+    assert!(pump_until(|| !crate::turnloop_net::loop_alive()));
+    drop(reader.join().unwrap());
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
 thread_local! {
     static REPLACEMENT: Cell<Option<std::net::SocketAddr>> = const { Cell::new(None) };
 }
