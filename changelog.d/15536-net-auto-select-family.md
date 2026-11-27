@@ -4,4 +4,6 @@
   attempt is reported through `connectionAttempt`, `connectionAttemptFailed`
   and `connectionAttemptTimeout`, `autoSelectFamilyAttemptedAddresses` lists
   them, and a socket whose every attempt failed is destroyed with an
-  `AggregateError`.
+  `AggregateError`. `autoSelectFamilyAttemptTimeout` is validated as in Node,
+  and with `autoSelectFamily: false` only the address the lookup reports is
+  connected.
