@@ -102,15 +102,8 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 } else {
                     session.mark_closed();
                 }
-                match (callback, server) {
-                    (0, _) => {}
-                    // Node's `once('close', cb)`: the socket's close emits it.
-                    (_, true) => session
-                        .listeners
-                        .entry("close".into())
-                        .or_default()
-                        .push(callback),
-                    (_, false) => session.close_callbacks.push(callback),
+                if callback != 0 {
+                    session.close_callbacks.push(callback);
                 }
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
