@@ -1568,6 +1568,7 @@ mod native_parent;
 mod e11_null_parent;
 mod hraise_red;
 mod tokid_parent;
+mod vbuf_red;
 mod native_parent_program_class;
 mod nparg_error_args;
 mod keyset_store;

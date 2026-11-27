@@ -23,6 +23,20 @@ pub enum OwnGateAt {
     Value,
 }
 
+/// Rule PXCLASS: what an operation does to a Proxy operand of its node
+/// (`Cons::proxy_operand`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProxyOperand {
+    /// No internal method of the Proxy runs: the ordinary rule decides.
+    Value,
+    /// An internal method of the Proxy runs: a trap or the forward to its
+    /// target (`Model::proxy_apply`'s PX model of the rule; PXESC where none
+    /// is built yet).
+    Trap,
+    /// The Proxy reaches code the solve does not see: it escapes.
+    Contract,
+}
+
 /// Where a program observes the identity of what a node holds
 /// (`Cons::Identity`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1399,6 +1413,232 @@ impl Cons {
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",
             Cons::VisitStop { .. } => "visitstop",
+        }
+    }
+
+    /// Rule PXCLASS: what this operation does to a Proxy operand of its
+    /// node (ECMA-262 10.5: a Proxy exotic object has [[ProxyHandler]] and
+    /// [[ProxyTarget]] only; every other internal method is a trap or the
+    /// forward). Exhaustive: a new rule must answer. `Model::proxy_apply`
+    /// runs each rule's PX model; the rules it lists under PXESC take this
+    /// answer.
+    pub fn proxy_operand(&self) -> ProxyOperand {
+        match self {
+            // No internal method of the Proxy runs: it is an object with no internal
+            // slots and no own fields, and the ordinary rule decides (`proxy_apply`'s
+            // value arms: tests of the value, value relays, String folds).
+            Cons::Guard { .. }
+            | Cons::Defined { .. }
+            | Cons::NotNullish { .. }
+            | Cons::NotUndefined { .. }
+            | Cons::NotNull { .. }
+            | Cons::RecordEntry { .. }
+            | Cons::ArrayRecordEntry { .. }
+            | Cons::TypeIs { .. }
+            | Cons::Falsy { .. }
+            | Cons::Objects { .. }
+            | Cons::FieldTruthy { .. }
+            | Cons::Range { .. }
+            | Cons::Plus { .. }
+            | Cons::Arith { .. }
+            | Cons::ConsoleFormat { .. }
+            | Cons::CaseMap { .. }
+            | Cons::StoreIndexed { .. }
+            | Cons::ElemUndef { .. }
+            | Cons::IdxKey { .. }
+            | Cons::IdxKeyCall { .. }
+            | Cons::IdxOwnKey { .. }
+            | Cons::LenIndex { .. }
+            | Cons::LenPermuted { .. }
+            | Cons::IndexHole
+            | Cons::IndexHoleIn { .. }
+            | Cons::IndexKept
+            | Cons::ArrayLenArg { .. }
+            | Cons::NotObjectProto { .. }
+            | Cons::NotError { .. }
+            | Cons::ObjTagProbe { .. }
+            | Cons::TopIfAny { .. }
+            | Cons::TopIfTop { .. }
+            | Cons::ForInMeet { .. }
+            | Cons::ThisInst { .. }
+            | Cons::ProtoValues { .. }
+            | Cons::CreateProto { .. }
+            | Cons::ProtoObjects { .. }
+            | Cons::ProtoGiven { .. }
+            | Cons::ParentGiven { .. }
+            | Cons::DefineAnyKey { .. }
+            | Cons::DefineKeyed { .. }
+            | Cons::DeleteKeyed { .. }
+            | Cons::DeleteEnumWhen { .. }
+            | Cons::SuperFrom { .. }
+            | Cons::Super { .. }
+            | Cons::StrIndex { .. }
+            | Cons::StrSubstring { .. }
+            | Cons::StrReplace { .. }
+            | Cons::ClassReplace { .. }
+            | Cons::Captures { .. }
+            | Cons::ArgInto { .. }
+            | Cons::RetInto { .. }
+            | Cons::UnnamedSet { .. } => ProxyOperand::Value,
+            // No internal method of the Proxy runs, and the rule does nothing on it
+            // (`proxy_apply`: InterpRuns holds the global object only; an
+            // observation, a throw region; prototype-closure rules that read builtin
+            // prototypes, holder accessors or ⊤; a literal's birth field; ENUM3's
+            // any-key value watch, PXENUMV).
+            Cons::InterpRuns { .. }
+            | Cons::Identity { .. }
+            | Cons::Detached
+            | Cons::Raise { .. }
+            | Cons::HandRaise { .. }
+            | Cons::ProtoMethods { .. }
+            | Cons::AnyAccessors { .. }
+            | Cons::StoreTopProto { .. }
+            | Cons::BirthField { .. }
+            | Cons::EnumKeyAny { .. } => ProxyOperand::Value,
+            // Rule PX-VIEW: the argument of a TypedArray / DataView / Buffer.from
+            // constructor. 23.2.5.1 step 6.b tests the argument's own internal slots
+            // ([[TypedArrayName]], [[ArrayBufferData]]) without a trap; a Proxy has
+            // neither (10.5: [[ProxyHandler]] and [[ProxyTarget]] only, never
+            // forwarded), so it is the "other object" case: a fresh buffer
+            // (`js_typed_array_new`: a Proxy cell is in neither registry). Its
+            // @@iterator, "length" and index reads are the node's own Load rules.
+            Cons::ViewedBuffer { .. } => ProxyOperand::Value,
+            // Rule PX-VIEW: the same argument, tested for typed storage (B1): a Proxy
+            // is none, as above.
+            Cons::ShareBuffer { .. } => ProxyOperand::Value,
+            // A failed `x instanceof ArrayBuffer`: perry-runtime answers it by the
+            // buffer brand of the Proxy's target (`instanceof_dispatch` unwraps a Proxy
+            // to its target, no trap), never by OrdinaryHasInstance; the ordinary rule
+            // lets every non-buffer token through, a superset of that.
+            Cons::NotBuffer { .. } => ProxyOperand::Value,
+            // The callee value of an own-test predicate, tested by identity: a Proxy
+            // is no own-test function and refutes; its call is the call rule's.
+            Cons::OwnTest { .. } => ProxyOperand::Value,
+            // A refutation marker: its replay adds the ordinary read on the object
+            // node (`own_gate`), where a Proxy reaches the IdxLoad arm.
+            Cons::OwnGate { .. } => ProxyOperand::Value,
+            // Values a store puts into own instances, OwnOnly's receiver-rooted store
+            // and StoreOut's contract store: value flows, no internal method of the
+            // stored value runs. StoreOut's publication to the reader is the contract
+            // check's (`publish_result`), as for every value of this unit.
+            Cons::CallerValue { .. }
+            | Cons::OwnOnly { .. }
+            | Cons::StoreOut { .. } => ProxyOperand::Value,
+            // The `this` of a literal's method closures: a Proxy is no closure; its
+            // [[Call]] (10.5.12) binds thisArg at each call (`bind_via`, `proxy_call`).
+            Cons::ThisFrom { .. } => ProxyOperand::Value,
+            // Template bookkeeping: a Proxy has no template; its keys are its
+            // target's, which the forwarded store gives.
+            Cons::AddsKeys => ProxyOperand::Value,
+            // An internal method of the Proxy runs, its PX model in `proxy_apply`
+            // (get/set/has/ownKeys/defineProperty/deleteProperty/getPrototypeOf/apply/
+            // construct traps and their forwards, ToPrimitive through the get trap).
+            Cons::Load { .. }
+            | Cons::OwnValues { .. }
+            | Cons::OwnKeys { .. }
+            | Cons::OwnNames { .. }
+            | Cons::OwnDescValues { .. }
+            | Cons::Store { .. }
+            | Cons::Call { .. }
+            | Cons::CallThis { .. }
+            | Cons::New { .. }
+            | Cons::NewProgram { .. }
+            | Cons::FromArrayLike { .. }
+            | Cons::ReflectNew { .. }
+            | Cons::ReflectNewTarget { .. }
+            | Cons::MCall { .. }
+            | Cons::Chain { .. }
+            | Cons::TopSink { .. }
+            | Cons::RuntimeStore { .. }
+            | Cons::Hard { .. }
+            | Cons::DeleteKey { .. }
+            | Cons::HasProp { .. }
+            | Cons::OwnProp { .. }
+            | Cons::DeleteIdx { .. }
+            | Cons::Meta { .. }
+            | Cons::DefineKey { .. }
+            | Cons::DefineAll { .. }
+            | Cons::Implicit { .. }
+            | Cons::HasInstance { .. }
+            | Cons::ChainUnion { .. }
+            | Cons::EnumChain { .. }
+            | Cons::OwnDescAcc { .. }
+            | Cons::ProtoClosure { .. }
+            | Cons::ChainSet { .. }
+            | Cons::ChainRecv { .. }
+            | Cons::FwdLoad { .. }
+            | Cons::FwdStore { .. }
+            | Cons::DefineOwn { .. }
+            | Cons::AccessorInstall { .. }
+            | Cons::ProtoFrom { .. }
+            | Cons::ProtoOf { .. }
+            | Cons::PlainKey { .. }
+            | Cons::IterNext { .. }
+            | Cons::NewTargetHard { .. }
+            | Cons::IdxLoad { .. }
+            | Cons::IdxOwnLoad { .. }
+            | Cons::IdxMCall { .. }
+            | Cons::ForInKeys { .. }
+            | Cons::DeleteEnum { .. }
+            | Cons::ThisTo { .. }
+            | Cons::CallArgs { .. }
+            | Cons::Spread { .. }
+            | Cons::JsonCopy { .. }
+            | Cons::SpreadFrom { .. }
+            | Cons::BuiltinCallee
+            | Cons::ProxyCallee { .. }
+            | Cons::HolderStep { .. } => ProxyOperand::Trap,
+            // An internal method of the Proxy runs and no PX model of it is built
+            // yet: PXESC (the escape stands in for the trap). ToPropertyKey of a key
+            // (ToPrimitive: AccessorKeyed, OwnComputedKey, StoreKeyed, ProtoKeySet);
+            // ToPropertyDescriptor (DefineDesc); Get( then ) (Fulfil); Get( prototype )
+            // (ProtoKey, NativeParent); for-in enumeration and its reads (EnumLoad,
+            // EnumKeyStore, ForInBody); a lookup through a Proxy holder (VisitHolders,
+            // VisitStop); Annex B define / lookup; IsRegExp and ToString (NotRegExp,
+            // RegExpPattern); [[Construct]] (NewNamed, SuperCtor, SuperCtorParent); a
+            // native on a Proxy `this` its model does not name (NativeThis).
+            // RequireSpec: perry-runtime's non-string specifier error
+            // (`describe_received_js`) reads `constructor` and its `name` through the
+            // get trap. CjsPublish: `registerPathModule` reads `__perry_cjs_record`
+            // and `exports` (`cjs_record_exports`: `js_object_get_field_by_name`, the
+            // get trap on a Proxy). Accessor: installing runs no trap, but the getter
+            // or setter's later [[Call]] is the apply trap or the forward, which the
+            // ordinary rule (functions and builtin callables only) does not install.
+            // ForInAcc: the body site's [[Get]] / [[Set]] on a Proxy runs its get /
+            // set trap, program code the path watch must see.
+            Cons::AccessorKeyed { .. }
+            | Cons::OwnComputedKey { .. }
+            | Cons::StoreKeyed { .. }
+            | Cons::ProtoKeySet { .. }
+            | Cons::DefineDesc { .. }
+            | Cons::Fulfil { .. }
+            | Cons::ProtoKey { .. }
+            | Cons::EnumLoad { .. }
+            | Cons::EnumKeyStore { .. }
+            | Cons::ForInBody { .. }
+            | Cons::VisitHolders { .. }
+            | Cons::VisitStop { .. }
+            | Cons::AnnexBDefine { .. }
+            | Cons::AnnexBLookup { .. }
+            | Cons::NotRegExp { .. }
+            | Cons::RegExpPattern { .. }
+            | Cons::NativeParent { .. }
+            | Cons::NewNamed { .. }
+            | Cons::SuperCtor { .. }
+            | Cons::SuperCtorParent { .. }
+            | Cons::NativeThis { .. }
+            | Cons::RequireSpec { .. }
+            | Cons::CjsPublish { .. }
+            | Cons::Accessor { .. }
+            | Cons::ForInAcc { .. } => ProxyOperand::Trap,
+            // The operand reaches code the solve does not see (a bound target called
+            // with unknown arguments, another unit's method or constructor, another
+            // unit's read): the escape is the rule.
+            Cons::BoundCall { .. }
+            | Cons::ContractThis { .. }
+            | Cons::OverrideThis { .. }
+            | Cons::HandOver { .. }
+            | Cons::Miss { .. } => ProxyOperand::Contract,
         }
     }
 }
