@@ -2218,10 +2218,8 @@ fn undescribed_member(m: &mut Model, dst: NodeId) {
     m.add_prim(dst, prim::ALL);
 }
 
-/// A read on `ObjectProto` itself, not through a chain (`Function.prototype
-/// .call`, `String.prototype.replace`): it stands for every builtin
-/// prototype, the undescribed ones included, so any key but `constructor`
-/// (`tok_load`) may name a builtin function or a primitive member.
+/// A read on `ObjectProto` itself, not through a chain: the methods of
+/// `Object.prototype` no builtin prototype overrides (`ProtoOwn`).
 pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
     if m.is_constructor_key(key) {
         return;
@@ -2239,8 +2237,9 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
             return;
         }
     }
-    anyfall("undescribed intrinsic prototype member", &"intrinsic", &key);
-    undescribed_member(m, dst);
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only, whose
+    // declared own keys `tok_load` reads; every other prototype is a token
+    // of its own with its own (realm or opaque) read.
 }
 
 mod loads;
@@ -2479,6 +2478,69 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
 /// or async-generator function (`%AsyncFunction.prototype%` & co.), and not
 /// a generator's step closure, which stands for the generator object
 /// (`FuncInfo::gen_step`).
+/// Rule OPROTO: the realm-table name of the intrinsic prototype a builtin
+/// made object `t` is born with where its chain seed (`Model::proto_node`)
+/// holds `ObjectProto` in that prototype's place: an array, Map, Set or
+/// String iterator's (ECMA-262 23.1.5.1 CreateArrayIterator, 24.1.5.1,
+/// 24.2.6.1, 22.1.5.1), and the `prototype` object a generator function is
+/// created with (27.3.4.3, 27.4.4.3: `%GeneratorPrototype%`,
+/// `%AsyncGeneratorPrototype%`). `ObjectProto` is %Object.prototype% only,
+/// so its value is not this prototype's.
+fn born_realm_proto(m: &Model, t: Tok) -> Option<&'static str> {
+    use perry_hir::fn_proto::FnProtoKind as K;
+    match &m.toks[t as usize] {
+        TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what, .. } if *what == members::ARRAY_ITERATOR => {
+                Some("%ArrayIteratorPrototype%")
+            }
+            TmplKind::BObj { what, .. } => members::image_locked_prototype(what)
+                .map(|(name, _)| name)
+                .filter(|name| name.starts_with('%')),
+            _ => None,
+        },
+        TokKind::Proto(tm) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::FnInst { func } => match m.funcs[*func as usize].proto {
+                Some(K::Generator) => Some("%GeneratorPrototype%"),
+                Some(K::AsyncGenerator) => Some("%AsyncGeneratorPrototype%"),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Rule OPROTO: `dst` ⊇ the intrinsic prototype values `Model::proto_value`
+/// adds for `t` beside its chain seed: the realm prototype `t` is born with
+/// (`born_realm_proto`), and for a realm-declared prototype token itself
+/// (`%ArrayIteratorPrototype%`, `%GeneratorPrototype%`) the [[Prototype]] the
+/// realm declares for it (`%IteratorPrototype%`; `null` for none), each by
+/// its own token (`loads::realm_proto_tok`).
+pub(crate) fn intrinsic_proto_values(m: &mut Model, t: Tok, dst: NodeId) {
+    if let Some(name) = born_realm_proto(m, t) {
+        let p = loads::realm_proto_tok(m, name);
+        m.add_tok(dst, p);
+    }
+    let TokKind::NativeProto(n, _) = &m.toks[t as usize] else {
+        return;
+    };
+    let e = match n.starts_with('%') {
+        true => members::realm_entry(n),
+        false => members::realm_entry(&format!("{n}.prototype")),
+    };
+    let Some(e) = e.filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype) else {
+        return;
+    };
+    match e.proto {
+        Some(p) => {
+            let pt = loads::realm_proto_tok(m, p);
+            m.add_tok(dst, pt);
+        }
+        None => m.add_prim(dst, prim::NULL),
+    }
+}
+
 pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
     let fi = &m.funcs[f as usize];
     fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
@@ -2659,16 +2721,18 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     // model does not describe is that and a native prototype of its own
     // (`loads::family_proto_value`), so its reads stay apart from
     // `Object.prototype`'s.
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only; a builtin the
+    // model does not describe has its own prototype token (the realm's
+    // declaration of it, else an opaque one), never `ObjectProto`.
     match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => m.add_tok(dst, p),
         None => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
-            if let Some(ns) = ns.filter(|ns| *ns != BuiltinNs::Object) {
-                let name = format!("{ns:?}.prototype");
-                let p = native_proto(m, &name);
-                m.add_tok(dst, p);
-            }
+            let p = match ns {
+                Some(BuiltinNs::Object) => m.tok(TokKind::ObjectProto),
+                Some(ns) => native_proto(m, &format!("{ns:?}")),
+                None => native_proto(m, "%UnknownPrototype%"),
+            };
+            m.add_tok(dst, p);
         }
     }
 }
