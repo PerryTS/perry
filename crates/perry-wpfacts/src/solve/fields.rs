@@ -1003,6 +1003,11 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.num_fields.insert(t, n);
+        // Rule W10-IDX: the global object's Number-key stores
+        // (`builtins::global_num_field`).
+        if let Some(g) = self.global_num_field.filter(|_| builtins::global_object(self, t)) {
+            self.edge(g, n);
+        }
         let fa = self.field_any(t);
         self.edge(fa, n);
         let numeric = self.numeric_field(t);
@@ -1013,6 +1018,81 @@ impl Model {
                 self.edge(f, n);
             }
         }
+        n
+    }
+
+    /// Rule W10-IDX: `t` keeps the elements an Array.prototype method
+    /// reads and writes in its any-key field (`field_any`): an Array, an
+    /// arguments object, a collection, a box the runtime fills as an Array
+    /// (`iterates_indices`), and the tokens that stand for any object
+    /// (⊤, a marker) or trap every key (a Proxy).
+    pub(crate) fn elems_in_any(&self, t: Tok) -> bool {
+        t == TOP
+            || self.is_marker(t)
+            || self.is_elem_array(t)
+            || match self.toks[t as usize] {
+                TokKind::Proxy(_) => true,
+                TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
+                    TmplKind::Arr { .. } => true,
+                    TmplKind::BObj { what, .. } => builtins::iterates_indices(what),
+                    _ => false,
+                },
+                _ => false,
+            }
+    }
+
+    /// Rule W10-IDX: what an Array.prototype method run on `t`, an object
+    /// that keeps no elements in its any-key field (`elems_in_any`), reads
+    /// as its elements. ECMA-262 23.1.3 reads `this` at index keys only
+    /// (Get(O, ! ToString(𝔽(k)))): the fields a number key names
+    /// (`num_fields`: numeric names, the numeric field and what a computed
+    /// key stored) and past them its chain (`plain_key`: program
+    /// prototypes' numeric fields). One node per receiver.
+    pub(crate) fn array_like_elems(&mut self, t: Tok) -> NodeId {
+        if self.elems_in_any(t) {
+            return self.field_any(t);
+        }
+        if let Some(&n) = self.array_like_elems.get(&t) {
+            return n;
+        }
+        let n = self.node_l("array-like-elems");
+        self.array_like_elems.insert(t, n);
+        let own = self.num_fields(t);
+        self.edge(own, n);
+        let region = self.thrown;
+        self.plain_key(t, ChainAct::Load(n, region));
+        n
+    }
+
+    /// Rule W10-IDX: the values an Array.prototype method run on `t` (as in
+    /// `array_like_elems`) writes. ECMA-262 23.1.3 writes `this` at index
+    /// keys only (Set(O, ! ToString(𝔽(k)), v, true), CreateDataPropertyOrThrow
+    /// of an index) and at `length`: the program's own [[Set]] under the
+    /// element key on a node holding `t`, which names the numeric range
+    /// (`store_into`: `num_only`), never another name. One node per receiver.
+    pub(crate) fn array_like_put(&mut self, t: Tok) -> NodeId {
+        if self.elems_in_any(t) {
+            return self.field_any(t);
+        }
+        if let Some(&n) = self.array_like_put.get(&t) {
+            return n;
+        }
+        let n = self.node_l("array-like-put");
+        self.array_like_put.insert(t, n);
+        let recv = self.node_l("array-like-put-this");
+        self.add_tok(recv, t);
+        let key = self.elem_key();
+        let site = self.anon_store_site();
+        let region = self.thrown;
+        self.cons(
+            recv,
+            Cons::Store {
+                key,
+                src: n,
+                site,
+                region,
+            },
+        );
         n
     }
 

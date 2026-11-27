@@ -730,9 +730,11 @@ impl Run {
                     spread: vec![],
                 }
             }
-            // The receiver's elements: its element node.
+            // The receiver's elements: its element node, on a receiver
+            // that keeps no elements in its any-key field what a read at an
+            // index finds (rule W10-IDX, `Model::array_like_elems`).
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
-                nodes: self.t.map(|t| m.field_any(t)).into_iter().collect(),
+                nodes: self.t.map(|t| m.array_like_elems(t)).into_iter().collect(),
                 spread: vec![],
             },
             // An argument's elements: the values a load of any key reads.
@@ -1576,7 +1578,17 @@ fn run(
                     m.len_event(t, run.call, true);
                 }
                 let v = run.slot(m, src);
-                if let Some(d) = run.node(m, dst) {
+                // Rule W10-IDX: a store into the receiver's elements is a
+                // [[Set]] under an index key (`Model::array_like_put`),
+                // never one under any String key of a receiver that keeps
+                // no elements in its any-key field.
+                let d = match (dst.root, &*dst.steps, run.t) {
+                    (RealmSlotRoot::This, [RealmSlotStep::Elems], Some(t)) => {
+                        Some(m.array_like_put(t))
+                    }
+                    _ => run.node(m, dst),
+                };
+                if let Some(d) = d {
                     flow(m, &v, d);
                 }
             }

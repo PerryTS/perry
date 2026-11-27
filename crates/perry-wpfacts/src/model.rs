@@ -2658,6 +2658,13 @@ pub struct Model {
     /// (receiver, method) serves every call site (`array_like_this`);
     /// `toString`'s `join` call is the call's own.
     pub array_like_this: crate::pts::FxHashMap<(Tok, crate::model::Atom), NodeId>,
+    /// Rule W10-IDX: the index values an Array.prototype method reads from
+    /// a receiver that keeps no elements in its any-key field
+    /// (`Model::array_like_elems`), one node per receiver.
+    pub array_like_elems: crate::pts::FxHashMap<Tok, NodeId>,
+    /// Rule W10-IDX: the node whose values such a method writes under an
+    /// index key of that receiver (`Model::array_like_put`).
+    pub array_like_put: crate::pts::FxHashMap<Tok, NodeId>,
     /// The template a `GetIterator` site makes for the iterator object its
     /// source's `@@iterator` may return (`[iterator#n]`), with the node of
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
@@ -3269,6 +3276,9 @@ pub struct Model {
     pub global_any_off: bool,
     /// G2: the any-key stores taken, for that replay.
     pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// Rule W10-IDX: the global object's field under Number keys
+    /// (`builtins::global_num_field`), made by the first such store.
+    pub global_num_field: Option<NodeId>,
     /// GLOBK3: the global object's field of what `defineProperty` under a
     /// computed key defines there (`DefineAny`): it flows into the any-key
     /// field and, as a define may replace the configurable accessor

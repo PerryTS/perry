@@ -1833,7 +1833,83 @@ fn global_any_link(m: &mut Model, r: GlobalAnyRead, dst: NodeId) {
     for f in hits {
         m.edge(f, dst);
     }
+    if let Some(f) = m.global_num_field {
+        if global_num_hits(m, &r) {
+            m.edge(f, dst);
+        }
+    }
     m.global_any_reads.push((r, dst));
+}
+
+/// Rule W10-IDX: may a global read `r` name a property a Number key names
+/// (ECMA-262 7.1.19: ToString of a Number, a canonical numeric String)?
+fn global_num_hits(m: &Model, r: &GlobalAnyRead) -> bool {
+    match r {
+        GlobalAnyRead::All => true,
+        GlobalAnyRead::Name(n) => global_num_name(n),
+        GlobalAnyRead::Shape(k) => m.key_may_name_str(Key::Any(*k), crate::model::ELEM),
+    }
+}
+
+/// Rule W10-IDX: `n` is a name a Number key can be: a canonical numeric
+/// String, or the model's own names of a Number key (the element key, the
+/// numeric range, a Number-or-BigInt key).
+fn global_num_name(n: &str) -> bool {
+    crate::solve::numeric_key(n)
+        || matches!(n, crate::model::ELEM | crate::model::NUM_KEY | crate::model::DIGITS)
+}
+
+/// Rule W10-IDX: the global object's field under Number keys (an element
+/// key, a Number-valued computed key: an Array.prototype method's index
+/// [[Set]] on the global object, `globalThis[i] = v`), made by the first
+/// store under such a key. The reads whose key can spell a canonical
+/// numeric String read it (`global_num_hits`, a Number-key read's
+/// `num_fields`; those made before it too), never a read of a global
+/// binding whose name is no such String.
+pub fn global_num_field(m: &mut Model) -> NodeId {
+    if let Some(f) = m.global_num_field {
+        return f;
+    }
+    let f = m.node_l("global-number-key");
+    m.global_num_field = Some(f);
+    // A Number-key read of the global object reads its `num_fields`.
+    let nums: Vec<NodeId> = m
+        .num_fields
+        .iter()
+        .filter(|&(&t, _)| super::global_object(m, t))
+        .map(|(_, &n)| n)
+        .collect();
+    for n in nums {
+        m.edge(f, n);
+    }
+    let reads: Vec<NodeId> = m
+        .global_any_reads
+        .iter()
+        .filter(|(r, _)| global_num_hits(m, r))
+        .map(|(_, d)| *d)
+        .collect();
+    for d in reads {
+        m.edge(f, d);
+    }
+    let news: Vec<CallId> = m
+        .global_any_news
+        .iter()
+        .filter(|(n, _)| global_num_name(n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in news {
+        m.cons(f, Cons::New { call });
+    }
+    let calls: Vec<CallId> = m
+        .runtime_global_calls
+        .iter()
+        .filter(|(n, _)| global_num_name(n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in calls {
+        m.cons(f, Cons::Call { call });
+    }
+    f
 }
 
 /// G2: a read of global binding `n` (bare name, `globalThis.n`, a module
@@ -1869,6 +1945,9 @@ pub fn global_any_new(m: &mut Model, name: &str, call: CallId) {
         .map(|(_, f)| *f)
         .collect();
     for f in hits {
+        m.cons(f, Cons::New { call });
+    }
+    if let Some(f) = m.global_num_field.filter(|_| global_num_name(name)) {
         m.cons(f, Cons::New { call });
     }
     m.global_any_news.push((name.to_string(), call));
@@ -1931,6 +2010,9 @@ pub fn runtime_global_call(m: &mut Model, name: &str, call: CallId) {
         .map(|(_, f)| *f)
         .collect();
     for f in hits {
+        m.cons(f, Cons::Call { call });
+    }
+    if let Some(f) = m.global_num_field.filter(|_| global_num_name(name)) {
         m.cons(f, Cons::Call { call });
     }
     m.runtime_global_calls.push((name.to_string(), call));
