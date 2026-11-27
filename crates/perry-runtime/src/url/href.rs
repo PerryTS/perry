@@ -227,7 +227,10 @@ pub(crate) fn parse(input: &str, base: Option<&str>) -> Option<Parsed> {
         None => url::Url::parse(input).ok()?,
         Some(base) => {
             let base = url::Url::parse(base).ok()?;
-            url::Url::options().base_url(Some(&base)).parse(input).ok()?
+            url::Url::options()
+                .base_url(Some(&base))
+                .parse(input)
+                .ok()?
         }
     };
     Some(parsed_of(url))
@@ -490,7 +493,10 @@ mod tests {
 
     #[test]
     fn relative_parses_against_the_base_once() {
-        assert_eq!(parts("/api/hello?name=perry", Some("http://n"))[0], "http://n/api/hello?name=perry");
+        assert_eq!(
+            parts("/api/hello?name=perry", Some("http://n"))[0],
+            "http://n/api/hello?name=perry"
+        );
         assert!(parse("/x", Some("not a url")).is_none());
         assert!(parse("x", None).is_none());
     }
@@ -501,7 +507,10 @@ mod tests {
         assert_eq!(parts("mailto:a@b", None)[10], "null");
         assert_eq!(parts("file:///C:/x/../y", None)[0], "file:///C:/y");
         assert_eq!(parts("http://[::1]:80/", None)[4], "[::1]");
-        assert_eq!(parts("http://bücher.example/", None)[5], "xn--bcher-kva.example");
+        assert_eq!(
+            parts("http://bücher.example/", None)[5],
+            "xn--bcher-kva.example"
+        );
         assert_eq!(parts("blob:https://a.b/x", None)[10], "https://a.b");
     }
 
@@ -516,9 +525,18 @@ mod tests {
     #[test]
     fn setters_round_trip() {
         let href = "http://h/p?a=1#f";
-        assert_eq!(apply(href, Setter::Search("b=2")).unwrap().href, "http://h/p?b=2#f");
-        assert_eq!(apply(href, Setter::Query(None)).unwrap().href, "http://h/p#f");
-        assert_eq!(apply(href, Setter::Port("8080")).unwrap().href, "http://h:8080/p?a=1#f");
+        assert_eq!(
+            apply(href, Setter::Search("b=2")).unwrap().href,
+            "http://h/p?b=2#f"
+        );
+        assert_eq!(
+            apply(href, Setter::Query(None)).unwrap().href,
+            "http://h/p#f"
+        );
+        assert_eq!(
+            apply(href, Setter::Port("8080")).unwrap().href,
+            "http://h:8080/p?a=1#f"
+        );
         assert!(apply(href, Setter::Href("nope")).is_err());
     }
 }

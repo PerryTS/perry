@@ -180,9 +180,7 @@ pub extern "C" fn js_url_href_if_url(value: f64) -> f64 {
     // Undefined NaN-box (matches the canonical TAG_UNDEFINED).
     const UNDEFINED: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
     match object_from_f64(value) {
-        Some(obj) if is_url_object_shape(obj) => {
-            super::href::href_value(obj)
-        }
+        Some(obj) if is_url_object_shape(obj) => super::href::href_value(obj),
         _ => UNDEFINED,
     }
 }
