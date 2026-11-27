@@ -25,6 +25,9 @@ async function run(path: string) {
   await closed;
   const encoded = Buffer.concat(output);
   const decoded = gunzipSync(encoded);
-  console.log(path, encoded.length, crc32(encoded), decoded.equals(input), crc32(decoded), events.join(','));
+  // How many 'data' chunks arrive, and where, follows the compressed size,
+  // which is the backend's own (not Node's zlib).
+  const lifecycle = events.filter((event) => event !== 'data');
+  console.log(path, output.length > 0, decoded.equals(input), crc32(decoded), lifecycle.join(','));
 }
 for (const path of ['write', 'pipe', 'pipeline', 'iterator']) await run(path);
