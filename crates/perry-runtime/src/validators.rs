@@ -90,21 +90,27 @@ pub fn throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 pub fn format_range_received(n: f64) -> String {
     let base = format_received_number(n);
     if n.is_finite() && n.fract() == 0.0 && n.abs() > 4_294_967_296.0 {
-        let (sign, digits) = base
-            .strip_prefix('-')
-            .map_or(("", base.as_str()), |rest| ("-", rest));
-        let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-        let len = digits.len();
-        for (i, ch) in digits.chars().enumerate() {
-            if i > 0 && (len - i) % 3 == 0 {
-                out.push('_');
-            }
-            out.push(ch);
-        }
-        format!("{sign}{out}")
+        add_numerical_separator(&base)
     } else {
         base
     }
+}
+
+/// node `addNumericalSeparator`: `_` between each group of three digits of
+/// an optionally signed integer.
+pub fn add_numerical_separator(base: &str) -> String {
+    let (sign, digits) = base
+        .strip_prefix('-')
+        .map_or(("", base), |rest| ("-", rest));
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    let len = digits.len();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push('_');
+        }
+        out.push(ch);
+    }
+    format!("{sign}{out}")
 }
 
 /// Throw `RangeError [ERR_OUT_OF_RANGE]`: `The value of "<name>" is out of
