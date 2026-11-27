@@ -2117,6 +2117,9 @@ pub struct Model {
     /// token, the last step) -> the class's object and array tokens.
     /// Compiler-internal: nothing of it reaches the binary.
     pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
+    /// A parse's result pair (object, array) -> the one inner pair of that
+    /// parse birth (`Model::json_inner`, FRESHSITE R2).
+    pub json_inner_of: FxHashMap<(Tok, Tok), (Tok, Tok)>,
     /// JSON-RT parse sites (`solve::json_rt`): the site's `json` object
     /// token -> its any-JSON value, root and nested nodes (made on first
     /// use). Compiler-internal, as everything below.
