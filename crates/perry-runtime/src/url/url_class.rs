@@ -30,6 +30,12 @@ fn arg_text(s: *mut crate::StringHeader) -> std::borrow::Cow<'static, str> {
     }
 }
 
+/// The base argument: a null pointer is an omitted base
+/// (`js_url_coerce_base` of `undefined`).
+fn base_text(s: *mut crate::StringHeader) -> Option<std::borrow::Cow<'static, str>> {
+    (!s.is_null()).then(|| arg_text(s))
+}
+
 /// `new URL(input)`.
 #[no_mangle]
 pub extern "C" fn js_url_new(url_str: *mut crate::StringHeader) -> *mut ObjectHeader {
@@ -47,10 +53,10 @@ pub extern "C" fn js_url_new_with_base(
     base_str: *mut crate::StringHeader,
 ) -> *mut ObjectHeader {
     let input = arg_text(url_str);
-    let base = arg_text(base_str);
-    match href::parse(&input, Some(&base)) {
+    let base = base_text(base_str);
+    match href::parse(&input, base.as_deref()) {
         Some(parsed) => href::new_url_object(&parsed),
-        None => throw_invalid_url(&input, Some(&base)),
+        None => throw_invalid_url(&input, base.as_deref()),
     }
 }
 
@@ -66,7 +72,7 @@ pub extern "C" fn js_url_can_parse_with_base(
     input: *mut crate::StringHeader,
     base: *mut crate::StringHeader,
 ) -> i32 {
-    i32::from(href::parse(&arg_text(input), Some(&arg_text(base))).is_some())
+    i32::from(href::parse(&arg_text(input), base_text(base).as_deref()).is_some())
 }
 
 /// `URL.parse(input)`: the URL, or null when it does not parse.
@@ -81,7 +87,7 @@ pub extern "C" fn js_url_parse_with_base(
     input: *mut crate::StringHeader,
     base: *mut crate::StringHeader,
 ) -> *mut ObjectHeader {
-    href::parse(&arg_text(input), Some(&arg_text(base)))
+    href::parse(&arg_text(input), base_text(base).as_deref())
         .map_or(std::ptr::null_mut(), |p| href::new_url_object(&p))
 }
 

@@ -83,7 +83,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let base_slot = rooting::call_rooted(
                     ctx,
                     I64,
-                    "js_url_coerce_string",
+                    "js_url_coerce_base",
                     &[Arg::Plain(DOUBLE, &base_v)],
                 );
                 let obj = rooting::call_with_roots(
@@ -244,7 +244,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let base_slot = rooting::call_rooted(
                 ctx,
                 I64,
-                "js_url_coerce_string",
+                "js_url_coerce_base",
                 &[Arg::Plain(DOUBLE, &base_v)],
             );
             let result_i32 = rooting::call_with_roots(
@@ -303,7 +303,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let base_slot = rooting::call_rooted(
                 ctx,
                 I64,
-                "js_url_coerce_string",
+                "js_url_coerce_base",
                 &[Arg::Plain(DOUBLE, &base_v)],
             );
             let obj = rooting::call_with_roots(

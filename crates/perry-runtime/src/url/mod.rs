@@ -80,6 +80,17 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
     }
     crate::value::js_jsvalue_to_string(value)
 }
+
+/// The optional `base` argument of `new URL`, `URL.canParse` and `URL.parse`:
+/// `undefined` is an omitted argument (Web-IDL `optional`), which reads as a
+/// null pointer (no base); any other value is `String(value)`.
+#[no_mangle]
+pub extern "C" fn js_url_coerce_base(value: f64) -> *mut StringHeader {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        return std::ptr::null_mut();
+    }
+    js_url_coerce_string(value)
+}
 #[cfg(feature = "url-engine")]
 pub(crate) fn install_engine() {
     crate::url_hooks::install_idna(
