@@ -160,6 +160,16 @@ pub(crate) fn alloc_http1_server_response_for_turnloop(
 /// of the server's `ServerResponse` option taking over its connection (node's
 /// `new server[kServerResponse](req, options)`).
 pub(crate) fn exchange_response(server_handle: i64, req: f64, response: f64) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let response = scope.root_nanbox(taken_over_response(server_handle, req, response));
+    let handle = (response.get().to_bits() & PTR_MASK) as i64;
+    if crate::server::response_payload::is_response(handle) {
+        crate::server::response_payload::listen_res_on_finish(handle);
+    }
+    response.get()
+}
+
+fn taken_over_response(server_handle: i64, req: f64, response: f64) -> f64 {
     extern "C-unwind" {
         fn js_new_function_construct(class: f64, args: *const f64, len: usize) -> f64;
     }

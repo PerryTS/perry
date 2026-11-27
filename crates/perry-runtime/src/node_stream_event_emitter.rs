@@ -647,6 +647,28 @@ pub(crate) fn new_events_object() -> f64 {
     crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto(0, 2) as i64)
 }
 
+/// node's `OutgoingMessage` listener table: its commonly listened events
+/// preset to `undefined` on an ordinary object. A preset table puts the
+/// emitter in node's shape mode ([`keeps_removed_keys`]).
+pub(crate) fn new_outgoing_message_events_object() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let events = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 5) as i64,
+    ));
+    for name in [&b"close"[..], b"error", b"finish", b"prefinish", b"drain"] {
+        set_key(events.get_nanbox_f64(), name_key(name), undefined_value());
+    }
+    events.get_nanbox_f64()
+}
+
+/// node's `kShapeMode`: an emitter whose `_events` was preset (an ordinary
+/// object; the empty table is `{ __proto__: null }`) leaves a removed
+/// listener's key in place, `undefined`, instead of deleting it or resetting
+/// the table.
+pub(super) fn keeps_removed_keys(events: f64) -> bool {
+    !JSValue::from_bits(crate::object::js_object_get_prototype_of(events).to_bits()).is_null()
+}
+
 fn reset_events(target: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
@@ -1310,13 +1332,22 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
         {
             return false;
         }
-        if adjust_events_count(target.get_nanbox_f64(), -1.0) == 0.0 {
+        let remaining = adjust_events_count(target.get_nanbox_f64(), -1.0);
+        if keeps_removed_keys(events.get_nanbox_f64()) {
+            set_key(
+                events.get_nanbox_f64(),
+                event.get_nanbox_f64(),
+                undefined_value(),
+            );
+        } else if remaining == 0.0 {
             reset_events(target.get_nanbox_f64());
         } else {
             let _ = crate::object::delete_dynamic_value(
                 events.get_nanbox_f64(),
                 event.get_nanbox_f64(),
             );
+        }
+        if remaining != 0.0 || keeps_removed_keys(events.get_nanbox_f64()) {
             // node announces `list.listener || listener`.
             if !is_undefined(get_event_named(
                 events.get_nanbox_f64(),
@@ -1535,8 +1566,29 @@ fn stream_event_names_array(stream: f64) -> *mut crate::array::ArrayHeader {
     ));
     match events_of(target.get_nanbox_f64()) {
         Some(events) if count > 0.0 => {
-            let keys = crate::proxy::js_reflect_own_keys(events);
-            super::raw_ptr_from_value(keys) as *mut crate::array::ArrayHeader
+            let events = scope.root_nanbox_f64(events);
+            let keys = scope.root_nanbox_f64(crate::proxy::js_reflect_own_keys(
+                events.get_nanbox_f64(),
+            ));
+            if !keeps_removed_keys(events.get_nanbox_f64()) {
+                return super::raw_ptr_from_value(keys.get_nanbox_f64())
+                    as *mut crate::array::ArrayHeader;
+            }
+            // A removed listener leaves its key, `undefined`; it names no event.
+            let len = crate::array::js_array_length(
+                super::raw_ptr_from_value(keys.get_nanbox_f64()) as *const _,
+            );
+            let mut names = crate::array::js_array_alloc(len);
+            for i in 0..len {
+                let key = crate::array::js_array_get_f64(
+                    super::raw_ptr_from_value(keys.get_nanbox_f64()) as *const _,
+                    i,
+                );
+                if !is_undefined(get_key(events.get_nanbox_f64(), key)) {
+                    names = crate::array::js_array_push_f64(names, key);
+                }
+            }
+            names
         }
         _ => crate::array::js_array_alloc(0),
     }
