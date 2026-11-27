@@ -2,166 +2,6 @@ use super::heap_budget::*;
 use super::trigger_watermark::TriggerWatermark;
 use super::*;
 
-mod nursery_cap;
-pub(crate) use nursery_cap::young_generation_holds_a_nursery;
-#[cfg(test)]
-pub(in crate::gc) use nursery_cap::ScavengeNurseryCapTestGuard;
-#[cfg(test)]
-use nursery_cap::GC_NURSERY_CAP_TEST_SUPPRESSED;
-pub(in crate::gc) use nursery_cap::{
-    effective_next_arena_trigger, gc_scavenge_nursery_cap_bytes, next_arena_trigger_base,
-    young_scavenge_cap_due,
-};
-use nursery_cap::{scavenge_nursery_cap_dueness_bytes, young_scavenge_cap_probe};
-
-mod due_trigger;
-#[cfg(test)]
-pub(in crate::gc) use due_trigger::gc_budgeted_due_trigger_eval;
-use due_trigger::gc_budgeted_due_trigger_probe;
-pub(crate) use due_trigger::note_young_leaf_born_old;
-#[cfg(test)]
-pub(crate) use due_trigger::trigger_path_hot_slot_indices;
-pub(in crate::gc) use due_trigger::{
-    gc_budgeted_due_trigger, gc_old_reclaim_debt_bytes, DueTriggerMemo,
-};
-
-mod knobs;
-pub(in crate::gc) use knobs::gc_trace_enabled;
-#[cfg(test)]
-pub(crate) use knobs::moving_loop_polls_enabled_from_env;
-#[cfg(test)]
-pub(in crate::gc) use knobs::{
-    force_alloc_point_minor_pacing, force_legacy_gc_pacing, force_moving_gc_pacing,
-    MovingLoopPollsGuard, TestGcTraceCaptureGuard,
-};
-pub(crate) use knobs::{
-    gc_incremental_enabled, gc_moving_loop_polls_enabled, gc_moving_safepoint_enabled,
-};
-
-mod external_side;
-#[cfg(test)]
-pub(in crate::gc) use external_side::external_side_parse_pressure_due_with;
-#[cfg(test)]
-use external_side::GC_EXTERNAL_SIDE_LIVE_BYTES;
-pub(in crate::gc) use external_side::{
-    external_side_live_bytes, external_side_old_reclaim_pressure_bytes,
-    external_side_parse_band_bytes, external_side_parse_pressure_due,
-    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL, GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES,
-};
-pub(crate) use external_side::{gc_note_external_side_alloc, gc_note_external_side_free};
-
-mod malloc_trigger;
-pub use malloc_trigger::gc_bump_malloc_trigger;
-pub(crate) use malloc_trigger::{
-    gc_bump_json_malloc_trigger_deferred, gc_schedule_malloc_sweep_after_json_output,
-    gc_service_json_output_sweep, JsonOutputSweep,
-};
-pub(in crate::gc) use malloc_trigger::{
-    GC_MALLOC_COUNT_STEP, GC_MALLOC_COUNT_STEP_MAX, GC_MALLOC_COUNT_STEP_MIN,
-};
-
-mod parse_pressure;
-#[cfg(test)]
-pub(in crate::gc) use parse_pressure::force_tiny_parse_pressure_due_for_test;
-use parse_pressure::{diag_tiny_parse_forced_collection, tiny_parse_in_use_trigger_for_mode};
-pub(in crate::gc) use parse_pressure::{
-    gc_bump_arena_trigger_target, gc_schedule_json_construction_grace, gc_suppressed_parse_is_tiny,
-    tiny_parse_generational_collection_due, tiny_parse_pressure_due,
-    GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES,
-    GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES, GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL,
-};
-pub use parse_pressure::{
-    gc_collect_pending_suppressed_parse, gc_schedule_parse_boundary_collection_if_pressure,
-    gc_schedule_tiny_parse_boundary_collection_if_pressure,
-};
-#[cfg(test)]
-pub(in crate::gc) use parse_pressure::{
-    tiny_parse_boundary_poll_next, tiny_parse_pressure_due_with,
-    tiny_parse_pressure_headroom_bytes, GC_SUPPRESSED_TINY_PARSE_BYTES,
-};
-
-mod suppress;
-#[cfg(test)]
-pub(crate) use suppress::window_exit_probe;
-pub(crate) use suppress::{gc_is_suppressed, GcSuppressScope};
-pub use suppress::{gc_suppress, gc_unsuppress};
-
-mod promotion_handoff;
-#[cfg(test)]
-pub(in crate::gc) use promotion_handoff::survivor_promotion_handoff_suppressions;
-#[cfg(test)]
-pub(in crate::gc) use promotion_handoff::{
-    copied_minor_promotable_active_survivor_bytes, copied_minor_promotion_handoff_pressure_due,
-    survivor_promotion_handoff_awaiting_minor,
-};
-pub(in crate::gc) use promotion_handoff::{
-    copied_minor_promotion_handoff_due, credit_promoted_bytes_to_old_baseline,
-    note_copying_minor_completed, note_copying_minor_young_survival,
-    note_survivor_promotion_handoff_full, GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
-};
-
-mod old_reclaim;
-pub use old_reclaim::js_gc_old_reclaim_valve_test_override;
-pub(in crate::gc) use old_reclaim::{
-    finish_full_old_reclaim_baseline, gc_old_reclaim_growth_band_bytes,
-    maybe_schedule_old_reclaim_after_copied_minor, old_gen_reclaimable_pressure_bytes,
-    old_reclaim_pressure_due, request_old_reclaim_for_untraced_promotions,
-    GC_OLD_GEN_RECLAIM_GROWTH_BYTES, GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
-};
-use old_reclaim::{old_reclaim_at_allocation_point, OldReclaimReentryGuard};
-#[cfg(test)]
-pub(in crate::gc) use old_reclaim::{
-    old_reclaim_defer_within_slack, old_reclaim_pressure_due_inner,
-};
-#[cfg(test)]
-pub(in crate::gc) use old_reclaim::{
-    test_clear_old_reclaim_pre_in_use_bytes, test_old_reclaim_backoff_shift,
-    test_old_reclaim_pre_in_use_bytes, test_price_old_reclaim_full,
-    test_set_old_reclaim_backoff_shift, test_set_old_reclaim_last_post_in_use,
-};
-
-mod rebaseline;
-pub(in crate::gc) use rebaseline::gc_bump_malloc_trigger_with_snapshot;
-#[cfg(test)]
-pub(in crate::gc) use rebaseline::ArenaRebaselineAllTestGuard;
-use rebaseline::{gc_finish_arena_trigger_collection, gc_finish_malloc_trigger_collection};
-
-mod major_pacing;
-pub(in crate::gc) use major_pacing::{
-    arena_growth_full_escalation_due, major_pacing_live_growth_multiplier,
-    note_collection_finished_arena_occupancy, old_gen_growth_since_last_full_bytes,
-    pacing_arena_in_use_bytes, pacing_escalation_reading_bytes,
-};
-#[cfg(test)]
-pub(in crate::gc) use major_pacing::{
-    major_pacing_backoff_shift, major_pacing_config, major_pacing_escalation_threshold_for,
-};
-#[cfg(any(perry_diagnostics, test))]
-pub(in crate::gc) use major_pacing::{major_pacing_retaining, major_pacing_snapshot};
-use major_pacing::{
-    pacing_old_in_use_bytes, update_major_pacing_backoff, MAJOR_PACING_PRODUCTIVE_YIELD_PCT,
-    MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER, MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE,
-};
-#[cfg(test)]
-pub(in crate::gc) use major_pacing::{
-    test_major_pacing_pre_in_use_bytes, test_note_full_cycle_reclaimed,
-    test_reset_major_pacing_backoff, test_set_collection_post_in_use_bytes,
-    test_set_major_pacing_baseline, test_set_pacing_arena_in_use,
-};
-
-mod safepoint;
-pub use safepoint::js_gc_loop_safepoint;
-pub(in crate::gc) use safepoint::{
-    contract_scan_heal_guard, moving_defer_within_slack, GC_MOVING_DEFER_SLACK_BYTES,
-};
-pub(crate) use safepoint::{
-    gc_safepoint_moving_minor, gc_safepoint_moving_minor_nothing_due, set_safepoint_pending,
-};
-#[cfg(test)]
-pub(in crate::gc) use safepoint::{
-    run_promoted_cohort_full_if_due, safepoint_only_contract_from_value, SafepointOnlyContract,
-};
-
 mod budgeted;
 #[cfg(test)]
 pub(crate) use budgeted::gc_runtime_safepoint;
@@ -186,6 +26,81 @@ pub use budgeted::{
     JS_GC_STEP_STATUS_SKIPPED,
 };
 
+mod due_trigger;
+#[cfg(test)]
+pub(in crate::gc) use due_trigger::gc_budgeted_due_trigger_eval;
+use due_trigger::gc_budgeted_due_trigger_probe;
+pub(crate) use due_trigger::note_young_leaf_born_old;
+#[cfg(test)]
+pub(crate) use due_trigger::trigger_path_hot_slot_indices;
+pub(in crate::gc) use due_trigger::{
+    gc_budgeted_due_trigger, gc_old_reclaim_debt_bytes, DueTriggerMemo,
+};
+
+mod external_side;
+#[cfg(test)]
+pub(in crate::gc) use external_side::external_side_parse_pressure_due_with;
+#[cfg(test)]
+use external_side::GC_EXTERNAL_SIDE_LIVE_BYTES;
+pub(in crate::gc) use external_side::{
+    external_side_live_bytes, external_side_old_reclaim_pressure_bytes,
+    external_side_parse_band_bytes, external_side_parse_pressure_due,
+    GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL, GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES,
+};
+pub(crate) use external_side::{gc_note_external_side_alloc, gc_note_external_side_free};
+
+mod knobs;
+pub(in crate::gc) use knobs::gc_trace_enabled;
+#[cfg(test)]
+pub(crate) use knobs::moving_loop_polls_enabled_from_env;
+#[cfg(test)]
+pub(in crate::gc) use knobs::{
+    force_alloc_point_minor_pacing, force_legacy_gc_pacing, force_moving_gc_pacing,
+    MovingLoopPollsGuard, TestGcTraceCaptureGuard,
+};
+pub(crate) use knobs::{
+    gc_incremental_enabled, gc_moving_loop_polls_enabled, gc_moving_safepoint_enabled,
+};
+
+mod leaf_window;
+use leaf_window::leaf_memory_due_at_cap;
+pub(in crate::gc) use leaf_window::leaf_service_precedes_copying_cap;
+#[cfg(test)]
+pub(in crate::gc) use leaf_window::leaf_window_due;
+
+mod major_pacing;
+pub(in crate::gc) use major_pacing::{
+    arena_growth_full_escalation_due, major_pacing_live_growth_multiplier,
+    note_collection_finished_arena_occupancy, old_gen_growth_since_last_full_bytes,
+    pacing_arena_in_use_bytes, pacing_escalation_reading_bytes,
+};
+#[cfg(test)]
+pub(in crate::gc) use major_pacing::{
+    major_pacing_backoff_shift, major_pacing_config, major_pacing_escalation_threshold_for,
+};
+#[cfg(any(perry_diagnostics, test))]
+pub(in crate::gc) use major_pacing::{major_pacing_retaining, major_pacing_snapshot};
+use major_pacing::{
+    pacing_old_in_use_bytes, update_major_pacing_backoff, MAJOR_PACING_PRODUCTIVE_YIELD_PCT,
+    MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER, MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE,
+};
+#[cfg(test)]
+pub(in crate::gc) use major_pacing::{
+    test_major_pacing_pre_in_use_bytes, test_note_full_cycle_reclaimed,
+    test_reset_major_pacing_backoff, test_set_collection_post_in_use_bytes,
+    test_set_major_pacing_baseline, test_set_pacing_arena_in_use,
+};
+
+mod malloc_trigger;
+pub use malloc_trigger::gc_bump_malloc_trigger;
+pub(crate) use malloc_trigger::{
+    gc_bump_json_malloc_trigger_deferred, gc_schedule_malloc_sweep_after_json_output,
+    gc_service_json_output_sweep, JsonOutputSweep,
+};
+pub(in crate::gc) use malloc_trigger::{
+    GC_MALLOC_COUNT_STEP, GC_MALLOC_COUNT_STEP_MAX, GC_MALLOC_COUNT_STEP_MIN,
+};
+
 mod manual_collect;
 use manual_collect::manual_gc_collect_now;
 #[cfg(test)]
@@ -200,11 +115,96 @@ pub use manual_collect::{
     js_gc_module_idle_hint, js_gc_module_minor, GC_UNSAFE_ZONES,
 };
 
-mod leaf_window;
-use leaf_window::leaf_memory_due_at_cap;
-pub(in crate::gc) use leaf_window::leaf_service_precedes_copying_cap;
+mod nursery_cap;
+pub(crate) use nursery_cap::young_generation_holds_a_nursery;
 #[cfg(test)]
-pub(in crate::gc) use leaf_window::leaf_window_due;
+pub(in crate::gc) use nursery_cap::ScavengeNurseryCapTestGuard;
+#[cfg(test)]
+use nursery_cap::GC_NURSERY_CAP_TEST_SUPPRESSED;
+pub(in crate::gc) use nursery_cap::{
+    effective_next_arena_trigger, gc_scavenge_nursery_cap_bytes, next_arena_trigger_base,
+    young_scavenge_cap_due,
+};
+use nursery_cap::{scavenge_nursery_cap_dueness_bytes, young_scavenge_cap_probe};
+
+mod old_reclaim;
+pub use old_reclaim::js_gc_old_reclaim_valve_test_override;
+pub(in crate::gc) use old_reclaim::{
+    finish_full_old_reclaim_baseline, gc_old_reclaim_growth_band_bytes,
+    maybe_schedule_old_reclaim_after_copied_minor, old_gen_reclaimable_pressure_bytes,
+    old_reclaim_pressure_due, request_old_reclaim_for_untraced_promotions,
+    GC_OLD_GEN_RECLAIM_GROWTH_BYTES, GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+};
+use old_reclaim::{old_reclaim_at_allocation_point, OldReclaimReentryGuard};
+#[cfg(test)]
+pub(in crate::gc) use old_reclaim::{
+    old_reclaim_defer_within_slack, old_reclaim_pressure_due_inner,
+};
+#[cfg(test)]
+pub(in crate::gc) use old_reclaim::{
+    test_clear_old_reclaim_pre_in_use_bytes, test_old_reclaim_backoff_shift,
+    test_old_reclaim_pre_in_use_bytes, test_price_old_reclaim_full,
+    test_set_old_reclaim_backoff_shift, test_set_old_reclaim_last_post_in_use,
+};
+
+mod parse_pressure;
+#[cfg(test)]
+pub(in crate::gc) use parse_pressure::force_tiny_parse_pressure_due_for_test;
+use parse_pressure::{diag_tiny_parse_forced_collection, tiny_parse_in_use_trigger_for_mode};
+pub(in crate::gc) use parse_pressure::{
+    gc_bump_arena_trigger_target, gc_schedule_json_construction_grace, gc_suppressed_parse_is_tiny,
+    tiny_parse_generational_collection_due, tiny_parse_pressure_due,
+    GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES,
+    GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES, GC_TINY_PARSE_BOUNDARY_POLL_INTERVAL,
+};
+pub use parse_pressure::{
+    gc_collect_pending_suppressed_parse, gc_schedule_parse_boundary_collection_if_pressure,
+    gc_schedule_tiny_parse_boundary_collection_if_pressure,
+};
+#[cfg(test)]
+pub(in crate::gc) use parse_pressure::{
+    tiny_parse_boundary_poll_next, tiny_parse_pressure_due_with,
+    tiny_parse_pressure_headroom_bytes, GC_SUPPRESSED_TINY_PARSE_BYTES,
+};
+
+mod promotion_handoff;
+#[cfg(test)]
+pub(in crate::gc) use promotion_handoff::survivor_promotion_handoff_suppressions;
+#[cfg(test)]
+pub(in crate::gc) use promotion_handoff::{
+    copied_minor_promotable_active_survivor_bytes, copied_minor_promotion_handoff_pressure_due,
+    survivor_promotion_handoff_awaiting_minor,
+};
+pub(in crate::gc) use promotion_handoff::{
+    copied_minor_promotion_handoff_due, credit_promoted_bytes_to_old_baseline,
+    note_copying_minor_completed, note_copying_minor_young_survival,
+    note_survivor_promotion_handoff_full, GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+};
+
+mod rebaseline;
+pub(in crate::gc) use rebaseline::gc_bump_malloc_trigger_with_snapshot;
+#[cfg(test)]
+pub(in crate::gc) use rebaseline::ArenaRebaselineAllTestGuard;
+use rebaseline::{gc_finish_arena_trigger_collection, gc_finish_malloc_trigger_collection};
+
+mod safepoint;
+pub use safepoint::js_gc_loop_safepoint;
+pub(in crate::gc) use safepoint::{
+    contract_scan_heal_guard, moving_defer_within_slack, GC_MOVING_DEFER_SLACK_BYTES,
+};
+pub(crate) use safepoint::{
+    gc_safepoint_moving_minor, gc_safepoint_moving_minor_nothing_due, set_safepoint_pending,
+};
+#[cfg(test)]
+pub(in crate::gc) use safepoint::{
+    run_promoted_cohort_full_if_due, safepoint_only_contract_from_value, SafepointOnlyContract,
+};
+
+mod suppress;
+#[cfg(test)]
+pub(crate) use suppress::window_exit_probe;
+pub(crate) use suppress::{gc_is_suppressed, GcSuppressScope};
+pub use suppress::{gc_suppress, gc_unsuppress};
 
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
