@@ -109,24 +109,12 @@ pub(crate) fn lower_module_decl(
             }
 
             if source == "reflect-metadata" {
-                emit_reflect_metadata_shim_note();
-                // `import "reflect-metadata"` (no specifiers) is a pure
-                // side-effect import — Perry provides the `Reflect.*metadata`
-                // surface natively, so there is nothing to bind. But a CJS
-                // module that does `require("reflect-metadata")` is wrapped to
-                // `import _req_N from 'reflect-metadata'` with a default-import
-                // LOCAL, and the synthesized require shim's
-                // `if (specifier === 'reflect-metadata') return _req_N;`
-                // references that local. Without a binding the read throws
-                // `ReferenceError: _req_N is not defined` at module
-                // evaluation (NestJS's `@nestjs/common/index.js` —
-                // `require("reflect-metadata")` — and every other
-                // reflect-metadata-importing CJS barrel hit this). Bind each
-                // default/namespace/named local to an empty object: the module
-                // value is only ever the discarded result of
-                // `require("reflect-metadata")` (the real effect is the global
-                // `Reflect` polyfill, which Perry already supplies), so an
-                // empty object is a faithful, inert stand-in.
+                if import_decl.type_only || import_is_runtime_erased(import_decl, false) {
+                    return Ok(());
+                }
+                install_reflect_metadata_shim(module);
+                // Wrapped CommonJS barrels still reference the synthesized
+                // import local even when require()'s result is discarded.
                 for spec in &import_decl.specifiers {
                     let local = match spec {
                         ast::ImportSpecifier::Default(d) => d.local.sym.to_string(),
