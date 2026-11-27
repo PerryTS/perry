@@ -1,0 +1,1 @@
+A sloppy function that a builtin calls with a Symbol `thisArg` (`map`, `forEach`, `filter`, `Array.from`, `Array.fromAsync`, `Set`/`Map.prototype.forEach`, ...) sees the Symbol's wrapper object, as OrdinaryCallBindThis requires: `typeof this` is `"object"`, not `"symbol"`. Strict functions still see the symbol itself.
