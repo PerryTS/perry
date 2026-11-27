@@ -2531,6 +2531,13 @@ pub struct Model {
     /// (`o`, `src`, site) its enumerated keys decide: a key it gains later
     /// is stored too (`Model::field`, `Cons::EnumKeyStore`).
     pub enum_key_stores: FxHashMap<Tok, Vec<(NodeId, NodeId, SiteId)>>,
+    /// ENUM-DEL: a global object token -> the reasons of the for-in deletes
+    /// of it (`Model::delete_global_enum`): a key it gains later is deleted
+    /// too (`Model::enum_key_gained`).
+    pub enum_key_deletes: FxHashMap<Tok, Vec<u32>>,
+    /// ENUM-DEL: (global object, key, reason) whose field the for-in delete
+    /// watches (`Model::delete_enum_named`).
+    pub enum_delete_watched: crate::pts::FxHashSet<(Tok, Atom, u32)>,
     pub enum_key_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, NodeId)>,
     /// ENUM3: a for-in subject (or chain link) token -> the node its
     /// unknown-key writes reach (`Model::enum_key_watch`).

@@ -1774,6 +1774,17 @@ impl Model {
                     );
                 }
             }
+            // ENUM-DEL: a for-in over a Proxy yields what its `ownKeys` and
+            // `getOwnPropertyDescriptor` traps give (10.5.11, 10.5.5): any
+            // key, the delete under any key above (PXDEL).
+            Cons::DeleteEnum { reason } => self.proxy_apply(
+                n,
+                &Cons::Hard {
+                    kind: Hard::E7Delete,
+                    reason,
+                },
+                p,
+            ),
             // Rule PXINV: [[Delete]] (10.5.10) under the key value `idx`:
             // trap `deleteProperty( t, key )` with the program's key, the
             // checks target.[[GetOwnProperty]](key) and IsExtensible(target),
@@ -2083,6 +2094,10 @@ impl Model {
             | Cons::DefineAnyKey { .. }
             | Cons::DefineKeyed { .. }
             | Cons::DeleteKeyed { .. }
+            // ENUM-DEL: a Proxy in the watch of a global object's unknown-key
+            // writes is a value there (`Cons::DeleteEnumWhen`); no internal
+            // method of the Proxy runs.
+            | Cons::DeleteEnumWhen { .. }
             // Rule PXSUPER: the Proxy as the home object's prototype of a
             // `super.key` (its [[GetPrototypeOf]] result: the lookup starts
             // at it, `super_lookup`), or as the `this` of one (the

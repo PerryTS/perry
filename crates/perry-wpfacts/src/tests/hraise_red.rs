@@ -138,3 +138,53 @@ fn delkey_reaching_or_unbounded_key_delete_keeps_undefined() {
     .collect();
     assert!(bad.is_empty(), "lost undefined: {bad:#?}");
 }
+
+// ENUM-DEL (DELKEY2): `for (w in s) delete s[w]` deletes only keys the for-in
+// yields for the object deleted from; on the global object those are the keys
+// the realm installs enumerable, the program's own globals and its numeric keys.
+const LOOP: &str = "const maps: Record<string, any> = { a: { x: 1 }, b: globalThis };\n\
+for (const id in maps) { const s = maps[id]; for (const w in s) delete s[w]; }\n";
+
+/// ENUM-DEL: the realm's non-enumerable bindings stay present.
+#[test]
+fn enumdel_forin_delete_spares_realm_bindings() {
+    let bad: Vec<String> = [
+        "const x: any = Int8Array; holder.xv = x;",
+        "const x: any = Object; holder.xv = x;",
+        "(globalThis as any).mine = 1; const x: any = Math; holder.xv = x;",
+        "const x: any = (globalThis as any).Object; holder.xv = x;",
+    ]
+    .into_iter()
+    .map(|b| format!("{LOOP}{b}"))
+    .filter(|b| xv_maybe_undef(b))
+    .collect();
+    assert!(bad.is_empty(), "read as possibly absent: {bad:#?}");
+}
+
+/// ENUM-DEL soundness: a key the for-in may yield is deleted: a realm global
+/// installed enumerable, a program global, a realm name the program defined
+/// enumerable, any key after an unknown-key write; a delete from another
+/// object than the subject keeps the any-key delete.
+#[test]
+fn enumdel_forin_delete_keeps_undefined_for_enumerable_keys() {
+    let bad: Vec<String> = [
+        format!("{LOOP}const x: any = (globalThis as any).setTimeout; holder.xv = x;"),
+        format!("{LOOP}const x: any = (globalThis as any).fetch; holder.xv = x;"),
+        format!("(globalThis as any).mine = 1;\n{LOOP}const x: any = (globalThis as any).mine; holder.xv = x;"),
+        format!("Object.defineProperty(globalThis, \"Int8Array\", {{ value: 1, enumerable: true, configurable: true, writable: true }});\n{LOOP}const x: any = (globalThis as any).Int8Array; holder.xv = x;"),
+        format!("(globalThis as any)[k] = 1;\n{LOOP}const x: any = (globalThis as any).Int8Array; holder.xv = x;"),
+        format!("(globalThis as any).Int8Array = 1;\n{LOOP}const x: any = (globalThis as any).Int8Array; holder.xv = x;"),
+        // A delete made after the read was answered reaches it too.
+        "(globalThis as any).Int8Array = 1; const x: any = (globalThis as any).Int8Array; holder.xv = x;\n\
+function drop(): void { delete (globalThis as any).Int8Array; }\ndrop();".to_string(),
+        "const maps: Record<string, any> = { a: { Int8Array: 1 }, b: globalThis };\n\
+for (const id in maps) { const s = maps[id]; for (const w in s) delete (globalThis as any)[w]; }\n\
+const x: any = (globalThis as any).Int8Array; holder.xv = x;".to_string(),
+    ]
+    .into_iter()
+    .filter(|b| !xv_maybe_undef(b))
+    .collect();
+    assert!(bad.is_empty(), "lost undefined: {bad:#?}");
+}
+
+

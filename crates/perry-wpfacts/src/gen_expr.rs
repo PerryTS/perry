@@ -2006,7 +2006,15 @@ impl<'a> Gen<'a> {
                         let o = self.expr(fx, object);
                         let k = self.expr(fx, index);
                         self.to_property_key(k);
-                        self.m.cons(k, Cons::DeleteKeyed { o, reason: r });
+                        let enum_subject = self.enum_delete_subject(fx.module, object, index);
+                        self.m.cons(
+                            k,
+                            Cons::DeleteKeyed {
+                                o,
+                                reason: r,
+                                enum_subject,
+                            },
+                        );
                         self.m.cons(o, Cons::DeleteIdx { idx: k, reason: r });
                     }
                     other => {

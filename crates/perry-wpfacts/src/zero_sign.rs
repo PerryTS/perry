@@ -174,6 +174,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::DeleteIdx { .. }
         | Cons::Meta { .. }
         | Cons::Hard { .. }
+        | Cons::DeleteEnum { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
         | Cons::OwnGate { .. }
@@ -250,6 +251,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ForInKeys { .. }
         | Cons::EnumKeyStore { .. }
         | Cons::EnumKeyAny { .. }
+        | Cons::DeleteEnumWhen { .. }
         // A key list reads no Number (rule EK).
         | Cons::OwnKeys { .. }
         | Cons::OwnNames { .. }

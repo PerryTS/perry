@@ -847,7 +847,40 @@ pub enum Cons {
     /// constants only, deletes each by name (`DeleteKey`); any other key (an
     /// unbounded String, a Symbol, an object whose ToPropertyKey runs code)
     /// is E7 HARD on `o`, a delete under any key.
-    DeleteKeyed { o: NodeId, reason: u32 },
+    ///
+    /// ENUM-DEL: `enum_subject` when `o` is the subject of the for-in whose
+    /// key `k` is (`for (k in s) delete s[k]`, `Gen::enum_delete_subject`):
+    /// a key no constant names is then one the for-in yields for the object
+    /// deleted from (`Cons::DeleteEnum` on `o`).
+    DeleteKeyed {
+        o: NodeId,
+        reason: u32,
+        enum_subject: bool,
+    },
+    /// ENUM-DEL: on the subject `s` of `for (k in s) delete s[k]`, for a key
+    /// no constant names. Each object `t` of `s` loses a key the for-in
+    /// yields for `t`: an enumerable own String key of `t` (ECMA-262
+    /// 14.7.5.9 EnumerateObjectProperties; an inherited key names no own
+    /// property of `t`, or one that shadows it, 10.1.10). The global object
+    /// (whole program) loses the keys the realm installs enumerable
+    /// (`builtins::global_enumerable_keys`), the keys the program wrote on
+    /// it (its `enum_key` fields, as they appear) and its numeric keys, each
+    /// by name (`Model::delete_global_key`); a write under a key no name
+    /// lists (`Cons::DeleteEnumWhen`) makes it the E7 delete under any key.
+    /// Any other object: E7 under any key, as `Cons::Hard`.
+    DeleteEnum { reason: u32 },
+    /// ENUM-DEL: on a node of global object `t` whose value means the
+    /// program wrote a key there: once it holds a value, the for-in delete
+    /// of `t` deletes that key. `key: Some(a)`: the field of `a` (a store or
+    /// a data definition of `a`; a read alone leaves it empty), the named
+    /// delete of `a`. `None`: the node that collects the writes under keys
+    /// no name lists (`Model::enum_key_watch`, a store into ⊤ there), the E7
+    /// delete under any key on `t`.
+    DeleteEnumWhen {
+        t: Tok,
+        key: Option<Atom>,
+        reason: u32,
+    },
     /// GLOBK3: `Object.defineProperty(o, k, d)` under a computed key `key`,
     /// on the nodes `o`, `key` and `set` (any of them growing decides
     /// again, `Model::define_computed_key`). The global object under a key
@@ -1333,6 +1366,8 @@ impl Cons {
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
             Cons::DeleteKeyed { .. } => "deletekeyed",
+            Cons::DeleteEnum { .. } => "deleteenum",
+            Cons::DeleteEnumWhen { .. } => "deleteenumwhen",
             Cons::DefineAnyKey { .. } => "defineanykey",
             Cons::StoreKeyed { .. } => "storekeyed",
             Cons::EnumKeyStore { .. } => "enumkeystore",

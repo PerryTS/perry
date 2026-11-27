@@ -850,6 +850,10 @@ fn note_write(
     // A global read only deletes reached stays parked
     // (`global_maybe_deleted`): this entry's first stored value replays it.
     let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
+    // A parked global read (`NativeMiss::Global`) the entry's stored values
+    // reached took no `undefined`: its first delete replays it (a delete
+    // made after the read, ECMA-262 10.1.10, is one of its writers too).
+    let first_absent = matches!(value, WriteValue::Absent) && !w.absent;
     match value {
         WriteValue::Opaque => w.opaque = true,
         WriteValue::Value(n) => {
@@ -869,6 +873,11 @@ fn note_write(
             fns.push(f);
         }
     }
+    // ENUM-DEL: a write of a global object a for-in delete reaches
+    // (`Model::delete_global_enum`) makes its key one the for-in may yield.
+    if !matches!(value, WriteValue::Absent) {
+        m.enum_delete_written(t, k);
+    }
     if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
         replay_native_by(m, Some((t, k)));
         return;
@@ -880,7 +889,7 @@ fn note_write(
     // `note_handed_to_unknown`), never on the other entries. Lookups parked
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
-    if fresh || first_value {
+    if fresh || first_value || first_absent {
         replay_pending(m, Some((t, k)));
     }
 }

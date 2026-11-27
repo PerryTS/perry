@@ -482,7 +482,17 @@ pub fn map_cons(
             reason,
             accessor,
         },
-        DeleteKeyed { o, reason } => DeleteKeyed { o: n(o), reason },
+        DeleteKeyed {
+            o,
+            reason,
+            enum_subject,
+        } => DeleteKeyed {
+            o: n(o),
+            reason,
+            enum_subject,
+        },
+        DeleteEnum { reason } => DeleteEnum { reason },
+        DeleteEnumWhen { t, key, reason } => DeleteEnumWhen { t, key, reason },
         StoreKeyed {
             o,
             src,
