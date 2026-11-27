@@ -217,3 +217,83 @@ unsafe fn string_value(value: &str) -> JSValue {
     let s = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
     JSValue::string_ptr(s)
 }
+
+/// The KeyObject surface of an asymmetric key, whose Perry form is a heap
+/// string flagged by `mark_as_asymmetric_key`. `None` leaves the read to the
+/// string's own properties and `String.prototype`.
+pub(crate) unsafe fn asymmetric_key_string_property(
+    obj: *const ObjectHeader,
+    key_bytes: &[u8],
+) -> Option<JSValue> {
+    let (kind, asym_type) = crate::buffer::asymmetric_key_meta(obj as usize)?;
+    if key_bytes == b"type" {
+        let label = if kind == 1 {
+            b"public".as_slice()
+        } else {
+            b"private".as_slice()
+        };
+        let s = crate::string::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+        return Some(JSValue::from_bits(JSValue::string_ptr(s).bits()));
+    }
+    if key_bytes == b"asymmetricKeyType" {
+        let label = match asym_type {
+            1 => b"rsa".as_slice(),
+            2 | 5 | 6 => b"ec".as_slice(),
+            3 => b"ed25519".as_slice(),
+            4 => b"x25519".as_slice(),
+            7 => b"ml-kem-512".as_slice(),
+            8 => b"ml-kem-768".as_slice(),
+            9 => b"ml-kem-1024".as_slice(),
+            10 => b"ml-dsa-44".as_slice(),
+            11 => b"ml-dsa-65".as_slice(),
+            12 => b"ml-dsa-87".as_slice(),
+            _ => b"".as_slice(),
+        };
+        if !label.is_empty() {
+            let s = crate::string::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+            return Some(JSValue::from_bits(JSValue::string_ptr(s).bits()));
+        }
+    }
+    if key_bytes == b"asymmetricKeyDetails" {
+        // 2/5/6: EC over P-256/P-384/P-521 (perry-stdlib's ec_sign).
+        let curve: &[u8] = match asym_type {
+            2 => b"prime256v1",
+            5 => b"secp384r1",
+            6 => b"secp521r1",
+            _ => b"",
+        };
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let details = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_object_alloc(
+            0,
+            if curve.is_empty() { 0 } else { 1 },
+        ) as i64));
+        if !curve.is_empty() {
+            let name = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"namedCurve".as_ptr(), 10) as i64,
+            ));
+            let val = crate::string::js_string_from_bytes(curve.as_ptr(), curve.len() as u32);
+            js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(details.get_nanbox_f64()) as *mut ObjectHeader,
+                crate::value::js_nanbox_get_pointer(name.get_nanbox_f64())
+                    as *const crate::StringHeader,
+                f64::from_bits(JSValue::string_ptr(val).bits()),
+            );
+        }
+        return Some(JSValue::from_bits(details.get_nanbox_u64()));
+    }
+    // `js_class_method_bind` only needs a pointer that stays
+    // valid for the closure's lifetime — the static byte
+    // literals satisfy that without per-read allocation.
+    let static_name: Option<&'static [u8]> = match key_bytes {
+        b"export" => Some(b"export"),
+        b"equals" => Some(b"equals"),
+        b"toCryptoKey" => Some(b"toCryptoKey"),
+        _ => None,
+    };
+    if let Some(name) = static_name {
+        let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+        let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
+        return Some(JSValue::from_bits(result.to_bits()));
+    }
+    None
+}

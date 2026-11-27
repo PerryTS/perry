@@ -44,6 +44,14 @@ pub(crate) fn string_property_get_canonical(value: f64, key: f64) -> f64 {
                 unsafe { (*receiver.as_string_ptr()).utf16_len as f64 }
             };
         }
+        if !receiver.is_short_string() {
+            let string = receiver.as_string_ptr() as *const crate::object::ObjectHeader;
+            if let Some(value) = unsafe {
+                crate::object::field_get_set::asymmetric_key_string_property(string, name)
+            } {
+                return f64::from_bits(value.bits());
+            }
+        }
         std::str::from_utf8(name)
             .ok()
             .and_then(canonical_string_index)
