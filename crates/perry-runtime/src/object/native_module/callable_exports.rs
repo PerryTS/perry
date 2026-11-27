@@ -219,8 +219,8 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
             );
         }
-    } else if export_module_name == "process" && property_name == "hrtime" {
-        let decorated = attach_process_hrtime_bigint(value.get_nanbox_f64());
+    } else if export_module_name == "process" {
+        let decorated = unsafe { nm_attach_process(property_name, value.get_nanbox_f64(), 0) };
         value.set_nanbox_f64(decorated);
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
@@ -1695,12 +1695,22 @@ pub(crate) unsafe fn nm_attach_stream(
     value
 }
 
+/// The `process` members' own properties, at both places a `process`
+/// callable is minted (`bound_native_callable_export_value` and the
+/// statically named export declarations).
+pub(crate) unsafe fn nm_attach_process(property_name: &str, value: f64, _addr: usize) -> f64 {
+    if property_name == "hrtime" {
+        attach_process_hrtime_bigint(value)
+    } else {
+        value
+    }
+}
+
 /// `process.hrtime` carries `bigint` as an own function member, as in Node
 /// (`hrtime.bigint = hrtimeBigInt`: writable, enumerable, configurable), so a
 /// `process.hrtime` read as a value (`const p = process; p.hrtime.bigint()`)
 /// holds what the direct `process.hrtime.bigint()` lowering calls. Decorated
-/// where the one `hrtime` callable is minted: the `process` value surface is
-/// armed at realm bootstrap, before any module attach handler is registered.
+/// where the one `hrtime` callable is minted ([`nm_attach_process`]).
 fn attach_process_hrtime_bigint(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let hrtime = scope.root_nanbox_f64(value);
