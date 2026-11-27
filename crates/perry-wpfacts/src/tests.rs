@@ -335,6 +335,7 @@ mod super_home_proto;
 mod super_key;
 mod switch_const_runs;
 mod switch_mask_union;
+mod sitew_literal_iife;
 mod switch_param_runs;
 mod sync_require;
 mod tdz_seed;
