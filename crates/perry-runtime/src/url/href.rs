@@ -106,6 +106,14 @@ impl Offsets {
                     empty
                 }
             }
+            // Without an authority there is no host: the url crate can still
+            // leave host_start..host_end over a path prefix, such as the `/.`
+            // of `web+demo:/.//not-a-host/`.
+            Component::Host | Component::Hostname | Component::Port
+                if !self.has_authority(href) =>
+            {
+                empty
+            }
             Component::Host => (host_start, path_start),
             Component::Hostname => (host_start, host_end),
             Component::Port => {
@@ -495,6 +503,14 @@ mod tests {
         assert_eq!(parts("http://[::1]:80/", None)[4], "[::1]");
         assert_eq!(parts("http://bücher.example/", None)[5], "xn--bcher-kva.example");
         assert_eq!(parts("blob:https://a.b/x", None)[10], "https://a.b");
+    }
+
+    #[test]
+    fn no_authority_means_no_host() {
+        let p = parts("web+demo:/.//not-a-host/", None);
+        assert_eq!(p[0], "web+demo:/.//not-a-host/");
+        assert_eq!((p[4].as_str(), p[5].as_str(), p[6].as_str()), ("", "", ""));
+        assert_eq!(p[7], "//not-a-host/");
     }
 
     #[test]
