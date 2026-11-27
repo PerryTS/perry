@@ -39,10 +39,6 @@ struct ErrorHeader {
     _opaque: [u8; 0],
 }
 
-extern "C-unwind" {
-    fn js_throw(value: f64) -> !;
-}
-
 extern "C" {
     fn js_node_http_server_close(server_handle: i64, callback: i64);
     fn js_node_http_server_close_all_connections(handle: i64);
@@ -516,7 +512,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             let listeners = server_listeners(handle, is_https, is_h2, &event, true);
             if listeners.is_empty() {
                 if event == "error" {
-                    js_throw(
+                    perry_ffi::throw_program_value(
                         rest.first()
                             .copied()
                             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
