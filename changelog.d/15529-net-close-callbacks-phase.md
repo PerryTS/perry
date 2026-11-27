@@ -1,0 +1,1 @@
+A `net` or `tls` socket's `'close'` comes from a close-callbacks phase after the check phase, as in Node: sockets closed in one turn emit `'close'` newest first, each `'close'` listener's ticks run before the next `'close'`, and a `setTimeout(0)` scheduled beside the `destroy()` no longer runs first under a top-level `await`.

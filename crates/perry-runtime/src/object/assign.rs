@@ -147,6 +147,12 @@ unsafe fn copy_positional_source(
         PositionalPlan::NoKeys => return true,
         PositionalPlan::Keys(keys, count, hide) => (keys, count, hide),
     };
+    // A spread into a literal that held no key when the copy began: the
+    // source's list names each key once, so every key is a creation and the
+    // target is never searched for it.
+    let target_keyless = define
+        && !target_is_array
+        && tgt_h.with_const_ptr::<ObjectHeader, _>(|t| target_holds_no_key(t));
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys_h = scope.root_raw_mut_ptr(keys);
     for i in 0..key_count {
@@ -166,11 +172,12 @@ unsafe fn copy_positional_source(
         if define
             && !target_is_array
             && tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
-                super::define_own_data::define_own_data_from_shape(
-                    crate::value::js_nanbox_pointer(target as i64),
-                    key_f64,
-                    value,
-                )
+                let target = crate::value::js_nanbox_pointer(target as i64);
+                if target_keyless {
+                    super::define_own_data::define_own_data_absent(target, key_f64, value)
+                } else {
+                    super::define_own_data::define_own_data_from_shape(target, key_f64, value)
+                }
                 .is_some()
             })
         {
@@ -198,6 +205,13 @@ unsafe fn copy_positional_source(
         });
     }
     true
+}
+
+/// Does `target`, an ordinary object, hold no own key: a shape with an empty
+/// key list and no overflow table?
+unsafe fn target_holds_no_key(target: *const ObjectHeader) -> bool {
+    !super::overflow::has_overflow(target)
+        && super::shapes::object_shape_record(target).is_some_and(|r| r.logical_key_count() == 0)
 }
 
 /// What [`positional_source_plan`] proves about a source.

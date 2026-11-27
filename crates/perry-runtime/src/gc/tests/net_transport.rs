@@ -68,6 +68,34 @@ thread_local! {
     static PUMPS: Cell<usize> = const { Cell::new(0) };
     /// Run inside the sink on each `NET_ATTEMPT`, as a binding's listener would.
     static ON_ATTEMPT: Cell<Option<fn(OwnerLink, &NetCompletion)>> = const { Cell::new(None) };
+    /// When set, the sink queues a nextTick per `Closed` that logs [`TICK`].
+    static TICK_ON_CLOSED: Cell<bool> = const { Cell::new(false) };
+    /// `(trigger, victim)`: the sink closes `victim` when `trigger`'s
+    /// `Closed` arrives.
+    static CLOSE_ON_CLOSED: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+/// The event kind a [`TICK_ON_CLOSED`] tick logs.
+const TICK: i32 = -1;
+
+extern "C-unwind" fn log_tick(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+) -> f64 {
+    let link = crate::closure::js_closure_get_capture_f64(closure, 0) as usize;
+    EVENTS.with(|events| {
+        events.borrow_mut().push(Event {
+            kind: TICK,
+            link,
+            owner: None,
+            bytes: Vec::new(),
+            rerouted: false,
+            user: 0,
+            pump: PUMPS.with(Cell::get),
+            attached: false,
+        })
+    });
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn link_sink(completion: *const NetCompletion) {
@@ -113,6 +141,16 @@ extern "C" fn link_sink(completion: *const NetCompletion) {
             attached,
         })
     });
+    let (trigger, victim) = CLOSE_ON_CLOSED.with(Cell::get);
+    if c.kind == NET_CLOSED && link.0 == trigger {
+        CLOSE_ON_CLOSED.with(|pair| pair.set((0, 0)));
+        assert!(destroy(OwnerLink(victim)));
+    }
+    if c.kind == NET_CLOSED && TICK_ON_CLOSED.with(Cell::get) {
+        let tick = crate::closure::js_closure_alloc(crate::fn_info!(unwind log_tick, 0), 1);
+        crate::closure::js_closure_set_capture_f64(tick, 0, link.0 as f64);
+        crate::builtins::js_queue_next_tick(tick as i64);
+    }
     if c.kind == NET_ATTEMPT {
         if let Some(hook) = ON_ATTEMPT.with(Cell::get) {
             hook(link, c);
@@ -183,7 +221,16 @@ fn last(kind: i32, link: OwnerLink) -> Option<Event> {
     })
 }
 
+/// Run loop iterations, a poll turn and a close phase each, until `want`.
 fn pump_until(want: impl Fn() -> bool) -> bool {
+    poll_until(|| {
+        crate::turnloop_net::close_phase();
+        want()
+    })
+}
+
+/// Run poll turns alone until `want`.
+fn poll_until(want: impl Fn() -> bool) -> bool {
     let limit = Instant::now() + Duration::from_secs(5);
     loop {
         if want() {
@@ -324,7 +371,11 @@ fn n1_a_handle_holding_payload_lives_until_its_closed_is_dispatched() {
     assert!(destroy(link));
     assert!(destroy(child));
     assert_eq!(DROPS.load(Ordering::SeqCst), 2, "release drops T now");
-    assert_eq!(refs(link), 1, "the owed Closed keeps its ref after release");
+    assert_eq!(
+        refs(link),
+        2,
+        "the owed Closed and its close-phase entry keep refs after release"
+    );
     full();
     assert_eq!(finalized(), before_finalized, "no cell dies while owed");
     assert!(
@@ -381,7 +432,11 @@ fn n5_a_stale_closed_after_reopen_leaves_the_new_listener_alone() {
         transport::accept_start(c, link).unwrap();
         addr
     };
-    assert_eq!(refs(link), 2, "the owed Closed and the new handle");
+    assert_eq!(
+        refs(link),
+        3,
+        "the owed Closed, its close-phase entry and the new handle"
+    );
     let handle = unsafe { (*core(value.get_nanbox_f64())).handle() };
     assert!(handle.is_some());
     assert!(
@@ -573,7 +628,7 @@ fn a_socket_closed_while_resolving_gets_its_closed_from_the_close_phase() {
     assert!(destroy(link), "the resolving socket's Closed is owed");
     assert!(crate::turnloop_net::close_queued());
     assert!(
-        pump_until(|| refs(link) == 1),
+        poll_until(|| refs(link) == 1),
         "the cancelled resolve's ref goes"
     );
     assert_eq!(count(NET_CLOSED, link), 0, "no driver turn delivers it");
@@ -598,6 +653,272 @@ fn a_socket_closed_while_resolving_gets_its_closed_from_the_close_phase() {
     assert_eq!(refs(link), 0, "delivery released the queued ref");
 }
 
+fn resolving_socket(scope: &RuntimeHandleScope) -> OwnerLink {
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "localhost", 1, true).unwrap();
+    }
+    link
+}
+
+fn closed_and_ticks() -> Vec<(i32, usize)> {
+    EVENTS.with(|events| {
+        events
+            .borrow()
+            .iter()
+            .filter(|e| e.kind == NET_CLOSED || e.kind == TICK)
+            .map(|e| (e.kind, e.link))
+            .collect()
+    })
+}
+
+/// libuv runs close callbacks newest first, and each callback's ticks run
+/// before the next one.
+#[test]
+fn the_close_phase_delivers_newest_first_with_each_closes_ticks() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let links: Vec<_> = (0..3).map(|_| resolving_socket(&scope)).collect();
+    for &link in &links {
+        assert!(destroy(link));
+    }
+    TICK_ON_CLOSED.with(|flag| flag.set(true));
+    crate::turnloop_net::close_phase();
+    TICK_ON_CLOSED.with(|flag| flag.set(false));
+    let expected: Vec<_> = links
+        .iter()
+        .rev()
+        .flat_map(|link| [(NET_CLOSED, link.0), (TICK, link.0)])
+        .collect();
+    assert_eq!(closed_and_ticks(), expected);
+    assert!(pump_until(|| links.iter().all(|&link| refs(link) == 0)));
+}
+
+/// A socket a `'close'` listener closes waits for the next close phase, as a
+/// handle libuv closes from a close callback does.
+#[test]
+fn a_close_started_by_the_close_phase_waits_for_the_next_one() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let [first, second, victim] = [(); 3].map(|()| resolving_socket(&scope));
+    assert!(destroy(first));
+    assert!(destroy(second));
+    CLOSE_ON_CLOSED.with(|pair| pair.set((first.0, victim.0)));
+    crate::turnloop_net::close_phase();
+    let closed = || {
+        EVENTS.with(|events| {
+            events
+                .borrow()
+                .iter()
+                .filter(|e| e.kind == NET_CLOSED)
+                .map(|e| e.link)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(closed(), [second.0, first.0]);
+    assert!(
+        crate::turnloop_net::close_ready(),
+        "the victim's close is owed"
+    );
+    crate::turnloop_net::close_phase();
+    assert_eq!(closed(), [second.0, first.0, victim.0]);
+    assert!(pump_until(|| [first, second, victim]
+        .iter()
+        .all(|&link| refs(link) == 0)));
+}
+
+/// A handle's `Closed` reaches the binding only in a close phase: a driver
+/// turn marks the entry ready, and until then the entry keeps the loop alive
+/// without keeping it from parking.
+#[test]
+fn a_handles_closed_waits_for_a_close_phase() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "127.0.0.1", port, true)
+            .unwrap();
+    }
+    assert!(pump_until(|| count(NET_CONNECT, link) == 1));
+    assert!(destroy(link));
+    assert!(crate::turnloop_net::close_queued());
+    assert!(
+        !crate::turnloop_net::close_ready(),
+        "nothing to deliver yet"
+    );
+    assert!(
+        poll_until(|| crate::turnloop_net::close_ready()),
+        "a turn delivers the driver's Closed to the queue"
+    );
+    assert_eq!(
+        count(NET_CLOSED, link),
+        0,
+        "the poll phase does not emit it"
+    );
+    crate::turnloop_net::close_phase();
+    assert_eq!(count(NET_CLOSED, link), 1);
+    assert!(!crate::turnloop_net::close_queued());
+    assert_eq!(refs(link), 0);
+}
+
+/// The close phase's own driver turn hands back only queued `Closed`
+/// completions: data read in the same turn waits for the poll phase.
+#[test]
+fn the_close_phase_turn_leaves_other_completions_for_the_poll_phase() {
+    use std::io::Write;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let server = scope.root_nanbox_f64(fresh());
+    let listener = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        let addr =
+            transport::tcp_listen(c, listener, "127.0.0.1:0".parse().unwrap(), 16, false, true)
+                .unwrap();
+        transport::accept_start(c, listener).unwrap();
+        addr
+    };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    let reader = OwnerLink(CHILD.with(Cell::get));
+    let reader_owner = scope.root_nanbox_f64(unsafe { np::link_event_owner(reader) }.unwrap());
+    unsafe { transport::read_start(core(reader_owner.get_nanbox_f64()), reader).unwrap() };
+    let closing = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        let port = closing.local_addr().unwrap().port();
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "127.0.0.1", port, true)
+            .unwrap();
+    }
+    assert!(pump_until(|| count(NET_CONNECT, link) == 1));
+    peer.write_all(b"poll").unwrap();
+    // Loopback delivery: the bytes are readable before the close below.
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(destroy(link));
+    let mut data_staged = false;
+    for _ in 0..2000 {
+        crate::turnloop_net::close_phase();
+        assert_eq!(count(NET_DATA, reader), 0, "a close phase delivered data");
+        data_staged |= crate::event_pump::staged_for_test(reader.0, transport::link_cell) > 0;
+        if data_staged && count(NET_CLOSED, link) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(data_staged, "a close-phase turn must have read the data");
+    assert_eq!(count(NET_CLOSED, link), 1);
+    assert!(
+        pump_until(|| count(NET_DATA, reader) == 1),
+        "the poll phase delivers it"
+    );
+    assert!(destroy(reader));
+    assert!(destroy(listener));
+    crate::turnloop_net::close_phase();
+}
+
+/// A read result of the closed handle, staged ahead of its `Closed`, retires
+/// with it: the close phase still delivers the `Closed` without waiting for a
+/// poll phase.
+#[test]
+fn a_closed_handles_staged_read_does_not_hold_its_closed_back() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "127.0.0.1", port, true)
+            .unwrap();
+    }
+    assert!(pump_until(|| count(NET_CONNECT, link) == 1));
+    let handle = unsafe { (*core(socket.get_nanbox_f64())).handle() }.unwrap();
+    assert!(destroy(link));
+    crate::event_pump::stage_for_test(transport::read_result_for_test(link, ROUTE, handle));
+    for _ in 0..2000 {
+        crate::turnloop_net::close_phase();
+        if count(NET_CLOSED, link) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        count(NET_CLOSED, link),
+        1,
+        "a retired read held the Closed for a poll phase"
+    );
+    assert_eq!(count(NET_DATA, link), 0);
+    assert_eq!(
+        crate::event_pump::staged_for_test(link.0, transport::link_cell),
+        0
+    );
+    assert_eq!(refs(link), 0);
+}
+
+/// While a completion staged for the poll phase names a closed socket's cell,
+/// the cell stays pinned: its `Closed` is never delivered ahead of it.
+#[test]
+fn a_closed_behind_its_sockets_staged_completion_keeps_the_cell() {
+    use std::io::Write;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let server = scope.root_nanbox_f64(fresh());
+    let listener = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        let addr =
+            transport::tcp_listen(c, listener, "127.0.0.1:0".parse().unwrap(), 16, false, true)
+                .unwrap();
+        transport::accept_start(c, listener).unwrap();
+        addr
+    };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    let reader = OwnerLink(CHILD.with(Cell::get));
+    let owner = scope.root_nanbox_f64(unsafe { np::link_event_owner(reader) }.unwrap());
+    unsafe { transport::read_start(core(owner.get_nanbox_f64()), reader).unwrap() };
+    peer.write_all(b"before close").unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(destroy(reader));
+    for _ in 0..100 {
+        crate::turnloop_net::close_phase();
+        let staged = crate::event_pump::staged_for_test(reader.0, transport::link_cell);
+        assert!(
+            staged == 0 || refs(reader) > 0,
+            "a staged completion names a cell nothing pins"
+        );
+        if count(NET_CLOSED, reader) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        crate::event_pump::pump_net_for_test(Duration::from_millis(1));
+    }
+    assert!(pump_until(
+        || count(NET_CLOSED, reader) == 1 && refs(reader) == 0
+    ));
+    assert!(destroy(listener));
+    assert!(pump_until(|| refs(listener) == 0));
+}
+
 /// Agent teardown drops a queued `Closed` undelivered and releases its ref.
 #[test]
 fn teardown_releases_the_ref_of_a_queued_closed() {
@@ -612,7 +933,7 @@ fn teardown_releases_the_ref_of_a_queued_closed() {
     }
     assert!(destroy(link));
     assert!(
-        pump_until(|| refs(link) == 1),
+        poll_until(|| refs(link) == 1),
         "only the queued ref is left"
     );
     crate::turnloop_net::shutdown_current_thread();

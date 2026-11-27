@@ -82,7 +82,6 @@ runtime_layout_refs!(
     RECORD_F13_0,
     RECORD_F17_0,
     RECORD_F20_0,
-    RECORD_F21_0,
     RECORD_F28_0,
     RECORD_F29_0,
     RECORD_F30_0,
@@ -165,7 +164,7 @@ mod tests {
     fn static_layout_ffi_record_imports_have_present_undefined_slots() {
         crate::_perry_runtime_link::gc::initialize_runtime_fixture();
         let roots = crate::TransientRootScope::enter();
-        let object = roots.root_addr(unsafe { alloc_runtime_record(RECORD_F21_0::desc()) } as i64);
+        let object = roots.root_addr(unsafe { alloc_runtime_record(RECORD_F17_0::desc()) } as i64);
         for slot in 0..5 {
             assert_eq!(
                 unsafe { crate::js_object_get_field(object.get() as *const ObjectHeader, slot) }

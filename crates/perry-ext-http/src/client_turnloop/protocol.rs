@@ -751,6 +751,7 @@ pub(super) fn on_error(conn: &mut Conn, code: &str, syscall: &str, errno: i64) -
                     code,
                     syscall,
                     errno,
+                    peer: Some((conn.peer_host.clone(), conn.peer_port)),
                 }));
             }
             close(conn, &mut fx);
@@ -774,6 +775,7 @@ pub(super) fn on_error(conn: &mut Conn, code: &str, syscall: &str, errno: i64) -
             code: code.to_string(),
             syscall: syscall.to_string(),
             errno,
+            peer: None,
         }));
     }
     close(conn, &mut fx);

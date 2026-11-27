@@ -1,0 +1,1 @@
+Node error fields the runtime attaches (`code`, `errno`, `syscall`, `path`, `dest`, `hostname`) are ordinary own properties of the `Error`, in Node's order, so `Object.keys`, `JSON.stringify` and `util.inspect` see them; the address-keyed diagnostics side table and its GC hooks are gone. An `http` client connect or lookup error also carries `address`/`port` or `hostname`.

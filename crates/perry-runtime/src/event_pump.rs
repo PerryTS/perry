@@ -39,7 +39,9 @@ pub(crate) mod service_errors;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod service_hooks;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use agent_loop::component_turn_and_take;
+pub(crate) use agent_loop::{component_turn_and_take, take_closed_completions};
+#[cfg(test)]
+pub(crate) use agent_loop::{stage_for_test, staged_for_test};
 #[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
 #[cfg(not(target_arch = "wasm32"))]

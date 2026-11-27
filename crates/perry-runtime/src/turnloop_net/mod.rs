@@ -76,7 +76,7 @@ mod write_queue;
 #[path = "tests.rs"]
 mod tests;
 
-pub(crate) use closing::{pending as close_queued, run as close_phase};
+pub(crate) use closing::{pending as close_queued, ready as close_ready, run as close_phase};
 pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
 pub use errors::{map_error, NodeError};
 pub use sink::{

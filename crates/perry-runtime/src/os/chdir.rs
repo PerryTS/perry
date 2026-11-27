@@ -75,21 +75,12 @@ unsafe fn throw_chdir_error(err: &std::io::Error, target: &str) -> ! {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
     crate::node_submodules::register_error_syscall(msg_ptr, "chdir");
-    // #2135: match Node's uv `chdir` error shape — `path` is the *source*
-    // (cwd), `dest` is the failed target, and `errno` is the negative libuv
-    // code. Previously `path` was set to the target and `dest`/`errno` were
-    // absent.
+    // Node's uv `chdir` error shape: `path` is the *source* (cwd), `dest` is
+    // the failed target, and `errno` is the negative libuv code.
     crate::node_submodules::register_error_path(msg_ptr, cwd);
-    let err = crate::error::CoreError::error(msg_ptr);
-    let err_addr = err.header_addr();
-    let dest_ptr = js_string_from_bytes(target.as_ptr(), target.len() as u32);
-    crate::node_submodules::set_error_user_prop(
-        err_addr,
-        "dest",
-        crate::value::js_nanbox_string(dest_ptr as i64),
-    );
-    crate::node_submodules::set_error_user_prop(err_addr, "errno", chdir_error_errno(code) as f64);
-    crate::exception::throw_core(err);
+    crate::node_submodules::register_error_dest(msg_ptr, target.to_string());
+    crate::node_submodules::register_error_errno(msg_ptr, chdir_error_errno(code));
+    crate::exception::throw_core(crate::error::CoreError::error(msg_ptr));
 }
 
 #[cfg(test)]
