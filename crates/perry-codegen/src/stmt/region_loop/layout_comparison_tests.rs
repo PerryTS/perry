@@ -171,6 +171,7 @@ fn an_observable_call_before_a_field_comparison_has_no_reused_region() {
 #[test]
 fn captured_mutable_receiver_keeps_semantic_field_reads() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![],

@@ -25,6 +25,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn closure(func_id: u32, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

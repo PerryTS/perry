@@ -1,0 +1,1 @@
+Internal: `perry compile` builds again without the `backend-wasm` feature (`--no-default-features --features dev-cli`), and the `PERRY_FACTS_STOP_ON_TOP*` and `PERRY_HIRPOS_SAMPLE` diagnostics are declared as non-cache inputs.

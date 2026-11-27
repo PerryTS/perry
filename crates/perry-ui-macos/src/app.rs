@@ -627,6 +627,7 @@ pub fn app_run(_app_handle: i64) {
         }
     }
 
+    crate::display_link::install();
     install_test_mode_exit_timer();
 
     app.run();
@@ -1277,7 +1278,6 @@ extern "C" {
     fn js_promise_run_microtasks() -> i32;
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
-    fn js_frame_pump_default() -> i32;
 }
 
 pub struct PerryTimerTargetIvars {
@@ -1345,10 +1345,9 @@ define_class!(
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
-                    // Issue #1865: perry/ui `onFrame` one-shot display-link
-                    // callbacks. Driven off the same ~8ms pump for now;
-                    // CADisplayLink-quality vsync alignment is a follow-up.
-                    js_frame_pump_default();
+                    // Resumes the `onFrame` display link, or ticks frames
+                    // itself while there is none.
+                    crate::display_link::pump();
                     js_promise_run_microtasks();
                     // Turn this agent's turnloop once (non-blocking). Since the
                     // tokio removal, fetch / node:net / node:http complete on

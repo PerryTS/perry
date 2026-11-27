@@ -216,13 +216,33 @@ pub extern "C" fn js_abort_error_value() -> f64 {
     let msg = b"The operation was aborted";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
-    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
-    crate::node_submodules::set_error_user_prop(
-        err as usize,
-        "constructor",
-        abort_error_constructor_value(),
-    );
-    crate::value::js_nanbox_pointer(err as i64)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let err = scope.root_raw_mut_ptr(crate::error::js_error_new_with_name_message(
+        b"AbortError",
+        msg_ptr,
+    ));
+    let put = |key: &str, value: f64| {
+        let value = scope.root_nanbox_f64(value);
+        err.with_mut_ptr(|err: *mut u8| {
+            crate::node_submodules::set_error_user_prop(err as usize, key, value.get_nanbox_f64())
+        });
+    };
+    // Node's AbortError assigns `name` after `code`: both are own keys.
+    let name = js_string_from_bytes(b"AbortError".as_ptr(), 10);
+    put("name", crate::value::js_nanbox_string(name as i64));
+    put("constructor", abort_error_constructor_value());
+    // Node's `constructor` is inherited: never an enumerable own key.
+    err.with_mut_ptr(|err: *mut u8| {
+        // SAFETY: `err` roots the live Error; reading its bag cannot collect.
+        if let Some(bag) = unsafe { crate::object::cell_expando_get(err as usize) } {
+            crate::object::set_property_attrs(
+                bag as usize,
+                "constructor".to_string(),
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
+    });
+    err.with_mut_ptr(|err: *mut u8| crate::value::js_nanbox_pointer(err as i64))
 }
 
 /// Abort the controller (sets aborted = true on signal)

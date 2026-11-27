@@ -1321,6 +1321,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                 ty: closure_ty,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 44,
                     params: vec![param(3, "x", Type::Number)],

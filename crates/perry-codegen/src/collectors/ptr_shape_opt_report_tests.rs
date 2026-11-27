@@ -193,6 +193,7 @@ fn escape_kinds_are_discriminated() {
     let captured = vec![
         let_c(1, "captured"),
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 99,
             params: Vec::new(),

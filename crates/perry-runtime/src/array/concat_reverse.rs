@@ -27,7 +27,7 @@ fn fill_to_length(value: f64) -> i64 {
     const MAX_LENGTH: f64 = 9_007_199_254_740_991.0;
     // Real ToNumber: fires `valueOf` on an object-valued length and throws
     // TypeError for Symbol/BigInt (fill/return-abrupt-from-this-length*).
-    let number = crate::builtins::js_number_coerce(value);
+    let number = crate::math::js_math_to_number(value);
     if number.is_nan() || number <= 0.0 {
         0
     } else if !number.is_finite() || number > MAX_LENGTH {
@@ -514,7 +514,7 @@ fn reverse_length_of_array_like(object: f64) -> u64 {
 }
 
 fn reverse_to_length(value: f64) -> u64 {
-    let n = crate::builtins::js_number_coerce(value);
+    let n = crate::math::js_math_to_number(value);
     if n.is_nan() || n <= 0.0 {
         0
     } else if n.is_infinite() || n >= (1u64 << 53) as f64 {

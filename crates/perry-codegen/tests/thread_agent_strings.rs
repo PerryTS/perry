@@ -13,6 +13,7 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
     module.init.push(Stmt::Expr(Expr::String(LITERAL.into())));
     if let Some(method) = method {
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 17,
             params: Vec::new(),

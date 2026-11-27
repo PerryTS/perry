@@ -328,7 +328,6 @@ server.listen(0, "127.0.0.1", () => {
         "SERVER_RESPONSE_PROTOTYPE",
         "NATIVE_CTOR_OUTGOING_MESSAGE",
         "NATIVE_CTOR_SERVER_RESPONSE",
-        "RECORD_F21_0",
         // The compat prototype reaches node:http's response prototype; a
         // construction through it (`new (proto.constructor)(req)`, a derived
         // `new F`) births the instance layout.
@@ -339,25 +338,6 @@ server.listen(0, "127.0.0.1", () => {
             "{layout} is not emitted: {defined:?}"
         );
     }
-}
-
-/// node:tls alone (no net, no http): a pre-aborted connect fails through the
-/// deferred TLS failure and a refused one through the socket's error event.
-/// Both birth the socket error record.
-#[test]
-fn tls_connect_failures_reach_the_socket_error_record() {
-    case(
-        r#"import * as tls from "node:tls";
-const aborted = tls.connect({ host: "127.0.0.1", port: 1, signal: AbortSignal.abort() } as any);
-aborted.on("error", (e: any) => {
-  console.log(e.name, e.code);
-  const refused = tls.connect({ host: "127.0.0.1", port: 1 });
-  refused.on("error", (e: any) => console.log(e.code));
-});
-"#,
-        "AbortError ABORT_ERR\nECONNREFUSED\n",
-        "RECORD_F21_0",
-    );
 }
 
 #[test]
@@ -409,24 +389,6 @@ console.log(typeof stream.Readable);
     );
 }
 
-#[test]
-fn http_server_close_reaches_the_socket_error_record() {
-    case(
-        r#"import http from "node:http";
-const server = http.createServer((req: any, res: any) => { res.write("x"); });
-server.listen(0, () => {
-  http.get({ port: (server.address() as any).port }, (res: any) => {
-    res.on("data", () => { server.close(); (server as any).closeAllConnections(); });
-    res.on("error", () => {});
-    res.on("close", () => console.log("closed"));
-  }).on("error", () => console.log("closed"));
-});
-"#,
-        "closed\n",
-        "RECORD_F21_0",
-    );
-}
-
 /// The probes: a plain function's first `.prototype` read asks whether it is
 /// `events.EventEmitter`, and `process.stdin` asks whether an object is on a
 /// node instance layout. Neither reaches events or http, so neither layout is
@@ -465,7 +427,6 @@ fn a_program_without_the_builtins_emits_none_of_their_layouts() {
         "TIMEOUT",
         "ITERATOR_RESULT_DONE_FIRST",
         "OUTGOING_MESSAGE_PROTOTYPE",
-        "RECORD_F21_0",
         "RECORD_F418_0",
         "STREAM_PROTOTYPE",
         "EVENT_EMITTER_PROTOTYPE",

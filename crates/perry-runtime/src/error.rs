@@ -56,6 +56,9 @@ pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
 pub(crate) const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
 pub(crate) const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
 const ERROR_FLAG_HAS_ERRORS: u32 = 1 << 2;
+/// One of Node's internal (`ERR_*`) errors: an uncaught one is reported as
+/// `TypeError [ERR_X]: message`.
+const ERROR_FLAG_NODE_INTERNAL: u32 = 1 << 3;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
 pub const CLASS_ID_ERROR: u32 = 0xFFFF0001;
@@ -238,11 +241,10 @@ unsafe fn alloc_error(
     // brings the error-allocation path under the same umbrella.
     let message_is_valid =
         !message.is_null() && crate::object::is_valid_obj_ptr(message as *const u8);
-    // #9530: Node diagnostics are registered immediately before construction
-    // because no ErrorHeader exists yet. Take that transient message-keyed
-    // record before the first allocation below can move the message; once the
-    // Error exists, the record is installed under its owner address and follows
-    // the existing ErrorSideTables move/finalize hook.
+    // Node diagnostics are registered immediately before construction because
+    // no ErrorHeader exists yet. Take that transient message-keyed record
+    // before the first allocation below can move the message; once the Error
+    // exists, the record becomes its own properties.
     let diagnostics = if message_is_valid {
         crate::node_submodules::take_pending_error_diagnostics(message)
     } else {
@@ -309,9 +311,19 @@ unsafe fn alloc_error(
         None => std::ptr::null_mut(),
     };
 
-    crate::node_submodules::install_error_diagnostics(ptr, diagnostics);
-
+    let error = scope.root_raw_mut_ptr(ptr);
+    let ((), ptr) =
+        error.across_mut(|| crate::node_submodules::install_error_diagnostics(&error, diagnostics));
     ptr
+}
+
+/// Mark `error` as one of Node's internal errors.
+pub(crate) unsafe fn error_mark_node_internal(error: *mut ErrorHeader) {
+    (*error).flags |= ERROR_FLAG_NODE_INTERNAL;
+}
+
+pub(crate) unsafe fn error_is_node_internal(error: *const ErrorHeader) -> bool {
+    (*error).flags & ERROR_FLAG_NODE_INTERNAL != 0
 }
 
 pub(crate) unsafe fn error_set_cause(error: *mut ErrorHeader, cause: f64) {
@@ -592,13 +604,20 @@ impl CoreError {
         message: &[u8],
         code: &[u8],
     ) -> Self {
+        let node_internal = code.starts_with(b"ERR_");
         let scope = crate::gc::RuntimeHandleScope::new();
         let code_ptr = js_string_from_bytes(code.as_ptr(), code.len() as u32);
         let code = scope.root_nanbox_f64(crate::value::js_nanbox_string(code_ptr as i64));
         let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let err = make(msg);
-        crate::node_submodules::set_error_user_prop(err as usize, "code", code.get_nanbox_f64());
-        Self::of(err)
+        let err = scope.root_raw_mut_ptr(make(msg));
+        err.with_mut_ptr(|err: *mut u8| {
+            crate::node_submodules::set_error_user_prop(err as usize, "code", code.get_nanbox_f64())
+        });
+        if node_internal {
+            // SAFETY: `err` roots the live Error just built.
+            err.with_mut_ptr(|err| unsafe { error_mark_node_internal(err) });
+        }
+        err.with_mut_ptr(Self::of)
     }
 
     /// An error of `kind` (0 = Error, 1 = TypeError, 2 = RangeError) whose

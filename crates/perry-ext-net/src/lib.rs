@@ -29,7 +29,7 @@ mod payload_transport;
 mod test_async_shims;
 use crate::tls::TlsClientConfigData;
 pub(crate) use jsvalue::{
-    build_error_object, get_object_bool_field, get_object_number_field, get_object_string_field,
+    get_object_bool_field, get_object_number_field, get_object_string_field,
     get_object_value_field, is_nanboxed_pointer, jsvalue_to_owned_string, jsvalue_to_socket_bytes,
     string_from_header_i64, unbox_pointer,
 };
@@ -196,23 +196,6 @@ mod static_record_layout_tests {
             )
         } as i64);
         for slot in 0..4 {
-            assert_eq!(
-                unsafe {
-                    perry_ffi::js_object_get_field(
-                        record.get() as *const perry_ffi::ObjectHeader,
-                        slot,
-                    )
-                }
-                .bits(),
-                perry_ffi::JsValue::UNDEFINED.bits()
-            );
-        }
-        let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(
-                perry_ffi::runtime_layouts::RECORD_F21_0::desc(),
-            )
-        } as i64);
-        for slot in 0..5 {
             assert_eq!(
                 unsafe {
                     perry_ffi::js_object_get_field(

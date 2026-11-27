@@ -493,6 +493,7 @@ mod tests {
                 }
                 2 => m.functions[0].is_strict = false,
                 _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 9,
                     params: vec![],
