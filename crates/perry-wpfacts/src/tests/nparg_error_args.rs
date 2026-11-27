@@ -155,3 +155,116 @@ fn a_data_cause_is_stored_on_every_family_member() {
         check(&pf, &src, "// SITE z", "x", true);
     }
 }
+
+/// The generic builtin constructor (`new C(m, o)` with `C` the realm's
+/// `Error` / NativeError / `AggregateError` reached as a value; the
+/// `new Error(..)` syntax is the exact `Expr::*ErrorNew` arms) follows the
+/// same contract as the subclass `super(...)`. Red on base: every operand was
+/// touched as `Protocol::Any`, so a closure handed as `message` escaped.
+/// `form`: `("Error", "")` is the literal syntax (keep), `("C", "const C: any
+/// = Error;\n")` the value.
+fn forms(ctor: &str) -> [(String, String); 2] {
+    [
+        (ctor.to_string(), String::new()),
+        ("C".to_string(), format!("const C: any = {ctor};\n")),
+    ]
+}
+
+#[test]
+fn a_closure_message_of_a_plain_constructor_does_not_escape() {
+    for ctor in FAMILY {
+        for (name, pre) in forms(ctor) {
+            let src = format!(
+                "{pre}class V {{ x: number; constructor(x: number) {{ this.x = x; }} }}\n\
+                 const a = new V(1), b = new V(2);\n\
+                 const cb = (p: V): number => p.x; // SITE cb\n\
+                 function f(m: any): string {{ try {{ throw new {name}(m); }} catch (e: any) {{ return e.name; }} }}\n\
+                 console.log(f(\"q\"), f(cb));\n\
+                 console.log(a.x);\n\
+                 console.log(cb(b));\n"
+            );
+            let pf = facts(&src);
+            check(&pf, &src, "// SITE cb", "x", true);
+        }
+    }
+}
+
+/// `new C(m, { get cause() })`: the getter runs with `this` = options and
+/// the instance's own `cause` holds its result; a third operand is never read.
+#[test]
+fn the_cause_getter_of_a_plain_constructor_runs_and_the_instance_holds_its_result() {
+    for ctor in FAMILY {
+        for (name, pre) in forms(ctor) {
+            // The literal `new Error(..)` syntax lowers only operands 0 and 1.
+            let extra = if name == "C" { ", z" } else { "" };
+            let src = format!(
+                "{pre}class V {{ x: number; constructor(x: number) {{ this.x = x; }} }}\n\
+                 const a = new V(1), b = new V(2);\n\
+                 const z = (p: V): number => p.x; // SITE z\n\
+                 const opts = {{ v: a, get cause(): V {{ return this.v; }} }}; // SITE v\n\
+                 const e: any = new {name}(\"m\", opts{extra});\n\
+                 console.log(e.cause.x, z(b)); // SITE cause\n"
+            );
+            let pf = facts(&src);
+            check(&pf, &src, "// SITE v", "v", true);
+            check(&pf, &src, "// SITE cause", "x", true);
+            check(&pf, &src, "// SITE z", "x", true);
+        }
+    }
+}
+
+/// A program `toString` on the message of a plain constructor runs with the
+/// message as `this`, and only so.
+#[test]
+fn a_program_to_string_on_a_plain_constructor_message_runs() {
+    for (name, pre) in forms("Error") {
+        let src = format!(
+            "{pre}class V {{ x: number; constructor(x: number) {{ this.x = x; }} }}\n\
+             const a = new V(1);\n\
+             const msg = {{ t: a, toString(): string {{ return String(this.t.x); }} }}; // SITE t\n\
+             const e = new {name}(msg as any);\n\
+             console.log(e.message, a.x);\n"
+        );
+        let pf = facts(&src);
+        check(&pf, &src, "// SITE t", "t", true);
+    }
+}
+
+/// AggregateError (runtime `js_aggregateerror_new_full`): operand 0 is
+/// iterated into `errors`, operand 1 is the message (ToString), operand 2 is
+/// the options whose `cause` is [[Get]]; later operands are never read.
+#[test]
+fn aggregate_error_operands_follow_the_runtime_contract() {
+    for (name, pre) in forms("AggregateError") {
+        let src = format!(
+            "{pre}class V {{ x: number; constructor(x: number) {{ this.x = x; }} }}\n\
+             const a = new V(1), b = new V(2);\n\
+             const z = (p: V): number => p.x; // SITE z\n\
+             const opts = {{ v: a, get cause(): V {{ return this.v; }} }}; // SITE v\n\
+             const e: any = new {name}([a], \"m\", opts, z);\n\
+             console.log(e.cause.x, z(b)); // SITE cause\n\
+             console.log(e.errors[0].x); // SITE errors\n"
+        );
+        let pf = facts(&src);
+        check(&pf, &src, "// SITE v", "v", true);
+        check(&pf, &src, "// SITE cause", "x", true);
+        check(&pf, &src, "// SITE errors", "x", true);
+        check(&pf, &src, "// SITE z", "x", true);
+    }
+}
+
+/// AggregateError message is operand 1: a closure there does not escape.
+#[test]
+fn an_aggregate_error_closure_message_does_not_escape() {
+    for (name, pre) in forms("AggregateError") {
+        let src = format!(
+            "{pre}class V {{ x: number; constructor(x: number) {{ this.x = x; }} }}\n\
+             const a = new V(1), b = new V(2);\n\
+             const cb = (p: V): number => p.x; // SITE cb\n\
+             function f(m: any): string {{ try {{ throw new {name}([a], m); }} catch (e: any) {{ return e.name; }} }}\n\
+             console.log(f(\"q\"), f(cb), a.x, cb(b));\n"
+        );
+        let pf = facts(&src);
+        check(&pf, &src, "// SITE cb", "x", true);
+    }
+}

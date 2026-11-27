@@ -2531,6 +2531,13 @@ pub struct Model {
     /// (`o`, `src`, site) its enumerated keys decide: a key it gains later
     /// is stored too (`Model::field`, `Cons::EnumKeyStore`).
     pub enum_key_stores: FxHashMap<Tok, Vec<(NodeId, NodeId, SiteId)>>,
+    /// ENUM-DEL: a global object token -> the reasons of the for-in deletes
+    /// of it (`Model::delete_global_enum`): a key it gains later is deleted
+    /// too (`Model::enum_key_gained`).
+    pub enum_key_deletes: FxHashMap<Tok, Vec<u32>>,
+    /// ENUM-DEL: (global object, key, reason) whose field the for-in delete
+    /// watches (`Model::delete_enum_named`).
+    pub enum_delete_watched: crate::pts::FxHashSet<(Tok, Atom, u32)>,
     pub enum_key_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, NodeId)>,
     /// ENUM3: a for-in subject (or chain link) token -> the node its
     /// unknown-key writes reach (`Model::enum_key_watch`).
@@ -3137,6 +3144,9 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// DEL-KEY: (key node, receiver node, constant) of a computed-key delete
+    /// made by name per String constant of its key (`Cons::DeleteKeyed`).
+    pub delete_keyed: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
     /// (key node, receiver node, value node, store site, index) a
     /// `StoreIndexed` store has been added for: `true` the index store,
     /// `false` the computed-key one. A shared body's replay has its own key

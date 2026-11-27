@@ -163,8 +163,9 @@ fn missing(list: &str) -> Vec<String> {
             }
             "proto" | "fn" => members::member(Family::Function, key).is_some(),
             // The global object is no R1 holder (`undeclared`); its own keys
-            // decide which globals the program owns (`global_user_key`).
-            "global" => true,
+            // decide which globals the program owns (`global_user_key`); an
+            // `enum` row names one of them the realm installs enumerable.
+            "global" | "enum" => true,
             _ => panic!("bad row kind {line:?}"),
         };
         if !known {

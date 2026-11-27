@@ -20,6 +20,10 @@ there reads an unknown value, never an absent one; `proto
 <key>` own string keys other than length/name of a native prototype method.
 `global %Global% <key>` own string keys of the global object: the globals
 the realm defines (every other global name is the program's).
+`enum %Global% <key>` those of them the realm installs enumerable ([[Enumerable]] true, attribute
+bit 2 of the declaration: `fetch`, `setTimeout`, `global`): the global object's own keys a for-in
+over it may yield before the program writes one (ECMA-262 14.7.5.9; every other realm global is
+non-enumerable, clause 17), ENUM-DEL (`builtins::global_enumerable_key`).
 Symbol keys are left out of key rows: R1 never takes a symbol key.
 `strings <owner> <key> <declaration>` rows name a key whose value the realm declares a host array of
 strings (`value = dynamic, elements = string`): the array the runtime makes, its elements strings.
@@ -46,6 +50,8 @@ import sys
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "crates/perry-wpfacts/src/builtins/realm_declared_keys.tsv"
 FN_KINDS = {"method", "function", "getter", "setter", "alias"}
+# A declaration's `attributes`: writable 1, enumerable 2, configurable 4 (realm_birth.rs `attrs`).
+ENUMERABLE = 2
 
 
 def namespace_holder(name, kind):
@@ -140,6 +146,8 @@ def rows(realm):
                     out.add(("prim", name, prop["key"], vtype))
         if name == "%Global%":
             out.update(("global", name, k) for k in keys)
+            out.update(("enum", name, p["key"]) for p in d.get("properties", [])
+                       if not p.get("symbol") and p.get("attributes", 0) & ENUMERABLE)
         if name in ("Function.prototype", "Object.prototype"):
             out.update(("proto", name, k) for k in keys)
         elif namespace_holder(name, kind):

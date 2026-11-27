@@ -97,6 +97,7 @@ mod declared_effects;
 mod declared_getter_results;
 mod default_params;
 mod define_through_unknown;
+mod destr;
 pub(crate) mod delivery_boundaries;
 pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;
@@ -370,6 +371,18 @@ use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 /// comes from an undeclared global takes it from there.
 pub(super) fn unseen(src: &str) -> String {
     format!("import \"unseen-host\";\n{src}")
+}
+
+/// The path a fixture is parsed and lowered under. The module kind (module
+/// goal, strictness) of a `.ts` file comes from the nearest `package.json`
+/// above it (`perry_parser::file_is_es_module_by_format`), and a bare
+/// relative name resolves against the process cwd: a test run from a
+/// checkout whose root `package.json` says `"type": "module"` would lower
+/// every sloppy-script fixture as a module. A directory that holds no
+/// `package.json` pins the kind to CommonJS whatever the cwd. The module's
+/// key in `ProgramFacts` stays the bare `name`.
+pub(crate) fn fixture_source_path(name: &str) -> String {
+    format!("/nonexistent-perry-wpfacts-fixtures/{name}")
 }
 
 fn facts(src: &str) -> ProgramFacts {
@@ -1553,8 +1566,11 @@ mod keycall1;
 mod method_this_escape;
 mod native_parent;
 mod e11_null_parent;
+mod hraise_red;
+mod tokid_parent;
 mod native_parent_program_class;
 mod nparg_error_args;
+mod keyset_store;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;

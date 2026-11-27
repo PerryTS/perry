@@ -1726,14 +1726,6 @@ impl<'a> Gen<'a> {
                 calls,
             });
         }
-        // Rule RP1: the positional steps of each array pattern record.
-        for (i, s) in ss.iter().enumerate() {
-            if let Some(c) = super::record_steps::cursor_let(s) {
-                let mut steps = Vec::new();
-                super::record_steps::positional_steps(c, &ss[i + 1..], &mut steps);
-                self.record_steps.extend(steps);
-            }
-        }
         let mut pushed = 0;
         let mut i = 0;
         // A local derived below a guarded counter in this block

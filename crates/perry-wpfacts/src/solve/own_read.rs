@@ -555,7 +555,7 @@ impl Model {
     /// every shaped computed-key store into it (`key_store_node`), now and
     /// later. A node of its own: a field node of an observed token runs no
     /// rule (`sum_skip`).
-    fn enum_key_watch(&mut self, t: Tok) -> NodeId {
+    pub(super) fn enum_key_watch(&mut self, t: Tok) -> NodeId {
         if let Some(&w) = self.enum_key_watch.get(&t) {
             return w;
         }
@@ -634,6 +634,12 @@ impl Model {
         if let Some(v) = self.enum_key_stores.get(&t).cloned() {
             for (o, src, site) in v {
                 self.enum_key_named(o, src, site, a);
+            }
+        }
+        // ENUM-DEL: a for-in delete of the global object deletes it too.
+        if let Some(v) = self.enum_key_deletes.get(&t).cloned() {
+            for reason in v {
+                self.delete_enum_named(t, a, reason);
             }
         }
     }

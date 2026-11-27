@@ -35,6 +35,12 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
 /// has no built-in parent or its holder declares none under that name.
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
     let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    declared_parent_ctor(m, &module, &name)
+}
+
+/// The value of the constructor holder `module` (`builtin`: the global
+/// object) declares under `name`.
+fn declared_parent_ctor(m: &mut Model, module: &str, name: &str) -> Option<Tok> {
     let ns = if module == "builtin" {
         BuiltinNs::GlobalThis
     } else {
@@ -42,11 +48,30 @@ pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
         m.tok(TokKind::Builtin(ns));
         ns
     };
-    let identity = m.namespace_property(ns, &name)?.native?;
+    let identity = m.namespace_property(ns, name)?.native?;
     Some(m.tok(TokKind::BuiltinFn(Native::Member {
         identity,
         holder: None,
     })))
+}
+
+/// The summarized native parent (`native_parent_summarized`) whose declared
+/// constructor `t` is, by token identity: `t` is the value
+/// `declared_parent_ctor` gives for the holder and name the token names (a
+/// realm namespace constructor: `Error` of the global object; a module
+/// export: `node:events.EventEmitter`). However the program reached it
+/// (`Error`, `globalThis.Error`, `events.EventEmitter`), it is one value.
+pub fn native_parent_of(m: &mut Model, t: Tok) -> Option<&'static str> {
+    let (module, name): (&'static str, &'static str) = match m.toks[t as usize] {
+        TokKind::Builtin(ns) => ("builtin", super::loads::proto_family(ns)?.2),
+        TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        }) => identity.rsplit_once('.').unwrap_or(("builtin", identity)),
+        _ => return None,
+    };
+    (native_parent_summarized(name) && declared_parent_ctor(m, module, name) == Some(t))
+        .then_some(name)
 }
 
 /// `super(...)` into a native parent.
@@ -56,14 +81,19 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         .as_ref()
         .map(|(_, c)| c.clone())
         .unwrap_or_default();
-    if !native_parent_summarized(&name) {
+    native_parent_ctor_named(m, &name, call, inst)
+}
+
+/// `super(...)` into the realm constructor of native parent `name`.
+pub fn native_parent_ctor_named(m: &mut Model, name: &str, call: CallId, inst: Tok) {
+    if !native_parent_summarized(name) {
         let r = m.reason(&format!("E21 native parent {name} without a summary"));
         m.mark_hard(inst, Hard::E21NativeParent, r);
         m.escape(inst, r);
         unknown_method(m, call, "E21 native parent constructor argument");
         return;
     }
-    let error_family = error_family_parent(m, tm);
+    let error_family = error_family_parent(name);
     if !error_family {
         implicit_args(m, call, "native parent constructor argument", Protocol::Any);
     }
@@ -71,7 +101,7 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     if error_family {
         error_parent_args(m, call, inst, site);
     }
-    for k in native_parent_keys(&name) {
+    for k in native_parent_keys(name) {
         let a = m.atom(k);
         let v = m.node_l("native-key");
         if k.starts_with('_') {
@@ -95,21 +125,15 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     }
 }
 
-/// Is `tm`'s native parent the realm's Error family: the global object's
+/// Is the summarized native parent named by the argument the realm's Error family: the global object's
 /// `Error` or one of its NativeErrors, as the realm namespaces declare them
 /// (`ns_by_name`: `BuiltinNs::Error` / `BuiltinNs::NativeError`, the
 /// identities the runtime's `init_error_family_receiver` initializes)?
-fn error_family_parent(m: &Model, tm: TmplId) -> bool {
-    m.tmpls[tm as usize]
-        .native_parent
-        .as_ref()
-        .is_some_and(|(module, name)| {
-            module == "builtin"
-                && matches!(
-                    ns_by_name(name),
-                    Some(BuiltinNs::Error | BuiltinNs::NativeError(_))
-                )
-        })
+fn error_family_parent(name: &str) -> bool {
+    matches!(
+        ns_by_name(name),
+        Some(BuiltinNs::Error | BuiltinNs::NativeError(_))
+    )
 }
 
 /// Rule NPARG: `super(message, options, ...)` into an Error-family parent
@@ -387,6 +411,22 @@ fn written_by(
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
     let stored = |t: Tok| stored_key(t, a);
+    // DEL-KEY: a named delete of the global object (`delete g.name`,
+    // `Model::delete_global_key`) is no program store: its key's field holds
+    // no `undefined`, so the entry counts as a write that only deletes,
+    // for the writers `counts` takes such a write for.
+    let gone_counts = counts(&crate::model::NativeWrite {
+        reason: 0,
+        accessor: false,
+        getters: Vec::new(),
+        setters: Vec::new(),
+        opaque: false,
+        stored: Vec::new(),
+        absent: true,
+    });
+    let gone = |t: Tok, k: Option<Atom>| {
+        gone_counts && m.native_writes.get(&(t, k)).is_some_and(|w| w.absent)
+    };
     // A computed read of the global object takes the field of each named
     // key it may spell (`global_shaped_read`, `global_shaped_replay`): a
     // named program store it may name is one of those fields, not a write
@@ -400,6 +440,12 @@ fn written_by(
     let hit = |t: Tok| {
         has(t, None)
             || (has(t, Some(a)) && !stored(t))
+            || (stored(t) && gone(t, Some(a)))
+            || (any
+                && gone_counts
+                && m.native_writes
+                    .range((t, None)..=(t, Some(Atom::MAX)))
+                    .any(|(&(_, k), x)| x.absent && field_named(t, k)))
             || num.is_some_and(|n| has(t, Some(n)))
             || (any && any_on(t, &|k| !field_named(t, k)))
             || (num_read && any_on(t, &|k| k.is_some_and(|k| m.numeric_atom(k))))
@@ -828,6 +874,10 @@ fn note_write(
     // A global read only deletes reached stays parked
     // (`global_maybe_deleted`): this entry's first stored value replays it.
     let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
+    // A parked global read (`NativeMiss::Global`) the entry's stored values
+    // reached took no `undefined`: its first delete replays it (a delete
+    // made after the read, ECMA-262 10.1.10, is one of its writers too).
+    let first_absent = matches!(value, WriteValue::Absent) && !w.absent;
     match value {
         WriteValue::Opaque => w.opaque = true,
         WriteValue::Value(n) => {
@@ -847,6 +897,11 @@ fn note_write(
             fns.push(f);
         }
     }
+    // ENUM-DEL: a write of a global object a for-in delete reaches
+    // (`Model::delete_global_enum`) makes its key one the for-in may yield.
+    if !matches!(value, WriteValue::Absent) {
+        m.enum_delete_written(t, k);
+    }
     if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
         replay_native_by(m, Some((t, k)));
         return;
@@ -858,7 +913,7 @@ fn note_write(
     // `note_handed_to_unknown`), never on the other entries. Lookups parked
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
-    if fresh || first_value {
+    if fresh || first_value || first_absent {
         replay_pending(m, Some((t, k)));
     }
 }

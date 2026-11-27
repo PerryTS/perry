@@ -53,11 +53,12 @@ pub use native_protocol::{
     global_any_field, global_any_names, global_any_new, global_def_field, global_field,
     global_user_key, global_user_method, global_value_written, is_builtin_module,
     native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
-    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
-    note_global_holder, note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
-    note_realm_held, program_global_fn, require_parts, runtime_global_call, settle_native_given,
-    GlobalAnyRead, WriteValue,
+    native_parent_ctor_named, native_parent_keys, native_parent_of, native_parent_summarized,
+    native_parent_value, native_proto, native_writers_why, native_written, native_written_by,
+    note_foreign_holds, note_global_holder, note_global_in_top, note_handed_to_unknown,
+    note_native_accessor, note_native_data_write, note_native_write, note_realm_held,
+    program_global_fn, require_parts, runtime_global_call, settle_native_given, GlobalAnyRead,
+    WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
@@ -2556,6 +2557,20 @@ pub(crate) fn enum_free_fn(identity: &str) -> bool {
 /// `process`, the global object, `require`, a module's exports: their
 /// members are enumerable), not the Error constructors (V8's own
 /// `Error.stackTraceLimit` is enumerable).
+/// ENUM-DEL: the keys the realm installs on the global object enumerable
+/// (`enum` rows of `realm_declared_keys.tsv`, generated from the runtime's
+/// realm declaration: `fetch`, `setTimeout`, `global`, ...). Every other
+/// global the realm installs is non-enumerable ({[[Enumerable]]: false},
+/// ECMA-262 17), so a for-in over the global object never yields it.
+pub(crate) fn global_enumerable_keys() -> impl Iterator<Item = &'static str> {
+    realm_declared::DECLARED.lines().filter_map(|line| {
+        let mut row = line.split('\t');
+        (row.next()? == "enum" && row.next()? == "%Global%")
+            .then(|| row.next())
+            .flatten()
+    })
+}
+
 pub(crate) fn enum_free_ns(ns: BuiltinNs) -> bool {
     use BuiltinNs::*;
     matches!(

@@ -17,8 +17,8 @@ use super::*;
 
 fn one(src: &str) -> ProgramFacts {
     let path = "t.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
+    let module = perry_parser::parse_typescript(src, &fixture_source_path(&path)).expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", &fixture_source_path(&path)).expect("lowers");
     crate::compute(&[(path, &hir)], &FactsConfig::default())
 }
 
@@ -27,8 +27,8 @@ fn modules(mods: &[(&str, &str)]) -> ProgramFacts {
         .iter()
         .map(|(name, src)| {
             let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            let module = perry_parser::parse_typescript(src, &fixture_source_path(&path)).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &fixture_source_path(&path)).expect("lowers");
             for imp in &mut hir.imports {
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{n}.ts"));

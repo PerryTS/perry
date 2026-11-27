@@ -2000,14 +2000,19 @@ impl<'a> Gen<'a> {
                         // ECMA-262 13.5.1.2: `delete o[k]` evaluates the
                         // reference (13.3.3 EvaluatePropertyAccessWithExpressionKey:
                         // ToPropertyKey of the key value), then deletes.
+                        // DEL-KEY: it removes the one own property
+                        // ToPropertyKey(k) names (10.1.10 OrdinaryDelete),
+                        // decided as the key node grows (`Cons::DeleteKeyed`).
                         let o = self.expr(fx, object);
                         let k = self.expr(fx, index);
                         self.to_property_key(k);
+                        let enum_subject = self.enum_delete_subject(fx.module, object, index);
                         self.m.cons(
-                            o,
-                            Cons::Hard {
-                                kind: Hard::E7Delete,
+                            k,
+                            Cons::DeleteKeyed {
+                                o,
                                 reason: r,
+                                enum_subject,
                             },
                         );
                         self.m.cons(o, Cons::DeleteIdx { idx: k, reason: r });

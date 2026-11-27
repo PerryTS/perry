@@ -137,6 +137,24 @@ impl Model {
                     self.index_kept(t);
                 }
             }
+            Cons::MapEntryAt { value, dst } => {
+                let ek = self.elem_key();
+                for &t in toks {
+                    self.prov_tok(pv, t);
+                    if self.keyed_collection(t) {
+                        let part = match value {
+                            true => self.map_vals(t),
+                            false => self.map_keys(t),
+                        };
+                        self.edge(part, dst);
+                    } else {
+                        self.load_from(t, t, ek, dst);
+                    }
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, ek, dst));
+                }
+            }
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {
@@ -999,6 +1017,8 @@ impl Model {
                         self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
+                    } else if builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_key(t, key);
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -1019,6 +1039,9 @@ impl Model {
                     // runs it there (`FnContract::param_defines`).
                     if kind == Hard::E5DefineProperty && self.is_marker(t) {
                         self.note_marker_define(t, None, false);
+                    }
+                    if kind == Hard::E7Delete {
+                        self.e7_global_diag(t, reason);
                     }
                     self.mark_hard(t, kind, reason);
                 }
@@ -1511,8 +1534,26 @@ impl Model {
                 // the class's [[Prototype]] runs as itself.
                 let native = crate::builtins::native_parent_value(self, class);
                 for &parent in toks {
+                    // The value is the realm constructor of a summarized
+                    // native parent (`builtins::native_parent_of`) reached
+                    // without a name link: a member heritage (`extends
+                    // globalThis.Error`) evaluates the same value a bare name
+                    // does (ECMA-262 9.1.1.2.6 GetBindingValue of the global
+                    // object record is [[Get]] on the global object), so
+                    // `super()` runs the same native summary. A name-linked
+                    // class ran it already (`Cons::SuperCtor`).
+                    let summarized = match native {
+                        None => crate::builtins::native_parent_of(self, parent),
+                        Some(_) => None,
+                    };
                     match self.toks[parent as usize] {
                         _ if Some(parent) == native => {}
+                        _ if summarized.is_some() => {
+                            let name = summarized.expect("guarded");
+                            self.with_native(call, |m, call| {
+                                crate::builtins::native_parent_ctor_named(m, name, call, origin)
+                            });
+                        }
                         TokKind::ClassObj(tm) => {
                             // Record the link before the parent's stores
                             // reach the instance (§17.2 item 2).
@@ -2523,6 +2564,32 @@ impl Model {
                                 reason,
                             },
                         ),
+                    }
+                }
+            }
+            Cons::DeleteKeyed {
+                o,
+                reason,
+                enum_subject,
+            } => self.delete_keyed(n, o, reason, enum_subject),
+            Cons::DeleteEnum { reason } => {
+                for &t in toks {
+                    if t != TOP && builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_enum(t, reason);
+                    } else {
+                        self.e7_global_diag(t, reason);
+                        self.mark_hard(t, Hard::E7Delete, reason);
+                    }
+                }
+            }
+            Cons::DeleteEnumWhen { t, key, reason } => {
+                if !toks.is_empty() || prim != 0 {
+                    match key {
+                        Some(a) => self.delete_global_key(t, a),
+                        None => {
+                            self.e7_global_diag(t, reason);
+                            self.mark_hard(t, Hard::E7Delete, reason);
+                        }
                     }
                 }
             }

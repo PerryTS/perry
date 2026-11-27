@@ -881,6 +881,10 @@ pub(super) fn entry_pairs(
     values: NodeId,
 ) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
+    // CreateArrayFromList: an ordinary Array (rule RP2).
+    if let Some(tm) = m.tmpl_of(pair) {
+        m.ordinary_arrays.insert(tm);
+    }
     let k = m.index_slot(pair, 0);
     match keys {
         Some(keys) => m.edge(keys, k),

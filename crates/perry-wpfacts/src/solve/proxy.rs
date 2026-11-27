@@ -1649,6 +1649,11 @@ impl Model {
             // Holds the global object only, never a Proxy.
             Cons::InterpRuns { .. } => {}
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
+            // Not a Map: what an element read of the Proxy reads.
+            Cons::MapEntryAt { dst, .. } => {
+                let ek = self.elem_key();
+                self.proxy_get_into(p, ek, NO_NODE, dst)
+            }
             Cons::IdxLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
             // `p.m( ... )` / `p[k]( ... )`: [[Get]], then Call( f, p, args ).
             Cons::MCall { key, call } => {
@@ -1774,6 +1779,17 @@ impl Model {
                     );
                 }
             }
+            // ENUM-DEL: a for-in over a Proxy yields what its `ownKeys` and
+            // `getOwnPropertyDescriptor` traps give (10.5.11, 10.5.5): any
+            // key, the delete under any key above (PXDEL).
+            Cons::DeleteEnum { reason } => self.proxy_apply(
+                n,
+                &Cons::Hard {
+                    kind: Hard::E7Delete,
+                    reason,
+                },
+                p,
+            ),
             // Rule PXINV: [[Delete]] (10.5.10) under the key value `idx`:
             // trap `deleteProperty( t, key )` with the program's key, the
             // checks target.[[GetOwnProperty]](key) and IsExtensible(target),
@@ -2082,6 +2098,11 @@ impl Model {
             // rule), the computed-key definition.
             | Cons::DefineAnyKey { .. }
             | Cons::DefineKeyed { .. }
+            | Cons::DeleteKeyed { .. }
+            // ENUM-DEL: a Proxy in the watch of a global object's unknown-key
+            // writes is a value there (`Cons::DeleteEnumWhen`); no internal
+            // method of the Proxy runs.
+            | Cons::DeleteEnumWhen { .. }
             // Rule PXSUPER: the Proxy as the home object's prototype of a
             // `super.key` (its [[GetPrototypeOf]] result: the lookup starts
             // at it, `super_lookup`), or as the `this` of one (the
@@ -2448,6 +2469,15 @@ impl Model {
             // Proxy runs: no [[DefineOwnProperty]] (10.5.6), no trap, no
             // forward, whatever the handler is.
             Cons::BirthField { .. } => {}
+            // Rule PXENUMV: ENUM3's `EnumKeyAny` (`enum_key_watch`) watches
+            // the values the enumerated object holds under keys no name
+            // lists, for presence only (`apply`): once one is there, the
+            // copy stores under some String key. A Proxy among them is a
+            // value of the object. EnumerateObjectProperties (14.7.5.9) and
+            // [[OwnPropertyKeys]] run on the enumerated object, never on its
+            // property values: no internal method of the Proxy runs, no
+            // trap, nothing escapes. A Proxy subject keeps its own rules.
+            Cons::EnumKeyAny { o, src, site } => self.enum_key_any(o, src, site),
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2463,7 +2493,6 @@ impl Model {
             | Cons::CjsPublish { .. }
             | Cons::ContractThis { .. }
             | Cons::DefineDesc { .. }
-            | Cons::EnumKeyAny { .. }
             | Cons::EnumKeyStore { .. }
             | Cons::EnumLoad { .. }
             | Cons::ForInAcc { .. }

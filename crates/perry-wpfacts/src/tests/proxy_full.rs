@@ -630,3 +630,19 @@ fn proxy_assign_target_unnamed_key_runs_the_set_trap() {
     site("{}", set_v, &src("1"), true).unwrap();
     site("{ b: payload }", "", &src("1"), true).unwrap();
 }
+
+/// Rule PXENUMV: a for-in copy watches what an object holds under keys no
+/// name lists (ENUM3 `EnumKeyAny`); a Proxy among those values is a value,
+/// not an operand: no internal method of it runs and it does not escape.
+#[test]
+fn pxenumv_proxy_value_under_unknown_key_of_forin_copy_does_not_escape() {
+    let copy = "const o: any = {};\nconst k: string = String(Date.now());\no[k] = px;\nconst c: any = {};\nfor (const key in o) c[key] = o[key];";
+    site("{ a: payload }", "", copy, true).unwrap();
+    let get = "get(t: any, k: any) { external(payload); return 1; }";
+    site("{ a: 1 }", get, copy, true).unwrap();
+    // Control: the copy reaches unknown code: the Proxy escapes (sound).
+    site("{ a: payload }", "", &format!("{copy}\nexternal(c);"), false).unwrap();
+    // Control: a Proxy subject runs its traps (its own rules).
+    let subj = "const c: any = {};\nfor (const key in px) c[key] = px[key];";
+    site("{ a: 1 }", get, subj, false).unwrap();
+}
