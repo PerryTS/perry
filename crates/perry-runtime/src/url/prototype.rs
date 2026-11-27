@@ -1,10 +1,10 @@
-//! WebIDL URL accessors. The URL's numbered fields are private storage;
-//! property lookup and reflection use these descriptors on URL.prototype.
+//! WebIDL URL accessors. The URL's numbered fields are private storage (its
+//! href and component boundaries, `super::href`); property lookup and
+//! reflection use these descriptors on URL.prototype.
 
 // Only reached through the `global-url` member-table install (see
 // `global_this::web_hooks`); a program that never installs it links none of it.
 
-use super::parse::*;
 use super::url_class::*;
 use super::*;
 
@@ -21,15 +21,21 @@ fn require_url_receiver(name: &str, this: crate::closure::JsThis) -> *mut Object
 }
 
 macro_rules! url_getter {
-    ($fn_name:ident, $name:literal, $slot:expr) => {
+    ($fn_name:ident, $name:literal, $read:expr) => {
         extern "C" fn $fn_name(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
         ) -> f64 {
             let obj = require_url_receiver($name, this);
-            crate::object::js_object_get_field_f64(obj, $slot)
+            $read(obj)
         }
     };
+}
+
+use super::href::Component;
+
+fn component(c: Component) -> impl Fn(*mut ObjectHeader) -> f64 {
+    move |obj| super::href::component_value(obj, c)
 }
 
 macro_rules! url_setter {
@@ -46,18 +52,18 @@ macro_rules! url_setter {
     };
 }
 
-url_getter!(get_href, "href", URL_HREF);
-url_getter!(get_protocol, "protocol", URL_PROTOCOL);
-url_getter!(get_host, "host", URL_HOST);
-url_getter!(get_hostname, "hostname", URL_HOSTNAME);
-url_getter!(get_port, "port", URL_PORT);
-url_getter!(get_pathname, "pathname", URL_PATHNAME);
-url_getter!(get_search, "search", URL_SEARCH);
-url_getter!(get_hash, "hash", URL_HASH);
-url_getter!(get_origin, "origin", URL_ORIGIN);
-url_getter!(get_search_params, "searchParams", URL_SEARCH_PARAMS);
-url_getter!(get_username, "username", URL_USERNAME);
-url_getter!(get_password, "password", URL_PASSWORD);
+url_getter!(get_href, "href", component(Component::Href));
+url_getter!(get_protocol, "protocol", component(Component::Protocol));
+url_getter!(get_host, "host", component(Component::Host));
+url_getter!(get_hostname, "hostname", component(Component::Hostname));
+url_getter!(get_port, "port", component(Component::Port));
+url_getter!(get_pathname, "pathname", component(Component::Pathname));
+url_getter!(get_search, "search", component(Component::Search));
+url_getter!(get_hash, "hash", component(Component::Hash));
+url_getter!(get_origin, "origin", super::href::origin_value);
+url_getter!(get_search_params, "searchParams", super::search_params::url_search_params);
+url_getter!(get_username, "username", component(Component::Username));
+url_getter!(get_password, "password", component(Component::Password));
 url_setter!(set_href, "href", js_url_set_href);
 url_setter!(set_protocol, "protocol", js_url_set_protocol);
 url_setter!(set_host, "host", js_url_set_host);
