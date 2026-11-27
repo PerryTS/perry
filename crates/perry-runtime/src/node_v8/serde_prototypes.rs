@@ -50,6 +50,25 @@ method!(
     false,
     length
 );
+method!(
+    serializer_transfer_array_buffer,
+    v8_serializer_transfer_array_buffer,
+    true,
+    id,
+    buffer
+);
+method!(
+    deserializer_transfer_array_buffer,
+    v8_deserializer_transfer_array_buffer,
+    false,
+    id,
+    buffer
+);
+method!(
+    get_wire_format_version,
+    v8_deserializer_get_wire_format_version,
+    false
+);
 
 pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -91,6 +110,11 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
                 crate::fn_info!(unwind write_raw_bytes, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             ),
+            (
+                "transferArrayBuffer",
+                crate::fn_info!(unwind serializer_transfer_array_buffer, 2; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            ),
         ],
         "Deserializer" => vec![
             (
@@ -122,6 +146,16 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
                 "readRawBytes",
                 crate::fn_info!(unwind read_raw_bytes, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
+            ),
+            (
+                "transferArrayBuffer",
+                crate::fn_info!(unwind deserializer_transfer_array_buffer, 2; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            ),
+            (
+                "getWireFormatVersion",
+                crate::fn_info!(unwind get_wire_format_version, 0; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
             ),
         ],
         "DefaultSerializer" | "DefaultDeserializer" => {

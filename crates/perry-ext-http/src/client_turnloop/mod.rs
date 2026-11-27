@@ -171,6 +171,7 @@ fn report_no_loop(request_handle: Handle) {
         code: NO_LOOP_CODE.to_string(),
         syscall: "connect".to_string(),
         errno: tl::errno_for_code(NO_LOOP_CODE) as i64,
+        peer: None,
     });
 }
 

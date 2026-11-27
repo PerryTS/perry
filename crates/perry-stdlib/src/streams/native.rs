@@ -22,25 +22,24 @@ pub(crate) fn alloc_native_readable(
     promise: *mut Promise,
     pull: fn(usize),
     cancel: fn(usize),
-) -> usize {
+) -> RsRef {
     ensure_gc_registered();
     let id = alloc_readable_with_type(0, 0, 0, NATIVE_BODY_WINDOW as f64, true);
-    let mut g = READABLE_STREAMS.lock().unwrap();
-    let stream = g.get_mut(&id).unwrap();
-    stream.started = true;
-    stream.native_source = Some(NativeSource {
-        promise: Some(promise),
-        pull,
-        cancel,
-    });
-    id
+    with_rs(RsRef(id), |stream| {
+        stream.started = true;
+        stream.native_source = Some(NativeSource {
+            promise: Some(promise),
+            pull,
+            cancel,
+        });
+    })
+    .unwrap();
+    RsRef(id)
 }
 
-pub(crate) fn take_native_promise(id: usize) -> Option<*mut Promise> {
-    READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&id)?
+pub(crate) fn take_native_promise(stream: RsRef) -> Option<*mut Promise> {
+    rs_rec(stream)
+        .as_deref_mut()?
         .native_source
         .as_mut()?
         .promise
@@ -48,7 +47,7 @@ pub(crate) fn take_native_promise(id: usize) -> Option<*mut Promise> {
 }
 
 pub(crate) fn native_capacity(id: usize) -> usize {
-    READABLE_STREAMS.lock().unwrap().get(&id).map_or(0, |s| {
+    rs_rec(RsRef(id)).as_deref().map_or(0, |s| {
         if s.state != ReadableState::Readable {
             return 0;
         }
@@ -57,10 +56,8 @@ pub(crate) fn native_capacity(id: usize) -> usize {
 }
 
 pub(super) fn pull_native(id: usize) -> bool {
-    let pull = READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+    let pull = rs_rec(RsRef(id))
+        .as_deref()
         .and_then(|s| s.native_source.as_ref())
         .map(|s| s.pull);
     if let Some(pull) = pull {
@@ -72,10 +69,8 @@ pub(super) fn pull_native(id: usize) -> bool {
 }
 
 pub(super) fn cancel_native(id: usize) {
-    let cancel = READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get_mut(&id)
+    let cancel = rs_rec(RsRef(id))
+        .as_deref_mut()
         .and_then(|s| s.native_source.take())
         .map(|s| s.cancel);
     if let Some(cancel) = cancel {
@@ -83,11 +78,10 @@ pub(super) fn cancel_native(id: usize) {
     }
 }
 
-pub(crate) unsafe fn native_enqueue(id: usize, bytes: &[u8]) {
-    let usable = READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+pub(crate) unsafe fn native_enqueue(stream: RsRef, bytes: &[u8]) {
+    let id = stream.0;
+    let usable = rs_rec(RsRef(id))
+        .as_deref()
         .is_some_and(|s| s.state == ReadableState::Readable);
     if !usable || bytes.is_empty() {
         return;
@@ -104,8 +98,10 @@ pub(crate) unsafe fn native_enqueue(id: usize, bytes: &[u8]) {
 }
 
 pub(super) fn collect_bytes(id: usize, bytes: &[u8]) -> bool {
-    let mut g = READABLE_STREAMS.lock().unwrap();
-    if let Some(c) = g.get_mut(&id).and_then(|s| s.body_consumer.as_mut()) {
+    if let Some(c) = rs_rec(RsRef(id))
+        .as_deref_mut()
+        .and_then(|s| s.body_consumer.as_mut())
+    {
         c.bytes.extend_from_slice(bytes);
         true
     } else {
@@ -114,10 +110,8 @@ pub(super) fn collect_bytes(id: usize, bytes: &[u8]) -> bool {
 }
 
 pub(super) unsafe fn collect_chunk(id: usize, bits: u64) -> bool {
-    if !READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+    if !rs_rec(RsRef(id))
+        .as_deref()
         .is_some_and(|s| s.body_consumer.is_some())
     {
         return false;
@@ -131,14 +125,14 @@ pub(super) unsafe fn collect_chunk(id: usize, bits: u64) -> bool {
 /// Body methods consume asynchronously. Only these explicit whole-body
 /// requests accumulate bytes; reader and iterator consumers keep the window.
 pub(crate) unsafe fn collect_body(
-    id: usize,
+    stream: RsRef,
     promise: *mut Promise,
     metadata: String,
     finish: fn(Vec<u8>, String) -> Result<f64, f64>,
 ) {
+    let id = stream.0;
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&id) {
+        if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
             s.disturbed = true;
             s.reader_handle = Some(BODY_READER);
             s.body_consumer = Some(BodyConsumer {
@@ -154,7 +148,7 @@ pub(crate) unsafe fn collect_body(
 
 pub(super) unsafe fn advance_body(id: usize) {
     loop {
-        let chunk = READABLE_STREAMS.lock().unwrap().get_mut(&id).and_then(|s| {
+        let chunk = rs_rec(RsRef(id)).as_deref_mut().and_then(|s| {
             if s.body_consumer.is_some() {
                 s.pop_chunk()
             } else {
@@ -167,8 +161,7 @@ pub(super) unsafe fn advance_body(id: usize) {
         collect_chunk(id, chunk);
     }
     let terminal = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        g.get_mut(&id).and_then(|s| {
+        rs_rec(RsRef(id)).as_deref_mut().and_then(|s| {
             if s.state != ReadableState::Readable && s.chunks.is_empty() {
                 s.body_consumer.take().map(|c| (c, s.state, s.error_value))
             } else {
@@ -190,11 +183,12 @@ pub(super) unsafe fn advance_body(id: usize) {
         // The consumer just emptied a stream that closed with its body still
         // queued (a small body that arrived before `text()`), so the close
         // could not retire it; nothing else reaches this stream again (#12862).
+        // A closed stream whose queue just drained: ClearAlgorithms (error
+        // already cleared them in error_pending).
+        readable_clear_algorithms(id);
         idalloc::retire_readable_terminal(id);
-    } else if READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&id)
+    } else if rs_rec(RsRef(id))
+        .as_deref()
         .is_some_and(|s| s.body_consumer.is_some())
     {
         maybe_pull_force(id);

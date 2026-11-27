@@ -46,6 +46,18 @@ pub const NET_CLOSED: i32 = 7;
 pub const NET_ERROR: i32 = 8;
 /// Completion kind: a subsystem-owned deadline expired (P5); `id` names it.
 pub const NET_TIMER: i32 = 9;
+/// Completion kind: a link connect resolved its hostname; `data` holds the
+/// addresses as text, one per line.
+pub const NET_LOOKUP: i32 = 10;
+/// Completion kind: a multi-address connect started (`user` 0), failed (1)
+/// or timed out (2) an attempt; `data` holds the address, `conn` the port.
+pub const NET_ATTEMPT: i32 = 11;
+/// [`NET_ATTEMPT`] kind: an attempt started.
+pub const NET_ATTEMPT_START: u64 = 0;
+/// [`NET_ATTEMPT`] kind: an attempt failed.
+pub const NET_ATTEMPT_FAILED: u64 = 1;
+/// [`NET_ATTEMPT`] kind: an attempt timed out.
+pub const NET_ATTEMPT_TIMEOUT: u64 = 2;
 /// `NetCompletion::flags`: a link route's completion (`id` is an owner link).
 pub const NET_FLAG_LINK: i32 = 1;
 /// A link `Closed` for an earlier handle of a reopened, OPEN cell. Emit only
@@ -1116,6 +1128,16 @@ extern "C" {
         nodelay: i32,
         err: *mut RawNetError,
     ) -> i32;
+    fn js_perry_net_link_tcp_connect_addrs(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        addrs: *const RawSocketAddr,
+        count: usize,
+        nodelay: i32,
+        attempt_timeout_ms: u32,
+        err: *mut RawNetError,
+    ) -> i32;
+
     fn js_perry_net_link_pipe_connect(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1358,6 +1380,67 @@ pub fn link_tcp_connect(
     )
 }
 
+/// The runtime's `PerrySocketAddr`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct RawSocketAddr {
+    octets: [u8; 16],
+    scope_id: u32,
+    port: u16,
+}
+
+/// Connect a TCP client to addresses already resolved, tried in order. With
+/// `attempt_timeout_ms` and more than one address, a pending attempt gives
+/// way to the next when it expires, and each attempt arrives as
+/// [`NET_ATTEMPT`]. The first attempt is reported before this returns, so the
+/// binding's listeners may run, and close the socket, during the call.
+///
+/// # Safety
+/// `core` is `link`'s live payload core on this thread, and the caller holds
+/// no reference into that payload across the call.
+pub unsafe fn link_tcp_connect_addrs(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    addrs: &[std::net::SocketAddr],
+    nodelay: bool,
+    attempt_timeout_ms: u32,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let addrs: Vec<RawSocketAddr> = addrs
+                .iter()
+                .map(|addr| match addr {
+                    std::net::SocketAddr::V4(v4) => RawSocketAddr {
+                        octets: v4.ip().to_ipv6_mapped().octets(),
+                        scope_id: 0,
+                        port: v4.port(),
+                    },
+                    std::net::SocketAddr::V6(v6) => RawSocketAddr {
+                        octets: v6.ip().octets(),
+                        scope_id: v6.scope_id(),
+                        port: v6.port(),
+                    },
+                })
+                .collect();
+            link_call(|err| unsafe {
+                js_perry_net_link_tcp_connect_addrs(
+                    core.cast(),
+                    link.raw(),
+                    addrs.as_ptr(),
+                    addrs.len(),
+                    i32::from(nodelay),
+                    attempt_timeout_ms,
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, addrs, nodelay, attempt_timeout_ms);
+            Err(unavailable())
+        }
+    )
+}
+
 /// Connect to a Unix-domain socket or a Windows named pipe.
 pub fn link_pipe_connect(
     core: &mut TransportCore,
@@ -1493,7 +1576,8 @@ pub fn link_shutdown(core: &mut TransportCore, link: OwnerLink, user: u64) -> Re
 
 /// Release the transport: the handle moves into the driver's close, the
 /// deadline and a pending resolve go with it. `Ok(true)`: a [`NET_CLOSED`]
-/// for this link follows; `Ok(false)`: there was no handle, so a binding that
+/// for this link follows, without handle parts for a connect still resolving;
+/// `Ok(false)`: there was neither a handle nor a connect, so a binding that
 /// owes a `close` event schedules it itself. Then release the payload
 /// (`native_payload::close`); never close from `Drop`.
 pub fn link_close(core: &mut TransportCore, link: OwnerLink) -> Result<bool, NetError> {

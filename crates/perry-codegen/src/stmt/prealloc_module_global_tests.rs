@@ -132,6 +132,7 @@ fn hoisted_writer(fn_local: u32, target: u32) -> Stmt {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 1,
             params: vec![Param {
@@ -313,6 +314,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
     m.init = vec![Stmt::Expr(Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 2,
             params: Vec::new(),

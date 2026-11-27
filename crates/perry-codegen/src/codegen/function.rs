@@ -1869,6 +1869,7 @@ pub(super) fn compile_function(
                     native_owned: None,
                     pointer_state: BufferViewPointerState::Stable,
                     storage_inline_proven: true,
+                    inline_until_exposed: false,
                     // Every call site passes a sealed binding.
                     length_fixed: true,
                 },

@@ -1196,9 +1196,6 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "RECORD_F20_0") {
         return crate::codegen_abi::native_layout_word("RECORD_F20_0", 0);
     }
-    if same(name, "RECORD_F21_0") {
-        return crate::codegen_abi::native_layout_word("RECORD_F21_0", 0);
-    }
     if same(name, "RECORD_F28_0") {
         return crate::codegen_abi::native_layout_word("RECORD_F28_0", 0);
     }

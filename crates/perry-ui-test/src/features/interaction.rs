@@ -168,6 +168,18 @@ pub(crate) const ROWS: &[Feature] = &[
     full("perry_ui_widget_set_on_key_up", Events),
     full("perry_ui_app_set_on_key_down", Events),
     full("perry_ui_app_set_on_key_up", Events),
+    // System Back: real on Android, a no-op on the other native backends.
+    Feature {
+        name: "perry_ui_app_set_on_back",
+        category: Events,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: U,
+        web_name: None,
+    },
     full("perry_ui_focus_widget", Events),
     full("perry_ui_blur_widget", Events),
     full("perry_ui_is_key_down", Events),

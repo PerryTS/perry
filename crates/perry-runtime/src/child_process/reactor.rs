@@ -310,6 +310,32 @@ thread_local! {
     static CP_PUMPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Run one JS turn the reactor starts (a listener, or the exec callback) the
+/// way the timer loop runs a callback: a throw is the process's uncaught
+/// exception, and once an `uncaughtException` listener took it the pump goes
+/// on with the next event. A throw that unwound the whole pump instead would
+/// leave `CP_PUMPING` set and the child's record half-closed, so no child
+/// event would be delivered again. Loop shape: the uncaught path runs under
+/// the next `trap`, so a throw out of that listener lands here again (see
+/// `timer::with_timer_uncaught_trap`).
+pub(super) fn cp_loop_turn<F: FnOnce()>(f: F) {
+    let mut f = Some(f);
+    loop {
+        let completed = crate::exception::trap(|| {
+            if let Some(f) = f.take() {
+                f();
+            } else {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::os_hook_slots::emit_process_uncaught_exception(exc);
+            }
+        });
+        if completed.is_some() {
+            break;
+        }
+    }
+}
+
 #[inline]
 /// Register [`release_cp_children_in_freed_ranges`] before the first
 /// `CP_LIVE` insert (#11541). Every insert calls this first; named in
@@ -1309,7 +1335,9 @@ pub(super) extern "C" fn cp_emit_spawn_close(
     let cp = scope.root_nanbox_f64(cp_this(this, closure));
     super::failed_spawn::finish_outputs(cp.get_nanbox_f64());
     let code = cp_get_field(cp.get_nanbox_f64(), b"exitCode");
-    cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
+    cp_loop_turn(|| {
+        cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
+    });
     cp_undefined()
 }
 
@@ -1365,7 +1393,9 @@ fn cp_reactor_pump_inner() {
         }
     };
     for &(handle, cp_bits) in &to_spawn {
-        cp_emit(f64::from_bits(cp_bits), "spawn", &[]);
+        cp_loop_turn(|| {
+            cp_emit(f64::from_bits(cp_bits), "spawn", &[]);
+        });
         if let Some(map) = cp_live_lock().as_mut() {
             if let Some(lc) = map.get_mut(&handle) {
                 lc.spawned = true;
@@ -1418,12 +1448,15 @@ fn cp_reactor_pump_inner() {
                     let cp = f64::from_bits(cp_bits);
                     let stream = cp_stdio_stream(cp, fd);
                     if super::cp_object_ptr(stream).is_some() {
-                        let encoding = cp_value_to_string(cp_get_field(stream, b"__cpEncoding"));
-                        let chunk = match encoding {
-                            Some(encoding) => cp_box_output(&bytes, &CpOutput::Text(encoding)),
-                            None => cp_make_buffer(&bytes),
-                        };
-                        cp_emit(stream, "data", &[chunk]);
+                        cp_loop_turn(|| {
+                            let encoding =
+                                cp_value_to_string(cp_get_field(stream, b"__cpEncoding"));
+                            let chunk = match encoding {
+                                Some(encoding) => cp_box_output(&bytes, &CpOutput::Text(encoding)),
+                                None => cp_make_buffer(&bytes),
+                            };
+                            cp_emit(stream, "data", &[chunk]);
+                        });
                     }
                 }
             }
@@ -1495,8 +1528,10 @@ fn cp_reactor_pump_inner() {
                 if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
                     let cp = f64::from_bits(cp_bits);
                     let sh = crate::string::js_string_from_bytes(json.as_ptr(), json.len() as u32);
-                    let msg = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
-                    cp_emit(cp, "message", &[msg]);
+                    cp_loop_turn(|| {
+                        let msg = f64::from_bits(unsafe { crate::json::js_json_parse(sh) }.bits());
+                        cp_emit(cp, "message", &[msg]);
+                    });
                 }
             }
             CpEvent::MessageAdvanced { handle, bytes } => {
@@ -1504,8 +1539,10 @@ fn cp_reactor_pump_inner() {
                 // thread and deliver it as a `'message'` event.
                 if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
                     let cp = f64::from_bits(cp_bits);
-                    let msg = super::v8_serde::v8_deserialize(&bytes);
-                    cp_emit(cp, "message", &[msg]);
+                    cp_loop_turn(|| {
+                        let msg = super::v8_serde::v8_deserialize(&bytes);
+                        cp_emit(cp, "message", &[msg]);
+                    });
                 }
             }
             CpEvent::IpcClosed { handle } => {
@@ -1523,7 +1560,9 @@ fn cp_reactor_pump_inner() {
                                 lc.ipc_send = None;
                             }
                         }
-                        cp_emit(cp, "disconnect", &[]);
+                        cp_loop_turn(|| {
+                            cp_emit(cp, "disconnect", &[]);
+                        });
                     }
                 }
             }
@@ -1556,7 +1595,9 @@ fn cp_reactor_pump_inner() {
                 if cp_live_kill_signal(handle, kill_signal) {
                     let cp = f64::from_bits(cp_bits);
                     cp_set_field(cp, b"killed", TAG_TRUE_F64);
-                    cp_emit(cp, "error", &[cp_abort_error(None)]);
+                    cp_loop_turn(|| {
+                        cp_emit(cp, "error", &[cp_abort_error(None)]);
+                    });
                 }
             }
             #[cfg(not(unix))]
@@ -1640,7 +1681,9 @@ fn cp_reactor_pump_inner() {
             cp_set_field(cp, b"signalCode", signal_f);
             #[cfg(unix)]
             cp_destroy_stdin(cp);
-            cp_emit(cp, "exit", &[code_f, signal_f]);
+            cp_loop_turn(|| {
+                cp_emit(cp, "exit", &[code_f, signal_f]);
+            });
             #[cfg(unix)]
             cp_queue_flush_stdio(cp);
             cp_count_close(item.handle);
@@ -1667,14 +1710,16 @@ fn cp_finish_close(item: CpCloseItem) {
             item.process_ids
         };
         crate::async_hook_slots::enter_resource_scope(ids);
-        cp_exec_fire_close(exec, item.code, item.signal, item.pid);
+        cp_loop_turn(|| cp_exec_fire_close(exec, item.code, item.signal, item.pid));
         crate::async_hook_slots::leave_resource_scope(ids.async_id);
     }
     if let Some(cp_bits) = cp_lookup_cp_bits(item.handle) {
         let cp = f64::from_bits(cp_bits);
         let code_f = cp_get_field(cp, b"exitCode");
         let signal_f = cp_get_field(cp, b"signalCode");
-        cp_emit(cp, "close", &[code_f, signal_f]);
+        cp_loop_turn(|| {
+            cp_emit(cp, "close", &[code_f, signal_f]);
+        });
     }
     // Release any loop entry still carrying one of this child's pipes
     // BEFORE the registry entry goes, because that is where the ids live.

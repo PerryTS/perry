@@ -106,6 +106,8 @@ Lookup prefers installed library directories, then a matching npm package
 beside Perry, then the matching version's `~/.perry` directory, then downloads
 only the missing kind. `PERRY_NO_AUTO_FETCH=1` disables downloads and reports
 the exact package, pinned npm command and `perry target add` command instead.
+A Perry built from source without release keys cannot verify a download: it
+reports the `cargo build` command for the missing library instead.
 For npm, install the exact matching version alongside Perry:
 `npm install -g @perryts/perry-ui-<triple>@<perry-version>` (or use
 `--save-dev` for a project install). `perry target list --verify` checks all

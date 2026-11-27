@@ -720,9 +720,7 @@ pub fn run_with_parse_cache(
     // layer observes it uniformly. Only set (never unset): the flag is an
     // explicit opt-in, and a `perry dev` session that asked for symbols once
     // wants them for the rest of the session.
-    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
-        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
-    }
+    let _unit_objects = post_link::begin_debug_symbols(&args);
 
     // #10574: `--function-source=header` elides function bodies from the
     // image. Promote to `PERRY_FUNCTION_SOURCE` before rayon codegen so
@@ -777,11 +775,9 @@ pub fn run_with_parse_cache(
     // #6125: resolve the CPU-baseline knob (`--march` / env / perry.toml
     // `[build] march` / `[build] native_tuning`) into the canonical
     // PERRY_TARGET_CPU env var, exactly like `--debug-symbols` above.
-    // Codegen's clang invocation, the object/build cache keys, and the
-    // auto-optimize runtime rebuild all read that one var, so a build meant
-    // to run on other machines (publish workers, CI) can pin a portable
-    // baseline (e.g. x86-64-v2) instead of baking the build box's full ISA
-    // (AVX-512) into the shipped binary.
+    // Codegen's clang invocation and the object/build cache keys read that
+    // one var. Unset means the target triple's fixed baseline (x86-64-v3 on
+    // x86-64), never the build box's CPU; `native` is an explicit opt-in.
     bootstrap::promote_cpu_baseline_env(&args);
 
     // `--trace <stages>` consolidates the scattered debug-dump knobs into one
@@ -8544,6 +8540,11 @@ pub fn run_with_parse_cache(
             "entry_symbol": "perry_module_init",
             "target": target.clone().unwrap_or_else(|| "native".to_string()),
             "link_archives": link_archives,
+            "link_args": link::staticlib_link_args(
+                &ctx,
+                target.as_deref(),
+                &optimized_libs.well_known_libs,
+            ),
         });
         if let Err(e) = fs::write(
             &manifest_path,

@@ -55,10 +55,12 @@ mod hot_text_order_macho;
 mod link_cache;
 mod linux_dylib_libs;
 mod linux_ui_libs;
+mod macos_libs;
 mod native_features;
 mod pkg_config;
 mod platform_cmd;
 mod runtime_layouts;
+mod staticlib;
 #[cfg(feature = "target-wasi")]
 pub(super) mod wasi;
 mod watchos_frameworks;
@@ -72,6 +74,7 @@ use link_cache::prepare_link_cache_status;
 pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub(super) use linux_dylib_libs::push_unix_dylib_output;
 pub use platform_cmd::select_linker_command;
+pub(super) use staticlib::staticlib_link_args;
 #[cfg(test)]
 pub(super) use windows_link::WINDOWS_APP_MANIFEST; // consumed only by windows_link_tests
 #[cfg(test)]

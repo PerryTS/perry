@@ -364,6 +364,24 @@ fn object_set_static_prototype_impl_with(
     link_kind: PrototypeLinkKind,
     holder_brand: u64,
 ) {
+    if obj_ptr == 0 {
+        return;
+    }
+    // ChainDesc: a marked object's relink republishes its subtree.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner_handle = scope.root_raw_mut_ptr(obj_ptr as *mut u8);
+    let ((), obj) = owner_handle.across_mut::<u8, _>(|| {
+        object_set_static_prototype_link(obj_ptr, proto_bits, link_kind, holder_brand)
+    });
+    unsafe { crate::object::layout_probe::chain_glue::on_mutation(obj as usize) };
+}
+
+fn object_set_static_prototype_link(
+    obj_ptr: usize,
+    proto_bits: u64,
+    link_kind: PrototypeLinkKind,
+    holder_brand: u64,
+) {
     let user_override = matches!(
         link_kind,
         PrototypeLinkKind::UserOverride | PrototypeLinkKind::FreshObject

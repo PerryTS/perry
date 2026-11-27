@@ -40,6 +40,21 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 # repeating the `[build]` flags in it: cargo uses the target list INSTEAD of
 # the build list, and a runtime without unwind tables strands every throw.
 
+# Portable CPU baseline: the compiler, runtime, stdlib and every archive
+# perry links are built for the same fixed CPU as the code perry generates
+# for that target (`perry-codegen` `linker::baseline_cpu_for_target`), never
+# for the build machine: x86-64-v3 (AVX2, BMI1/2, FMA) on x86-64 Linux,
+# macOS and Windows. Archives built on an AVX-512 box therefore run on any
+# x86-64-v3 CPU. Apple aarch64 already defaults to apple-m1 in rustc and
+# aarch64 Linux to armv8-a (generic), which is what codegen targets there.
+# The runtime's runtime-dispatched SIMD (`is_x86_feature_detected!`) is
+# unaffected. Cargo JOINS this list with a matching
+# `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` (CI, scripts/build_linux_musl.sh), and a
+# set `RUSTFLAGS` overrides it entirely, as it does `[build]`. The `[build]`
+# flags are repeated, as above requires.
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "macos", target_os = "windows"), not(target_env = "ohos")))']
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-C", "target-cpu=x86-64-v3"]
+
 # Android: real thread-locals. Rust's Android target spec has no
 # `has-thread-local`, so std's `thread_local!` falls back to one pthread key
 # per declaration, and bionic gives a process about 128 (shared with libc and

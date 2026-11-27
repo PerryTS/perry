@@ -172,16 +172,20 @@ fn compile_plan_records_effective_target_and_native_tuning() {
     assert!(plan.clang_args.contains(&"-Os".to_string()));
     assert!(plan.clang_args.contains(&"-target".to_string()));
     assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
-    // Apple aarch64 pins `apple-m1` rather than `native`: the decision to emit
-    // `llvm.aarch64.fjcvtzs` is made from the triple, and `native` broke that
-    // pair on a virtualised CI runner where detection disagreed. Every other
-    // host keeps native tuning.
-    let expected = if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
-        "-mcpu=apple-m1"
-    } else {
-        native_tuning_arg_for_host()
-    };
-    assert_eq!(plan.native_tuning_arg.as_deref(), Some(expected));
+    // The default is the effective triple's fixed baseline, never the build
+    // machine's CPU.
+    let expected = baseline_cpu_for_target(&plan.effective_target).map(|cpu| {
+        if plan.effective_target.starts_with("x86_64") {
+            format!("-march={cpu}")
+        } else {
+            format!("-mcpu={cpu}")
+        }
+    });
+    assert!(!plan
+        .clang_args
+        .iter()
+        .any(|arg| arg == "-march=native" || arg == "-mcpu=native"));
+    assert_eq!(plan.native_tuning_arg, expected);
     assert!(!plan.effective_target.is_empty());
 }
 
@@ -265,7 +269,7 @@ fn size_function_attributes_follow_the_same_policy_as_the_pass_pipeline() {
 }
 
 #[test]
-fn compile_plan_skips_native_tuning_for_explicit_target() {
+fn compile_plan_explicit_target_gets_the_same_baseline_as_a_host_build() {
     let plan = build_clang_compile_plan(
         PathBuf::from("clang"),
         PathBuf::from("/tmp/input.ll"),
@@ -275,7 +279,11 @@ fn compile_plan_skips_native_tuning_for_explicit_target() {
         false,
     );
     assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
-    assert_eq!(plan.native_tuning_arg, None);
+    assert_eq!(plan.native_tuning_arg.as_deref(), Some("-march=x86-64-v3"));
+    assert!(plan.clang_args.contains(&"-march=x86-64-v3".to_string()));
+    assert!(plan
+        .analysis_clang_args
+        .contains(&"-march=x86-64-v3".to_string()));
     assert!(!plan
         .clang_args
         .iter()
@@ -283,20 +291,31 @@ fn compile_plan_skips_native_tuning_for_explicit_target() {
 }
 
 #[test]
-fn cpu_tuning_unset_keeps_historical_defaults() {
-    // Host build (no triple) → native tuning; explicit triple → none.
-    assert_eq!(
-        cpu_tuning_arg_for(None, None, "x86_64-apple-darwin").as_deref(),
-        Some(native_tuning_arg_for_host())
-    );
-    assert_eq!(
-        cpu_tuning_arg_for(
-            None,
-            Some("x86_64-unknown-linux-gnu"),
-            "x86_64-unknown-linux-gnu"
-        ),
-        None
-    );
+fn cpu_default_is_a_fixed_baseline_per_triple() {
+    for (triple, expected) in [
+        ("x86_64-unknown-linux-gnu", Some("-march=x86-64-v3")),
+        ("x86_64-unknown-linux-musl", Some("-march=x86-64-v3")),
+        ("x86_64-apple-darwin", Some("-march=x86-64-v3")),
+        ("x86_64-apple-macosx14.0.0", Some("-march=x86-64-v3")),
+        ("x86_64-pc-windows-msvc", Some("-march=x86-64-v3")),
+        ("arm64-apple-macosx15.0.0", Some("-mcpu=apple-m1")),
+        ("aarch64-apple-darwin", Some("-mcpu=apple-m1")),
+        // The LLVM baseline: armv8-a on aarch64 Linux / Android, the SDK
+        // default on iOS, the ABI baseline on x86-64 Android and HarmonyOS.
+        ("aarch64-unknown-linux-gnu", None),
+        ("aarch64-linux-android", None),
+        ("arm64-apple-ios17.0", None),
+        ("x86_64-apple-ios17.0-simulator", None),
+        ("x86_64-linux-android", None),
+        ("x86_64-unknown-linux-ohos", None),
+        ("wasm32-wasip1", None),
+    ] {
+        assert_eq!(
+            cpu_tuning_arg_for(None, triple).as_deref(),
+            expected,
+            "{triple}"
+        );
+    }
 }
 
 #[test]
@@ -304,50 +323,44 @@ fn cpu_tuning_explicit_cpu_spells_march_or_mcpu_by_target_arch() {
     // #6125: an explicit baseline applies to host AND cross builds, and
     // the flag spelling follows the effective target's architecture.
     assert_eq!(
-        cpu_tuning_arg_for(Some("x86-64-v2"), None, "x86_64-unknown-linux-gnu").as_deref(),
+        cpu_tuning_arg_for(Some("x86-64-v2"), "x86_64-unknown-linux-gnu").as_deref(),
         Some("-march=x86-64-v2")
     );
     assert_eq!(
-        cpu_tuning_arg_for(
-            Some("x86-64-v3"),
-            Some("x86_64-unknown-linux-musl"),
-            "x86_64-unknown-linux-musl"
-        )
-        .as_deref(),
-        Some("-march=x86-64-v3")
+        cpu_tuning_arg_for(Some("x86-64-v4"), "x86_64-unknown-linux-musl").as_deref(),
+        Some("-march=x86-64-v4")
     );
     assert_eq!(
-        cpu_tuning_arg_for(Some("apple-m1"), None, "arm64-apple-macosx15.0.0").as_deref(),
-        Some("-mcpu=apple-m1")
+        cpu_tuning_arg_for(Some("apple-m2"), "arm64-apple-macosx15.0.0").as_deref(),
+        Some("-mcpu=apple-m2")
     );
 }
 
 #[test]
-fn cpu_tuning_generic_disables_native_tuning_on_host_builds() {
+fn cpu_tuning_generic_drops_the_baseline() {
     for off in ["generic", "off", "none", "0", "false"] {
         assert_eq!(
-            cpu_tuning_arg_for(Some(off), None, "x86_64-apple-darwin"),
+            cpu_tuning_arg_for(Some(off), "x86_64-apple-darwin"),
             None,
             "'{off}' should disable tuning"
         );
     }
     // Whitespace / empty values fall back to the default.
     assert_eq!(
-        cpu_tuning_arg_for(Some("  "), None, "x86_64-apple-darwin").as_deref(),
-        Some(native_tuning_arg_for_host())
+        cpu_tuning_arg_for(Some("  "), "x86_64-apple-darwin").as_deref(),
+        Some("-march=x86-64-v3")
     );
 }
 
 #[test]
-fn cpu_tuning_native_can_be_forced_for_explicit_triples() {
+fn cpu_tuning_native_is_an_explicit_opt_in() {
     assert_eq!(
-        cpu_tuning_arg_for(
-            Some("native"),
-            Some("x86_64-unknown-linux-gnu"),
-            "x86_64-unknown-linux-gnu"
-        )
-        .as_deref(),
+        cpu_tuning_arg_for(Some("native"), "x86_64-unknown-linux-gnu").as_deref(),
         Some("-march=native")
+    );
+    assert_eq!(
+        cpu_tuning_arg_for(Some("native"), "aarch64-unknown-linux-gnu").as_deref(),
+        Some("-mcpu=native")
     );
 }
 

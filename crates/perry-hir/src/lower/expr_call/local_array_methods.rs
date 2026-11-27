@@ -1140,7 +1140,7 @@ pub(super) fn try_local_array_methods(
                             .lookup_local_type(&arr_name)
                             .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                             .unwrap_or(false);
-                        if is_text_decoder && method_name == "decode" {
+                        if is_text_decoder && method_name == "decode" && args.len() <= 1 {
                             let decoder = lower_expr(ctx, &member.obj)?;
                             let input = if !args.is_empty() {
                                 args.into_iter().next().unwrap()

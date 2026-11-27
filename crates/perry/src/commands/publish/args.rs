@@ -20,10 +20,9 @@ pub struct PublishArgs {
     /// machine — fastest, but the binary only runs on CPUs at least as new),
     /// or `generic` (the target architecture's portable baseline). Overrides
     /// the `[build] march` / `[build] native_tuning` perry.toml settings.
-    /// Linux defaults to `x86-64-v2` so published services run on any
-    /// x86-64 CPU from the last ~15 years instead of inheriting the build
-    /// server's instruction set (AVX-512 → SIGILL on Zen2/EPYC and other
-    /// non-AVX-512 hosts).
+    /// Unset, the build uses the target's fixed baseline (`x86-64-v3` on
+    /// x86-64), the same as the runtime archives, never the build server's
+    /// instruction set.
     #[arg(long)]
     pub march: Option<String>,
 

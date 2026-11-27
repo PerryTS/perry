@@ -412,6 +412,8 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
         }
     } else {
         match (module, prop) {
+            ("url", "parse") => realm_native_url_parse_metadata!(name),
+            ("url", "resolve") => realm_native_url_resolve_metadata!(name),
             ("url", "resolveObject") => realm_native_url_resolveObject_metadata!(name),
             ("http", "_connectionListener") => realm_native_http_connectionListener_metadata!(name),
             ("module", "runMain") => realm_native_module_runMain_metadata!(name),
@@ -1822,13 +1824,18 @@ pub(crate) unsafe fn nm_attach_crypto(
     value
 }
 
-#[allow(unused_mut)]
+/// A perf_hooks constructor minted by its static export body (a member read
+/// such as `perf_hooks.PerformanceObserver.supportedEntryTypes` before any
+/// `new`) gets the prototype and statics `bound_native_callable_export_value`
+/// gives it: whichever path mints the constructor first is the only one that
+/// decorates it (#15223).
 #[inline(always)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
-    _property_name: &str,
+    property_name: &str,
     value: f64,
-    _closure_addr: usize,
+    closure_addr: usize,
 ) -> f64 {
+    crate::perf_hook_slots::attach_perf_hooks_constructor(property_name, value, closure_addr);
     value
 }
 

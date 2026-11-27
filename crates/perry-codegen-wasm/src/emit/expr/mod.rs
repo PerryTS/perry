@@ -30,6 +30,7 @@ mod url_process_path;
 
 use super::*;
 
+pub(super) use buffers::{typed_array_new, TYPED_ARRAY_CTORS};
 pub(super) use iterator_records::BRIDGES as ITERATOR_RECORD_BRIDGES;
 pub(super) use iterator_records::EAGER as ITERATOR_RECORD_EAGER;
 pub(super) use objects::reflection_bridge;

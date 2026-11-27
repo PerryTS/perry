@@ -985,7 +985,8 @@ fn own_keys(
     // an unchecked initialization then.
     let mut open = !ctor.params.iter().any(|p| p.default.is_some());
     let params: BTreeSet<u32> = ctor.params.iter().map(|p| p.id).collect();
-    let mut body = ctor.body.as_slice();
+    let flat = split_sequences(&ctor.body);
+    let mut body: &[Stmt] = &flat;
     let mut super_inert = true;
     if has_parent {
         while let Some(s) = body.first() {
@@ -1032,9 +1033,6 @@ fn own_keys(
     // key is then a plain family key, and a definition with attributes
     // leaves the layout at run time, as before).
     let mut defined_attrs: HashMap<&str, Option<u8>> = HashMap::new();
-    // The keys a definition statement adds (HIR reserves only the keys
-    // `[[Set]]` stores create, `settle_reservations`).
-    let mut define_keys: BTreeSet<&str> = BTreeSet::new();
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -1066,7 +1064,6 @@ fn own_keys(
                         }
                     })
                     .or_insert((attrs != 0).then_some(attrs));
-                define_keys.insert(k);
                 if !stored.iter().any(|(x, _)| *x == k) {
                     stored.push((k, open));
                 }
@@ -1111,24 +1108,20 @@ fn own_keys(
     };
     // The reservations in the class's order: the order of the constructor's
     // first stores, a store in a branch, `switch` case, loop body or `try`
-    // at its place in the text (`constructor_store_keys`), the order the
-    // facts' birth lists them in. A stored key that is no reservation (one
-    // HIR leaves to the chain: an inherited field, a method or accessor
-    // name, a computed string key) follows them, as an execution that adds
-    // it after every reservation orders it (one that adds it earlier gets
-    // the object's overflow). A reservation the walk sees in no statement
+    // at its place in the text (`constructor_store_keys`). Every other key
+    // the walk stores (a definition, a class capture's stash, a key HIR
+    // leaves to the chain: an inherited field, a method or accessor name, a
+    // computed string key) goes where the constructor stores it: before the
+    // first reservation stored after it, so an execution adds the keys in
+    // layout order (the facts' birth, `compute_birth_keys`, merges the
+    // constructor's first-store order the same way). One stored after every
+    // reservation follows them. A reservation the walk sees in no statement
     // position (stored inside another store's value) is no initialization.
     let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
     for k in &reserved {
-        // A key a definition adds goes where the definition runs: before the
-        // first reservation stored after it, so the execution adds the keys
-        // in layout order.
         if let Some(at) = stored.iter().position(|(x, _)| *x == k.as_str()) {
             for (d, open) in &stored[..at] {
-                if define_keys.contains(d)
-                    && !reserved.iter().any(|r| r == d)
-                    && !keys.iter().any(|(x, _)| x == *d)
-                {
+                if !reserved.iter().any(|r| r == d) && !keys.iter().any(|(x, _)| x == *d) {
                     keys.push((key_of(d), *open));
                 }
             }
@@ -1153,6 +1146,34 @@ fn own_keys(
     })
 }
 
+/// `body` with each comma expression statement (`this.a = x, this.b = y;`,
+/// the form minifiers emit) split into one expression statement per operand,
+/// in order: the same evaluation, so [`own_keys`] sees each store at its
+/// place in the constructor, a class capture's stash ahead of the stores it
+/// precedes included. Borrowed when no statement is a sequence.
+fn split_sequences(body: &[Stmt]) -> std::borrow::Cow<'_, [Stmt]> {
+    fn push(e: &Expr, out: &mut Vec<Stmt>) {
+        match e {
+            Expr::Sequence(items) => items.iter().for_each(|i| push(i, out)),
+            e => out.push(Stmt::Expr(e.clone())),
+        }
+    }
+    if !body
+        .iter()
+        .any(|s| matches!(s, Stmt::Expr(Expr::Sequence(_))))
+    {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let mut out = Vec::with_capacity(body.len());
+    for s in body {
+        match s {
+            Stmt::Expr(e @ Expr::Sequence(_)) => push(e, &mut out),
+            s => out.push(s.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The `this.k = v` keys statement `s` stores in its own body, in source
 /// order: through blocks, branches, `switch` cases, loop bodies and `try`
 /// arms, not into closures (an arrow's stores run whenever it is called).
@@ -1163,19 +1184,7 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
         }
     };
     match s {
-        Stmt::Expr(Expr::PropertySet {
-            object, property, ..
-        }) if matches!(object.as_ref(), Expr::This) => out.push(property.as_str()),
-        Stmt::Expr(Expr::PutValueSet {
-            target,
-            key,
-            receiver,
-            ..
-        }) if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
-            if let Expr::String(k) = key.as_ref() {
-                out.push(k.as_str());
-            }
-        }
+        Stmt::Expr(e) => expr_this_stores(e, out),
         Stmt::If {
             then_branch,
             else_branch,
@@ -1209,6 +1218,28 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
                 all(&c.body, out);
             }
         }
+        _ => {}
+    }
+}
+
+/// The `this.k = v` key expression statement `e` stores, or the keys of a
+/// comma sequence of such stores, in order ([`nested_this_stores`]).
+fn expr_this_stores<'a>(e: &'a Expr, out: &mut Vec<&'a str>) {
+    match e {
+        Expr::PropertySet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::This) => out.push(property.as_str()),
+        Expr::PutValueSet {
+            target,
+            key,
+            receiver,
+            ..
+        } if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
+            if let Expr::String(k) = key.as_ref() {
+                out.push(k.as_str());
+            }
+        }
+        Expr::Sequence(items) => items.iter().for_each(|i| expr_this_stores(i, out)),
         _ => {}
     }
 }

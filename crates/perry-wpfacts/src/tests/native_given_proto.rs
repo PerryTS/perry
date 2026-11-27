@@ -7,7 +7,7 @@
 
 use super::*;
 
-/// `h` is a value from unmodeled code (node: `hostFn` returns
+/// `h` is a value from unmodeled code (node: `argv[2]` names a function returning
 /// `Array.prototype`), given prototype `{proto}`. `a[0]` is an element read
 /// on an array, which consults the builtin prototypes under its index.
 fn verdict(proto: &str, read: &str) -> Verdict {

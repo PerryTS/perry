@@ -1,0 +1,1 @@
+`Buffer#indexOf` and `Buffer#includes` read a string `byteOffset` as the encoding, as Node does (and as `lastIndexOf` already did), and every Buffer search with a string needle throws `ERR_UNKNOWN_ENCODING` for an unknown encoding name instead of searching as utf8 (#15477).

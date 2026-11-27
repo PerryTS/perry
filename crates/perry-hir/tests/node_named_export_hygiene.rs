@@ -460,3 +460,25 @@ fn unknown_named_import_used_as_a_value_is_still_rejected() {
         "expected the U006 export diagnostic, got: {err}"
     );
 }
+
+/// `typeof` of a deferred non-export is a value use too: Node rejects the
+/// import at instantiation, so it must not fold to the undeclared-global read
+/// nor, under a builtin's name, to that builtin's constant `typeof`.
+#[test]
+fn unknown_named_import_under_typeof_is_rejected() {
+    for src in [
+        r#"import { notAThing } from "node:path"; console.log(typeof notAThing);"#,
+        r#"import { notAThing } from "node:path"; console.log(typeof (notAThing));"#,
+        r#"import { notAThing as Function } from "node:path"; console.log(typeof Function);"#,
+        r#"import { notAThing as Iterator } from "node:path"; console.log(typeof Iterator);"#,
+        r#"import { notAThing as setTimeout } from "node:path"; console.log(typeof setTimeout);"#,
+    ] {
+        let err = lower_result(src).expect_err("typeof of a non-export must be rejected");
+        assert!(
+            err.contains(
+                "The requested module 'node:path' does not provide an export named 'notAThing'"
+            ),
+            "expected the U006 export diagnostic, got: {err}"
+        );
+    }
+}

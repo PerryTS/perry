@@ -87,18 +87,67 @@ unsafe fn build_cp_type_error_value(message: &str, code: &'static str) -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
+/// Node's `SystemError` for `ERR_FS_CP_EEXIST`: own `code`, `info` (the
+/// underlying `EEXIST`), `errno`, `syscall` and `path`, in that order.
 unsafe fn build_cp_eexist_error(dst: &Path) -> f64 {
     let path = dst.to_string_lossy().into_owned();
     let message =
         format!("Target already exists: cp returned EEXIST ({path} already exists) {path}");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_FS_CP_EEXIST");
-    crate::node_submodules::register_error_syscall(msg, "cp");
-    crate::node_submodules::register_error_path(msg, path);
-    let err = crate::error::js_error_new_with_message(msg);
-    #[cfg(unix)]
-    crate::node_submodules::set_error_user_prop(err as usize, "errno", libc::EEXIST as f64);
-    crate::value::js_nanbox_pointer(err as i64)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let err = scope.root_raw_mut_ptr(crate::error::js_error_new_with_name_message(
+        b"SystemError",
+        msg,
+    ));
+    let errno = libc::EEXIST as f64;
+    // Each value is built right before its store, which roots it first.
+    let info = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    set_object_field(
+        &scope,
+        &info,
+        "message",
+        string_value(&format!("{path} already exists")),
+    );
+    set_object_field(&scope, &info, "path", string_value(&path));
+    set_object_field(&scope, &info, "syscall", string_value("cp"));
+    set_object_field(&scope, &info, "errno", errno);
+    set_object_field(&scope, &info, "code", string_value("EEXIST"));
+    let put = |key: &str, value: f64| {
+        let value = scope.root_nanbox_f64(value);
+        err.with_mut_ptr(|err: *mut u8| {
+            crate::node_submodules::set_error_user_prop(err as usize, key, value.get_nanbox_f64())
+        });
+    };
+    put(
+        "info",
+        info.with_mut_ptr(|info: *mut u8| crate::value::js_nanbox_pointer(info as i64)),
+    );
+    put("errno", errno);
+    put("syscall", string_value("cp"));
+    put("path", string_value(&path));
+    err.with_mut_ptr(|err: *mut u8| crate::value::js_nanbox_pointer(err as i64))
+}
+
+unsafe fn string_value(text: &str) -> f64 {
+    crate::value::js_nanbox_string(js_string_from_bytes(text.as_ptr(), text.len() as u32) as i64)
+}
+
+/// `object[key] = value` on a rooted plain object; the key's allocation can
+/// move both.
+unsafe fn set_object_field(
+    scope: &crate::gc::RuntimeHandleScope,
+    object: &crate::gc::RuntimeHandle<'_>,
+    key: &str,
+    value: f64,
+) {
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(js_string_from_bytes(key.as_ptr(), key.len() as u32));
+    object.with_mut_ptr(|object| {
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(object, key, value.get_nanbox_f64())
+        })
+    });
 }
 
 unsafe fn build_invalid_filter_return_error() -> f64 {

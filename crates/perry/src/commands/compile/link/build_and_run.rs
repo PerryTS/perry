@@ -65,6 +65,9 @@ pub(crate) fn build_and_run_link(
     // (LLVM / WASM / ArkTS / HarmonyOS / Glance / SwiftUI / JS)
     // inherits the gate from one chokepoint.
     super::super::run_lock_verify_for_compile(ctx, target)?;
+    if ctx.needs_stdlib && stdlib_lib.is_none() {
+        super::super::library_search::check_missing_stdlib(target)?;
+    }
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
@@ -1042,40 +1045,8 @@ pub(crate) fn build_and_run_link(
         // `else` branch — `cfg!(target_os = "macos")` is true whenever we're
         // running ON macOS, regardless of the actual target.
         //
-        // Runtime-only console binaries import exclusively from libSystem
-        // (verified via `dyld_info -imports` on a dead-stripped build), and
-        // every extra LC_LOAD_DYLIB costs real launch time — measured on an
-        // M-series host, CoreFoundation+libobjc initialization alone is
-        // ~+1.8 ms on a ~3 ms hello world. Skip the whole list for those
-        // links: a runtime-only program that genuinely needs one of these
-        // fails AT LINK TIME with an undefined symbol (deterministic,
-        // caught by the parity suites), never at runtime.
-        if (cfg!(target_os = "macos") || is_cross_macos)
-            && !is_harmonyos
-            && (ctx.needs_stdlib || ctx.needs_ui || ctx.needs_plugins || ctx.needs_geisterhand)
-        {
-            cmd.arg("-framework")
-                .arg("Security")
-                .arg("-framework")
-                .arg("CoreFoundation")
-                .arg("-framework")
-                .arg("SystemConfiguration")
-                .arg("-liconv")
-                .arg("-lresolv")
-                .arg("-lobjc");
-        }
-        // #8513: notify's macOS backend references FSEventStream*. Cargo
-        // normally propagates fsevent-sys's CoreServices link metadata to a
-        // final Rust binary, but a perry-ext static archive crosses Perry's
-        // custom linker boundary, where that metadata is no longer present.
-        // Restore it only for binaries that selected the watcher facade.
-        if (cfg!(target_os = "macos") || is_cross_macos)
-            && ctx
-                .native_module_imports
-                .iter()
-                .any(|module| module == "@parcel/watcher" || module.starts_with("@parcel/watcher-"))
-        {
-            cmd.arg("-framework").arg("CoreServices");
+        if (cfg!(target_os = "macos") || is_cross_macos) && !is_harmonyos {
+            super::macos_libs::add_system_libs(&mut cmd, ctx);
         }
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
@@ -1116,7 +1087,16 @@ pub(crate) fn build_and_run_link(
             // members with UI-specific monomorphizations are retained. Android
             // remains untouched because skip_runtime=true makes the UI lib the
             // sole provider of perry-runtime symbols.
-            let ui_lib = if is_android || is_visionos {
+            let ui_lib = if is_android && ctx.needs_stdlib && stdlib_lib.is_some() {
+                // The Android UI archive bundles perry-runtime WITHOUT the
+                // `stdlib` feature, so it also carries the no-op
+                // `stdlib_stubs` (js_stdlib_init_dispatch,
+                // js_stdlib_process_pending, js_fetch_with_options, …). Linked
+                // before perry-stdlib they win, and fetch never runs (#5000's
+                // shadowing, on Android). Localize them so stdlib's real
+                // bodies bind.
+                localize_stdlib_stub_symbols(&ui_lib, stdlib_lib.as_ref().unwrap())
+            } else if is_android || is_visionos {
                 ui_lib
             } else {
                 // #8455: the trim's evidence set must equal the archives that
@@ -1254,30 +1234,7 @@ pub(crate) fn build_and_run_link(
                 // Win32 system libs already linked above
             } else {
                 if cfg!(target_os = "macos") || is_cross_macos {
-                    cmd.arg("-framework").arg("AppKit");
-                    // perry/ui WebView (#658) — WKWebView / WKWebViewConfiguration.
-                    cmd.arg("-framework").arg("WebKit");
-                    cmd.arg("-framework").arg("CoreGraphics");
-                    cmd.arg("-framework").arg("QuartzCore");
-                    cmd.arg("-framework").arg("AVFoundation");
-                    cmd.arg("-framework").arg("Metal");
-                    cmd.arg("-framework").arg("IOKit");
-                    cmd.arg("-framework").arg("DiskArbitration"); // needed by CoreGraphics
-                                                                  // perry/media — AVPlayer is in AVFoundation (already linked
-                                                                  // above). CoreMedia provides CMTime + CMTimeGetSeconds /
-                                                                  // CMTimeMakeWithSeconds used for seek + position. MediaPlayer
-                                                                  // provides MPNowPlayingInfoCenter / MPRemoteCommandCenter /
-                                                                  // MPMediaItemArtwork (lock screen + Touch Bar + Now Playing).
-                    cmd.arg("-framework").arg("CoreMedia");
-                    cmd.arg("-framework").arg("MediaPlayer");
-                    // perry/ui MapView (#517) — MKMapView lives in MapKit.
-                    cmd.arg("-framework").arg("MapKit");
-                    // perry/ui PdfView (#516) — PDFView lives in PDFKit, which
-                    // also exposes the PDFDocument / PDFPage classes used for
-                    // page-count + page-navigation queries.
-                    cmd.arg("-framework").arg("PDFKit");
-                    // perry/system network reachability (#582) — NWPathMonitor.
-                    cmd.arg("-framework").arg("Network");
+                    super::macos_libs::add_ui_frameworks(&mut cmd);
                 }
             }
 

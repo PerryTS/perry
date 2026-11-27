@@ -815,11 +815,15 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         defer_failure(owner.get(), preflight_error(preflight));
         return crate::payload_transport::raw_owner(owner.get());
     }
-    let host_value = root_scope.root_nanbox(crate::payload_events::string(&host));
+    let connect_options = root_scope.root_nanbox(crate::payload_lookup::connect_options(
+        metadata_options_arg.map(|index| rooted_args[index].get()),
+        port,
+        &host,
+    ));
     crate::payload_socket::connect(
         owner.get(),
-        port as f64,
-        host_value.get(),
+        connect_options.get(),
+        crate::payload_transport::undefined(),
         crate::payload_transport::undefined(),
     );
     if let Ok(payload) =

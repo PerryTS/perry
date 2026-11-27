@@ -706,6 +706,8 @@ fn concat_byte_parts(mut l: ConcatPart, mut r: ConcatPart) -> f64 {
     // Heap path — allocate a StringHeader and memcpy. Decode both
     // operands' byte slices via `str_bytes_ascii_from_jsvalue` (already done
     // above) and write directly into the new header's payload region.
+    // An over-long result throws before any storage is reserved.
+    super::check_string_length(l.units as usize + r.units as usize);
     let (ptr, data_ptr) = match string_storage_alloc_no_collect(total_blen) {
         Some(storage) => storage,
         None => {
@@ -805,6 +807,7 @@ pub extern "C" fn js_string_concat(
         }
     }
 
+    super::check_string_length(u16len_a as usize + u16len_b as usize);
     let (ptr, data_ptr, a, b) = match string_storage_alloc_no_collect(total_blen) {
         Some((ptr, data)) => (ptr, data, a, b),
         None => {
@@ -977,6 +980,7 @@ fn concat_formatted_number(
         memo_admitted = concat_memo_admit(memo_slot, tag);
     }
 
+    super::check_string_length(prefix_u16 as usize + num_len);
     let (ptr, data_ptr, prefix) =
         match crate::string::string_storage_alloc_no_collect(total_blen as u32) {
             Some((ptr, data_ptr)) => (ptr, data_ptr, prefix),
@@ -1199,6 +1203,10 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
         piece_flags = combine_string_flags(piece_flags, unsafe { (*piece).flags });
     }
 
+    // The in-place arm below writes the header directly (no
+    // `init_string_header`); the saturating sums keep an over-long total
+    // over the limit.
+    super::check_string_length(total_u16 as usize);
     let dest = piece_ptrs[0] as *mut StringHeader;
     let dest_blen = piece_lens[0];
     let suffix_blen = total_blen.saturating_sub(dest_blen);
@@ -1359,6 +1367,7 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
         }
     }
 
+    super::check_string_length(total_u16 as usize);
     let (ptr, mut cursor) = string_storage_alloc_no_collect(total_blen)?;
     note_no_collect_hit();
 
@@ -1447,6 +1456,9 @@ fn concat_chain_primitives<const MAX_PARTS: usize>(
     // Some proves that the borrowed payloads remain valid. A refusal has
     // moved nothing; root every heap operand before the collecting allocation
     // and reuse the numeric/inline bytes instead of converting them again.
+    // The saturating sums keep an over-long total over the limit; it throws
+    // before any storage is reserved (the rooted copy below included).
+    super::check_string_length(total_u16 as usize);
     let (ptr, mut cursor) = match string_storage_alloc_no_collect(total_blen) {
         Some(result) => {
             note_no_collect_hit();
@@ -1631,7 +1643,9 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
         }
     }
 
-    // Single allocation for the entire result.
+    // Single allocation for the entire result, once its length is known to
+    // be valid.
+    super::check_string_length(total_u16 as usize);
     let (ptr, mut cursor) = string_storage_alloc(total_blen);
 
     unsafe {
@@ -1755,6 +1769,7 @@ pub extern "C" fn js_value_concat_string(
         let num_len = format_number_into(value, &mut num_buf);
 
         let total_blen = num_len + suffix_blen as usize;
+        super::check_string_length(num_len + suffix_u16 as usize);
         // The allocation can collect and evacuate (#6655).
         let ((ptr, data_ptr), suffix) = suffix_handle
             .across_const::<StringHeader, _>(|| string_storage_alloc(total_blen as u32));

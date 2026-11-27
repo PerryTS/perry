@@ -884,6 +884,7 @@ mod tests {
                 is_static: false,
                 kind: perry_hir::ir::ClassComputedMemberKind::Method,
                 source_order: 0,
+                names_declaration: false,
             }],
             decorators: Vec::new(),
             is_exported: false,
@@ -1003,6 +1004,7 @@ mod tests {
     #[test]
     fn traverses_closure_bodies_and_parameter_defaults() {
         let expr = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0,
             params: vec![perry_hir::Param {

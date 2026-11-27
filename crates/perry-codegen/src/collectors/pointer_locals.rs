@@ -964,6 +964,7 @@ mod tests {
         let mut frame = vec![
             binding(1, Expr::Integer(0)),
             Stmt::Expr(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 7,
                 params: vec![],
@@ -1258,6 +1259,7 @@ mod tests {
             })
             .collect();
         body.push(Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 7,
             params: Vec::new(),
@@ -1334,6 +1336,7 @@ mod tests {
             arguments_object: None,
         };
         let callback = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 2,
             params: vec![callback_param],

@@ -34,7 +34,7 @@ fn read(wrapper: &str, give: &str) -> crate::ProgramFacts {
         const k: string = String(external());
         {give}
         const f: any = w[k];
-        try {{ f(r); }} catch (e) {{}}
+        try {{ f(r); console.log(f.probe); }} catch (e) {{}}
         console.log(o.m(r));
     "#
     ))
@@ -42,6 +42,11 @@ fn read(wrapper: &str, give: &str) -> crate::ProgramFacts {
 
 fn opaque(pf: &crate::ProgramFacts) -> bool {
     tmpl(pf, "R").escape.as_deref() == Some("passed to an opaque builtin function value")
+}
+
+/// `w[k]` may be a value of the host: a read of the value has an unknown receiver.
+fn reads_unknown(pf: &crate::ProgramFacts) -> bool {
+    site(pf, "probe").top
 }
 
 #[test]
@@ -59,7 +64,7 @@ fn an_own_value_is_read() {
         "Object(1)",
         "w[String(external())] = external();",
     );
-    assert!(tmpl(&pf, "R").escape.is_some(), "{}", pf.dump_text());
+    assert!(reads_unknown(&pf), "{}", pf.dump_text());
 }
 
 /// Control: a value of the host stored onto `Number.prototype` under a
@@ -70,5 +75,5 @@ fn a_value_stored_on_the_chain_is_read() {
         "Object(1)",
         "(Number.prototype as any)[String(external())] = external();",
     );
-    assert!(tmpl(&pf, "R").escape.is_some(), "{}", pf.dump_text());
+    assert!(reads_unknown(&pf), "{}", pf.dump_text());
 }

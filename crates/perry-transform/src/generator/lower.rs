@@ -1369,6 +1369,7 @@ pub fn transform_generator_function_with_extra_captures(
             )
         };
         let return_closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: fn_offset,
             func_id: return_func_id_val,
             params: vec![perry_hir::Param {
@@ -1514,6 +1515,7 @@ pub fn transform_generator_function_with_extra_captures(
             wrap_iter_result_returns_in_async_step_done(&mut step_body);
 
             let agstep_closure = Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: fn_offset,
                 func_id: agstep_func_id,
                 params: vec![
@@ -1571,6 +1573,7 @@ pub fn transform_generator_function_with_extra_captures(
                 )
             };
             let throw_closure = Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: fn_offset,
                 func_id: throw_func_id_val,
                 params: vec![perry_hir::Param {
@@ -1617,6 +1620,7 @@ pub fn transform_generator_function_with_extra_captures(
                 )
             };
             let next_closure = Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params: vec![perry_hir::Param {
@@ -1753,6 +1757,7 @@ pub fn transform_generator_function_with_extra_captures(
                 fn_offset,
             );
             Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params,

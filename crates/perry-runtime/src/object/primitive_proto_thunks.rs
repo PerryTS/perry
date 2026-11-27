@@ -102,6 +102,19 @@ pub(super) fn install_primitive_proto_methods(
                     );
                 }
             }
+            super::global_this::set_intrinsic_to_string_tag(proto_obj, "Symbol");
+            let to_primitive = crate::closure::js_closure_alloc(
+                crate::fn_info!(#[realm("Symbol.prototype[\"@@toPrimitive\"]", effects = { returns(prim(symbol)) })] export crate::object::primitive_proto_thunks::symbol_proto_to_primitive_thunk, 1; with_name("[Symbol.toPrimitive]"), with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            if !to_primitive.is_null() {
+                super::global_this::install_builtin_well_known_symbol_value(
+                    proto_obj,
+                    "toPrimitive",
+                    crate::value::js_nanbox_pointer(to_primitive as i64),
+                    super::PropertyAttrs::new(false, false, true),
+                );
+            }
         }
         "BigInt" => {
             let to_string = ipm(
@@ -461,6 +474,16 @@ pub(super) extern "C" fn symbol_proto_to_string_thunk(
     let s =
         unsafe { crate::symbol::js_symbol_to_string(symbol) } as *mut crate::string::StringHeader;
     string_value(s)
+}
+
+/// `Symbol.prototype [ @@toPrimitive ] ( hint )` (ECMA-262 20.4.3.5): the hint
+/// is not read.
+pub(super) extern "C" fn symbol_proto_to_primitive_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _hint: f64,
+) -> f64 {
+    symbol_receiver_or_throw(this, "[Symbol.toPrimitive]")
 }
 
 pub(super) extern "C" fn symbol_proto_description_getter_thunk(

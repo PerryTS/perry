@@ -7,6 +7,8 @@ use crate::{
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 #[cfg(test)]
+mod birth_tests;
+#[cfg(test)]
 mod broadcast_channel_tests;
 pub(crate) mod message_event;
 #[cfg(test)]
@@ -726,9 +728,7 @@ extern "C" fn event_target_abort_remove_listener(
 pub extern "C" fn js_event_target_new() -> *mut ObjectHeader {
     let _gc = crate::gc::GcSuppressScope::new();
     note_constructed();
-    let target = js_object_alloc(CLASS_ID_EVENT_TARGET, 0);
-    state::initialize_target(target, false);
-    state::link(target, "EventTarget")
+    state::born(&state::EVENT_TARGET_BIRTH)
 }
 
 /// `target.addEventListener(type, listener)`.

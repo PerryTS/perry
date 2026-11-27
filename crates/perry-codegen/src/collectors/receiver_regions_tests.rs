@@ -95,6 +95,7 @@ fn lt(left: Expr, right: Expr) -> Expr {
 
 fn closure(body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0,
         params: vec![],
@@ -385,6 +386,7 @@ fn test_buffer_view(data_slot: &str) -> crate::native_value::BufferViewSlot {
         native_owned: None,
         pointer_state: crate::native_value::BufferViewPointerState::Stable,
         storage_inline_proven: true,
+        inline_until_exposed: false,
         length_fixed: true,
     }
 }

@@ -453,14 +453,32 @@ fn metadata_special_file_predicates(meta: Option<&fs::Metadata>) -> (bool, bool,
     (false, false, false, false)
 }
 
+/// `Stats` of an open embedded asset.
+pub(crate) unsafe fn embedded_file_stats(size: usize, bigint: bool) -> f64 {
+    build_embedded_stats(
+        crate::embedded::EmbeddedMetadata {
+            is_file: true,
+            is_directory: false,
+            size,
+        },
+        bigint,
+    )
+}
+
 unsafe fn embedded_stats(path: &str, bigint: bool) -> Option<f64> {
-    let meta = crate::embedded::metadata(path)?;
+    Some(build_embedded_stats(
+        crate::embedded::metadata(path)?,
+        bigint,
+    ))
+}
+
+unsafe fn build_embedded_stats(meta: crate::embedded::EmbeddedMetadata, bigint: bool) -> f64 {
     let mode = if meta.is_directory {
         0o040555
     } else {
         0o100444
     };
-    Some(build_stats_object(
+    build_stats_object(
         meta.is_file,
         meta.is_directory,
         false,
@@ -475,7 +493,7 @@ unsafe fn embedded_stats(path: &str, bigint: bool) -> Option<f64> {
         0.0,
         bigint,
         None,
-    ))
+    )
 }
 
 /// Node `statSync`/`lstatSync` with `{ throwIfNoEntry: false }` (exactly

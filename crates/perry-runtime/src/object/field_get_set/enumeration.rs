@@ -556,6 +556,13 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
             current.get_nanbox_f64(),
         ));
+        // ChainDesc: a prototype whose descriptor proves no enumerable string
+        // key up to the null prototype contributes nothing.
+        if unsafe {
+            crate::object::layout_probe::chain_glue::for_in_proves_empty(current.get_nanbox_f64())
+        } {
+            break;
+        }
         level += 1;
     }
     out.with_mut_ptr(|out: *mut ArrayHeader| out)
@@ -934,6 +941,14 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
 /// objects/arrays delegate to `js_object_values`; primitives yield `[]`.
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
+    // An ordinary object answers from its structure first (KEYSARR); every
+    // other receiver declines. process.env refreshes before any read.
+    let value = crate::process::refresh_process_env(value);
+    if JSValue::from_bits(value.to_bits()).is_pointer() {
+        if let Some(out) = ordinary_keys::own_enumerable_values_of_value(value.to_bits(), false) {
+            return out;
+        }
+    }
     let jv = JSValue::from_bits(value.to_bits());
     if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
@@ -1047,6 +1062,14 @@ fn handle_own_entries(value: f64, what: HandleEnum) -> *mut ArrayHeader {
 /// primitives yield `[]`.
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
+    // An ordinary object answers from its structure first (KEYSARR); every
+    // other receiver declines. process.env refreshes before any read.
+    let value = crate::process::refresh_process_env(value);
+    if JSValue::from_bits(value.to_bits()).is_pointer() {
+        if let Some(out) = ordinary_keys::own_enumerable_values_of_value(value.to_bits(), true) {
+            return out;
+        }
+    }
     let jv = JSValue::from_bits(value.to_bits());
     if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
@@ -1810,6 +1833,9 @@ pub(crate) unsafe fn descriptor_marks_non_enumerable(
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
+    if let Some(out) = ordinary_keys::own_enumerable_values(obj, false) {
+        return out;
+    }
     if unsafe { crate::array::subclass_elements::own_elements(obj as usize) }.is_some() {
         return elements_backed_enum(obj, MapSetEnum::Values);
     }
@@ -1976,6 +2002,9 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
+    if let Some(out) = ordinary_keys::own_enumerable_values(obj, true) {
+        return out;
+    }
     if unsafe { crate::array::subclass_elements::own_elements(obj as usize) }.is_some() {
         return elements_backed_enum(obj, MapSetEnum::Entries);
     }

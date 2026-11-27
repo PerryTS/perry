@@ -33,7 +33,7 @@ pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let bytes = blob_bytes_clone(id).unwrap_or_default();
-    crate::streams::stream_value(crate::streams::alloc_readable_from_bytes(bytes))
+    crate::streams::alloc_readable_from_bytes(bytes).value()
 }
 
 /// Shared `response.body` resolver used by both the typed codegen path
@@ -60,29 +60,29 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         .lock()
         .unwrap()
         .get(&resp_id)
-        .and_then(|r| r.body_stream_id)
+        .and_then(|r| r.body_stream)
     {
-        return crate::streams::stream_value(id);
+        return id.value();
     }
     if let Some(id) = FETCH_RESPONSES
         .lock()
         .unwrap()
         .get(&resp_id)
-        .and_then(|r| r.cached_body_stream_id)
+        .and_then(|r| r.cached_body_stream)
     {
-        return crate::streams::stream_value(id);
+        return id.value();
     }
     let bytes = match FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
         Some(r) if r.body_present => std::mem::take(&mut r.body),
         Some(_) => return f64::from_bits(TAG_NULL),
         None => return f64::from_bits(TAG_NULL),
     };
-    let stream_id = crate::streams::alloc_readable_from_bytes(bytes);
+    let stream = crate::streams::alloc_readable_from_bytes(bytes);
     if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
-        resp.cached_body_stream_id = Some(stream_id);
-        resp.body_stream_id = Some(stream_id);
+        resp.cached_body_stream = Some(stream);
+        resp.body_stream = Some(stream);
     }
-    crate::streams::stream_value(stream_id)
+    stream.value()
 }
 
 /// `response.body` — `ReadableStream | null` per the Web Fetch spec. The
@@ -243,7 +243,7 @@ pub(crate) fn response_body_is_used(resp_id: usize) -> bool {
         .lock()
         .unwrap()
         .get(&resp_id)
-        .map(|r| (r.body_used, r.body_stream_id));
+        .map(|r| (r.body_used, r.body_stream));
     state.is_some_and(|(used, stream)| {
         used || stream.is_some_and(|id| crate::streams::readable_body_state(id).1)
     })

@@ -1,0 +1,1 @@
+A `net` or `http` server socket whose peer sent FIN keeps the process alive only while a write, a shutdown or a close is owed, as in Node. A `'clientError'` listener that neither ends nor destroys a half-closed socket no longer prevents the process from exiting after `server.close()`.

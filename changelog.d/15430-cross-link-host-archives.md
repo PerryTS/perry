@@ -1,0 +1,1 @@
+A cross link skips a prebuilt archive built for another object format or architecture, which `PERRY_RUNTIME_DIR` / `PERRY_LIB_DIR` can name, and a cross-compiled program that needs the stdlib stops with the missing archive's name instead of linking without it.

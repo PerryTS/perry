@@ -75,7 +75,7 @@ pub unsafe extern "C" fn js_request_new(
     // real Blob / buffer / string body is untouched. Mirrors the #5437 fix already
     // in `js_response_body_init_ptr` (the Response twin), which falls through via
     // `or_else` rather than if/else.
-    let pending_stream_id = take_pending_fetch_body_stream_id();
+    let pending_stream_id = take_pending_fetch_body_stream();
     let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
     let form_data_content_type = form_data_body
         .as_ref()
@@ -147,6 +147,7 @@ pub unsafe extern "C" fn js_request_new(
         signal,
         cached_headers_id: None,
         body_error: body_error.map(|error| error.get_nanbox_f64()),
+        read_body_stream_id: None,
     };
     super::gc::ensure_gc_registered();
     REQUEST_REGISTRY.lock().unwrap().insert(id, record);

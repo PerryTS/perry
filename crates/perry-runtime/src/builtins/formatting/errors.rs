@@ -28,6 +28,11 @@ unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> 
             })
             .map(|value| scope.root_nanbox_f64(value))
     });
+    let (code, error_ptr) = error_h.across_const::<crate::error::ErrorHeader, _>(|| {
+        error_h.with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+            crate::node_submodules::error_code_for_error(error_ptr)
+        })
+    });
     let display_part = |value: Option<&crate::gc::RuntimeHandle<'_>>,
                         header: *mut StringHeader,
                         fallback: &str| {
@@ -39,7 +44,10 @@ unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> 
     // Error-family prototype value. An explicit `error.name = ...` is an own
     // expando and must drive inspection without being redundantly printed as
     // a body property (#9440).
-    let name_str = display_part(own_name_h.as_ref(), (*error_ptr).name, "Error");
+    let mut name_str = display_part(own_name_h.as_ref(), (*error_ptr).name, "Error");
+    if let Some(code) = code {
+        name_str = format!("{name_str} [{code}]");
+    }
     let message_str = display_part(own_message_h.as_ref(), (*error_ptr).message, "");
     if message_str.is_empty() {
         name_str

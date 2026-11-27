@@ -3125,6 +3125,7 @@ native	Symbol	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	Symbol	toLocaleString	Object.prototype.toLocaleString
 native	Symbol	toString	Function.prototype.toString
 native	Symbol	valueOf	Object.prototype.valueOf
+native	Symbol.prototype	@@toPrimitive	Symbol.prototype["@@toPrimitive"]
 native	Symbol.prototype	constructor	Symbol
 native	Symbol.prototype	toString	Symbol.prototype.toString
 native	Symbol.prototype	valueOf	Symbol.prototype.valueOf

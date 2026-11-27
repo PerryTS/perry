@@ -32,6 +32,7 @@ fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
 /// `() => { <cap> = 42 }`: captures `cap` and mutates it, so `cap` is a cell.
 fn writer(func_id: u32, cap: u32) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

@@ -92,9 +92,11 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         // symbol per row. JS runtime maps to `el.style.boxShadow`.
         "widgetSetShadow" | "set_shadow" => "perry_ui_widget_set_shadow",
         "setOpacity" | "set_opacity" | "widgetSetOpacity" => "perry_ui_set_opacity",
-        "setEnabled" | "set_enabled" => "perry_ui_set_enabled",
-        "setTooltip" | "set_tooltip" => "perry_ui_set_tooltip",
-        "setControlSize" | "set_control_size" => "perry_ui_set_control_size",
+        "setEnabled" | "set_enabled" | "widgetSetEnabled" => "perry_ui_set_enabled",
+        "setTooltip" | "set_tooltip" | "widgetSetTooltip" => "perry_ui_set_tooltip",
+        "setControlSize" | "set_control_size" | "widgetSetControlSize" => {
+            "perry_ui_set_control_size"
+        }
         "widgetSetWidth" => "perry_ui_widget_set_width",
         "widgetSetMaxWidth" => "perry_ui_widget_set_max_width",
         "widgetSetHeight" => "perry_ui_widget_set_height",
@@ -113,8 +115,10 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "widgetAnimatePosition" => "perry_ui_animate_position",
         // Events
         "setOnClick" | "set_on_click" => "perry_ui_set_on_click",
-        "setOnHover" | "set_on_hover" => "perry_ui_set_on_hover",
-        "setOnDoubleClick" | "set_on_double_click" => "perry_ui_set_on_double_click",
+        "setOnHover" | "set_on_hover" | "widgetSetOnHover" => "perry_ui_set_on_hover",
+        "setOnDoubleClick" | "set_on_double_click" | "widgetSetOnDoubleClick" => {
+            "perry_ui_set_on_double_click"
+        }
         // State
         "State" | "create" | "createState" | "state_create" => "perry_ui_state_create",
         "get" if class_name == Some("State") => "perry_ui_state_get",

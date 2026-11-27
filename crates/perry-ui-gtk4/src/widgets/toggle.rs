@@ -40,6 +40,11 @@ pub fn set_state(handle: i64, on: i64) {
     });
 }
 
+/// The CheckButton inside a Toggle's container.
+pub(crate) fn check_button(handle: i64) -> Option<CheckButton> {
+    TOGGLE_CHECKS.with(|checks| checks.borrow().get(&handle).cloned())
+}
+
 /// Create a CheckButton with a label and onChange callback.
 /// Returns a widget handle for an HStack containing the label and checkbox.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {

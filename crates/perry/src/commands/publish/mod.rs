@@ -211,7 +211,7 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
     };
 
     // --- Resolve CPU baseline (#6125) — see resolve_build_march ---
-    let build_march = resolve_build_march(args.march.as_deref(), config.build.as_ref(), is_linux);
+    let build_march = resolve_build_march(args.march.as_deref(), config.build.as_ref());
     if is_linux {
         if let (OutputFormat::Text, Some(march)) = (&format, &build_march) {
             println!("  CPU:       {} baseline", style(march).bold());

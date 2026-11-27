@@ -202,6 +202,7 @@ fn a_parameter_needs_a_body_without_unknown_code_or_foreign_stores() {
 #[test]
 fn a_closure_write_is_a_write() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 50,
         params: Vec::new(),

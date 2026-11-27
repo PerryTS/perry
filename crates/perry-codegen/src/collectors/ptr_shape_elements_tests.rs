@@ -304,6 +304,7 @@ fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
     Stmt::Expr(Expr::ArrayForEach {
         array: Box::new(Expr::LocalGet(1)),
         callback: Box::new(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params,
@@ -693,6 +694,7 @@ fn array_captured_by_a_closure_denies_the_push() {
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 99,
             params: Vec::new(),

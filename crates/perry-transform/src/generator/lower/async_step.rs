@@ -339,6 +339,7 @@ pub fn build_async_step_driver_direct(
     let step_mut_captures: Vec<LocalId> = next_mutable_captures;
 
     let step_closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: fn_offset,
         func_id: step_func_id,
         params: vec![

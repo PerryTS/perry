@@ -272,6 +272,20 @@ pub(crate) fn get_layout_widget(handle: i64) -> Option<Retained<NSView>> {
     })
 }
 
+/// Set the name VoiceOver announces. A Toggle and a TextArea are containers, which
+/// VoiceOver skips, so the name goes on the control inside.
+pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
+    let text = unsafe { perry_ffi::copy_string_from_raw(text_ptr) };
+    let Some(view) = toggle::switch(handle).or_else(|| get_widget(handle)) else {
+        return;
+    };
+    let view = textarea::text_view(&view).unwrap_or(view);
+    let label = objc2_foundation::NSString::from_str(&text);
+    unsafe {
+        let _: () = objc2::msg_send![&*view, setAccessibilityLabel: &*label];
+    }
+}
+
 /// Set the hidden state of a widget.
 /// When unhiding a view that NSStackView detached (no superview), re-inserts it
 /// into its parent NSStackView at the original position.

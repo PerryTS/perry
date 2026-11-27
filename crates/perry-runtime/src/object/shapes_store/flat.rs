@@ -190,14 +190,15 @@ impl Region {
         // iOS-family apps get a small address space (about 8 GB on an iPhone without the
         // extended-virtual-addressing entitlement). The full 1 << 26 rows is 8 GB per agent: two
         // agents (the main thread and a worker) took most of it, and malloc then failed. 1 << 22
-        // rows (512 MB per agent) is still far more shapes than an app makes.
+        // rows ran out at the first RegExp object ("ShapeId space exhausted"); 1 << 24 rows
+        // (2 GB of reserved address space per agent, committed lazily) leaves room for both.
         let capacity = if cfg!(any(
             target_os = "ios",
             target_os = "tvos",
             target_os = "watchos",
             target_os = "visionos"
         )) {
-            (1usize << 22)
+            (1usize << 24)
                 .min(LAYOUT_ROW_LIMIT as usize)
                 .max(MIN_CAPACITY)
         } else if cfg!(target_pointer_width = "64") {

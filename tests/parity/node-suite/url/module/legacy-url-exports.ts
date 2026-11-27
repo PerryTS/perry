@@ -1,4 +1,5 @@
 import * as url from "node:url";
+import { parse, resolve } from "node:url";
 
 function show(label: string, value: unknown) {
   console.log(label + ":", String(value));
@@ -16,6 +17,10 @@ show("keys has resolveObject", Object.keys(url).includes("resolveObject"));
 show("Url typeof", typeof LegacyUrl);
 show("Url name", LegacyUrl && LegacyUrl.name);
 show("Url length", LegacyUrl && LegacyUrl.length);
+show("parse name", url.parse.name);
+show("parse import name", parse.name);
+show("resolve name", url.resolve.name);
+show("resolve import name", resolve.name);
 show("resolveObject typeof", typeof resolveObject);
 show("resolveObject name", resolveObject && resolveObject.name);
 show("resolveObject length", resolveObject && resolveObject.length);

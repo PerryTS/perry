@@ -399,15 +399,11 @@ pub extern "C" fn js_node_http2_server_address_json(handle: i64) -> *mut StringH
 /// `http2SecureServer.close(cb?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) {
-    // Stop accepting first. Live sessions finish, which is Node's contract:
-    // `server.close()` resolves once every session has closed.
-    super::turnloop_listen::close_turnloop_listener(handle);
-    if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
-        s.base.set_listening(false);
-        s.base.connections_checking_interval_destroyed = true;
-        crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
-    }
+    // Stop accepting first: `'close'` follows the last session's close.
+    crate::server::server::close_server(handle, callback);
     mark_server_sessions_closed(handle);
+    // `allowHTTP1` connections carry no session.
+    crate::server::server::signal_connections_close(handle, true);
 }
 
 /// `http2SecureServer.on(event, cb)`.

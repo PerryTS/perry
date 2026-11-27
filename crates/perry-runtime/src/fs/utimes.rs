@@ -172,7 +172,7 @@ pub(crate) unsafe fn js_fs_futimes_result(
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
-        let Some(file) = reg.get(&fd) else {
+        let Some(file) = reg.get(&fd).and_then(FdEntry::os_file) else {
             return Err(crate::fs::validate::ebadf_error("futime"));
         };
         #[cfg(unix)]

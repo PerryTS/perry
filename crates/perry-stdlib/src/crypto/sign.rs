@@ -432,19 +432,23 @@ pub unsafe extern "C" fn js_crypto_create_public_key_value(key_bits: f64) -> *mu
 pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_rsa(
     options_bits: f64,
 ) -> *mut ObjectHeader {
+    generate_rsa_key_pair(options_bits).unwrap_or_else(|error| error.throw())
+}
+
+unsafe fn generate_rsa_key_pair(options: f64) -> Result<*mut ObjectHeader, RsaKeygenError> {
     use rsa::pkcs8::EncodePrivateKey;
 
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let (modulus_bits, public_exponent) = rsa_keygen_options(options.get_nanbox_f64());
+    let private_key = generate_rsa_key(modulus_bits, public_exponent)?;
     let mut rng = rand_core_06::OsRng;
-    let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
-        Ok(key) => key,
-        Err(_) => return js_object_alloc(0, 0),
-    };
     let public_key = RsaPublicKey::from(&private_key);
     let public_pem = rsa_public_key_to_pem(&public_key).unwrap_or_default();
-    let options = options_bits.to_bits();
-    let public_as_jwk = keygen_encoding_wants_jwk(options, b"publicKeyEncoding");
-    let private_as_jwk = keygen_encoding_wants_jwk(options, b"privateKeyEncoding");
-    let private_passphrase = keygen_rsa_private_encryption_passphrase(options);
+    let options_bits = || options.get_nanbox_f64().to_bits();
+    let public_as_jwk = keygen_encoding_wants_jwk(options_bits(), b"publicKeyEncoding");
+    let private_as_jwk = keygen_encoding_wants_jwk(options_bits(), b"privateKeyEncoding");
+    let private_passphrase = keygen_rsa_private_encryption_passphrase(options_bits());
     let private_pem = if private_as_jwk {
         String::new()
     } else if let Some(passphrase) = private_passphrase.as_deref() {
@@ -459,31 +463,37 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_rsa(
             .unwrap_or_default()
     };
 
-    let obj = js_object_alloc(0, 2);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
 
     if public_as_jwk {
         if let Some(public_jwk) = rsa_public_jwk_object(&public_key) {
-            set_object_value_field(obj, b"publicKey", nanbox_pointer(public_jwk));
+            set_object_value_field(
+                obj.get_raw_mut_ptr(),
+                b"publicKey",
+                nanbox_pointer(public_jwk),
+            );
         }
     } else {
-        let name = js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let val = js_string_from_bytes(public_pem.as_ptr(), public_pem.len() as u32);
         mark_keyobject_string(val, KeyKind::Public, 1);
-        js_object_set_field_by_name(obj, name, nanbox_str(val));
+        set_object_value_field(obj.get_raw_mut_ptr(), b"publicKey", nanbox_str(val));
     }
 
     if private_as_jwk {
         if let Some(private_jwk) = rsa_private_jwk_object(&private_key) {
-            set_object_value_field(obj, b"privateKey", nanbox_pointer(private_jwk));
+            set_object_value_field(
+                obj.get_raw_mut_ptr(),
+                b"privateKey",
+                nanbox_pointer(private_jwk),
+            );
         }
     } else {
-        let name = js_string_from_bytes(b"privateKey".as_ptr(), 10);
         let val = js_string_from_bytes(private_pem.as_ptr(), private_pem.len() as u32);
         mark_keyobject_string(val, KeyKind::Private, 1);
-        js_object_set_field_by_name(obj, name, nanbox_str(val));
+        set_object_value_field(obj.get_raw_mut_ptr(), b"privateKey", nanbox_str(val));
     }
 
-    obj
+    Ok(obj.get_raw_mut_ptr())
 }
 
 /// crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1", ...pem }) ->
@@ -623,18 +633,27 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_named(
     alg_ptr: i64,
     options_bits: f64,
 ) -> *mut ObjectHeader {
+    generate_named_key_pair(alg_ptr, options_bits).unwrap_or_else(|error| error.throw())
+}
+
+/// Invalid options throw. A failed RSA generation returns, for the callback
+/// form to deliver.
+pub(super) unsafe fn generate_named_key_pair(
+    alg_ptr: i64,
+    options_bits: f64,
+) -> Result<*mut ObjectHeader, RsaKeygenError> {
     let name = String::from_utf8(bytes_from_ptr(alg_ptr)).unwrap_or_default();
     let algorithm = match name.as_str() {
-        "ec" => return js_crypto_generate_key_pair_sync_ec_p256(options_bits),
-        "ed25519" => return js_crypto_generate_key_pair_sync_ed25519(options_bits),
-        "x25519" => return js_crypto_generate_key_pair_sync_x25519(options_bits),
+        "ec" => return Ok(js_crypto_generate_key_pair_sync_ec_p256(options_bits)),
+        "ed25519" => return Ok(js_crypto_generate_key_pair_sync_ed25519(options_bits)),
+        "x25519" => return Ok(js_crypto_generate_key_pair_sync_x25519(options_bits)),
         _ => match PqAlgorithm::from_node_name(&name) {
             Some(algorithm) => algorithm,
-            None => return js_crypto_generate_key_pair_sync_rsa(options_bits),
+            None => return generate_rsa_key_pair(options_bits),
         },
     };
     let Some((private_pem, public_pem)) = algorithm.generate_pem_pair() else {
-        return std::ptr::null_mut();
+        return Ok(std::ptr::null_mut());
     };
     let asym_type = algorithm.asym_type();
 
@@ -653,7 +672,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_named(
             nanbox_str(value),
         );
     }
-    obj.get_raw_mut_ptr::<ObjectHeader>()
+    Ok(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 /// node's `ERR_CRYPTO_OPERATION_FAILED` for a key `encapsulate` /

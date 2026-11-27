@@ -1,0 +1,1 @@
+`perry-hir`'s `constructor_key_order` test expects the key that an own method called from the constructor stores (R9BIRTH3 rule M) at the place of the call, and checks that a method the constructor does not call reserves nothing. Test only.

@@ -171,7 +171,7 @@ fn a_compressed_archive_in_a_package_links_the_cache_slot_and_keeps_the_sidecar_
     assert_eq!(candidates, [pkg.join("lib").join(LIB)]);
     // Run with RUST_TEST_THREADS=1 like the rest of the env-touching tests.
     std::env::set_var("PERRY_LIB_CACHE_DIR", &cache);
-    let located = locate_among(candidates, LIB);
+    let located = locate_among(candidates, LIB, Some("ios"));
     std::env::remove_var("PERRY_LIB_CACHE_DIR");
     let located = located.expect("the package's runtime is found");
 
@@ -260,8 +260,8 @@ fn fetcher<'a>(
     calls: &'a RefCell<Vec<(PackageKind, String)>>,
     home: &'a Path,
     install: bool,
-) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
-    move |kind, triple| {
+) -> impl FnOnce(PackageKind, &str, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple, _| {
         calls.borrow_mut().push((kind, triple.to_string()));
         if !install {
             return Some(PackageFetch::Refused("not today".into()));
@@ -479,8 +479,8 @@ fn installing<'a>(
     calls: &'a RefCell<Vec<(PackageKind, String)>>,
     home: &'a Path,
     archive: &'a str,
-) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
-    move |kind, triple| {
+) -> impl FnOnce(PackageKind, &str, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple, _| {
         calls.borrow_mut().push((kind, triple.to_string()));
         let dest = package(
             &perry_home_root(home, kind, env!("CARGO_PKG_VERSION"), triple),
@@ -507,6 +507,7 @@ fn a_host_ui_or_wasm_host_miss_fetches_only_its_kind_once() {
         if let Ok(found) = locate_among(
             collect_library_candidates_from(name, None, Some(&exe), Some(&home)),
             name,
+            None,
         ) {
             eprintln!("skip {name}: an install layout has it at {:?}", found.link);
             continue;
@@ -529,7 +530,7 @@ fn a_host_ui_or_wasm_host_miss_fetches_only_its_kind_once() {
             found.link
         );
         // The next lookup finds the installed package and fetches nothing.
-        let again = locate_or_fetch_from(name, None, Some(&exe), Some(&home), |_, _| {
+        let again = locate_or_fetch_from(name, None, Some(&exe), Some(&home), |_, _, _| {
             panic!("{name}: fetched again")
         });
         assert_eq!(again.map(|l| l.link).ok(), Some(found.link), "{name}");

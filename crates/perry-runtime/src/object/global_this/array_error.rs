@@ -426,9 +426,21 @@ pub(crate) extern "C" fn error_prototype_to_string_thunk(
         );
     }
 
-    let name = error_to_string_property(this_value, b"name", "Error");
-    let message = error_to_string_property(this_value, b"message", "");
-    let result = if name.is_empty() {
+    // Each property read allocates its key; the receiver is re-read after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this_value);
+    // Node's internal errors override `toString` with `Name [CODE]: message`.
+    let gc_header = unsafe { raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    let code = if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_ERROR {
+        crate::node_submodules::error_code_for_error(raw.cast())
+    } else {
+        None
+    };
+    let name = error_to_string_property(this.get_nanbox_f64(), b"name", "Error");
+    let message = error_to_string_property(this.get_nanbox_f64(), b"message", "");
+    let result = if let Some(code) = code {
+        format!("{name} [{code}]: {message}")
+    } else if name.is_empty() {
         message
     } else if message.is_empty() {
         name

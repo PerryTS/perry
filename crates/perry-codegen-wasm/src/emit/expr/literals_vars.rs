@@ -332,52 +332,38 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::Logical {
                 op, left, right, ..
             } => {
-                match op {
-                    LogicalOp::And => {
-                        // Short-circuit: if left is falsy, return left; else return right
-                        self.emit_frame_begin(func, 1);
-                        self.emit_store_arg(func, 0, left);
-                        self.emit_memcall_i32(func, "is_truthy", 1);
-                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                            ValType::I64,
-                        )));
-                        self.block_depth += 1;
-                        self.emit_expr(func, right);
-                        func.instruction(&Instruction::Else);
-                        self.emit_expr(func, left);
-                        self.block_depth -= 1;
-                        func.instruction(&Instruction::End);
-                    }
-                    LogicalOp::Or => {
-                        self.emit_frame_begin(func, 1);
-                        self.emit_store_arg(func, 0, left);
-                        self.emit_memcall_i32(func, "is_truthy", 1);
-                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                            ValType::I64,
-                        )));
-                        self.block_depth += 1;
-                        self.emit_expr(func, left);
-                        func.instruction(&Instruction::Else);
-                        self.emit_expr(func, right);
-                        self.block_depth -= 1;
-                        func.instruction(&Instruction::End);
-                    }
-                    LogicalOp::Coalesce => {
-                        // a ?? b: if a is null/undefined, return b; otherwise return a
-                        self.emit_frame_begin(func, 1);
-                        self.emit_store_arg(func, 0, left);
-                        self.emit_memcall_i32(func, "is_null_or_undefined", 1);
-                        func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                            ValType::I64,
-                        )));
-                        self.block_depth += 1;
-                        self.emit_expr(func, right);
-                        func.instruction(&Instruction::Else);
-                        self.emit_expr(func, left);
-                        self.block_depth -= 1;
-                        func.instruction(&Instruction::End);
-                    }
+                // The test decides between the left operand's value and the right
+                // operand, so the left one is evaluated once and kept in `temp_local`.
+                let (test, left_when_true) = match op {
+                    LogicalOp::And => ("is_truthy", false),
+                    LogicalOp::Or => ("is_truthy", true),
+                    LogicalOp::Coalesce => ("is_null_or_undefined", false),
+                };
+                self.emit_expr(func, left);
+                func.instruction(&Instruction::LocalSet(self.temp_local));
+                self.emit_frame_begin(func, 1);
+                self.emit_slot_addr(func, 0);
+                func.instruction(&Instruction::LocalGet(self.temp_local));
+                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                self.emit_memcall_i32(func, test, 1);
+                if !left_when_true {
+                    func.instruction(&Instruction::I32Eqz);
                 }
+                // The branch that keeps the left value reads `temp_local` before
+                // anything else can reuse it.
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                self.block_depth += 1;
+                func.instruction(&Instruction::LocalGet(self.temp_local));
+                func.instruction(&Instruction::Else);
+                self.emit_expr(func, right);
+                self.block_depth -= 1;
+                func.instruction(&Instruction::End);
             }
 
             Expr::Unary { op, operand } => {

@@ -35,6 +35,7 @@ pub enum NodeKind {
 pub struct NodeData {
     pub kind: NodeKind,
     pub text: Option<CString>,
+    pub accessibility_label: Option<CString>,
     pub children: Vec<i64>,
     /// NaN-boxed closure pointer for button taps, toggle changes, etc.
     pub action_closure: Option<f64>,
@@ -120,6 +121,7 @@ impl NodeData {
         Self {
             kind,
             text: None,
+            accessibility_label: None,
             children: Vec::new(),
             action_closure: None,
             on_change_closure: None,
@@ -298,6 +300,13 @@ pub extern "C" fn perry_watchos_node_text(id: i64) -> *const std::ffi::c_char {
         }
         std::ptr::null()
     })
+}
+
+#[no_mangle]
+pub extern "C" fn perry_watchos_node_accessibility_label(id: i64) -> *const std::ffi::c_char {
+    with_node(id, |n| n.accessibility_label.as_ref().map(|s| s.as_ptr()))
+        .flatten()
+        .unwrap_or(std::ptr::null())
 }
 
 #[no_mangle]

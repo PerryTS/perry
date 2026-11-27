@@ -278,9 +278,8 @@ pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>,
 /// chain of each finds it (10.1.8.1 OrdinaryGet): the holder's named
 /// native, or `undefined` where no object of that chain holds the key.
 /// The runtime realm declares those prototypes' own keys exactly, the
-/// well-known symbol keys included: none holds `@@toPrimitive` (the
-/// runtime's `Symbol.prototype` holds `constructor`, `toString`,
-/// `valueOf` only; ECMA-262 20.4.3.5 also lists `@@toPrimitive`).
+/// well-known symbol keys included: only `Symbol.prototype` holds
+/// `@@toPrimitive` (ECMA-262 20.4.3.5).
 fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
     for p in protos {
         let found = members::realm_entry(p).map(|e| members::realm_chain_find(e, name));

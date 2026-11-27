@@ -103,6 +103,9 @@ pub(crate) struct Narrow {
     /// The test implies `local < a.length` for this local `a`
     /// (`gen/in_bounds.rs`).
     below_length: Option<u32>,
+    /// The test implies `local < b` for this local `b` (rule CU,
+    /// `Gen::code_unit_read`).
+    below_local: Option<u32>,
     /// Pushed by an assignment (`Gen::narrow_assigned`), not by a test:
     /// it implies no interval or presence of the local.
     assigned: bool,
@@ -121,6 +124,18 @@ impl Narrow {
 
     pub(crate) fn below_length_of(&self) -> Option<u32> {
         self.below_length
+    }
+
+    pub(crate) fn below_local_of(&self) -> Option<u32> {
+        self.below_local
+    }
+}
+
+/// The local `b` of a clip `< b`.
+fn below_local(kind: u8, bound: &Bound) -> Option<u32> {
+    match bound {
+        Bound::Local(b) if kind == crate::model::range::CLIP_LT => Some(*b),
+        _ => None,
     }
 }
 
@@ -219,8 +234,10 @@ impl<'a> Gen<'a> {
         // One clip per comparison, chained: the reads see their meet.
         let mut start = i;
         let mut below = None;
+        let mut below_l = None;
         for (kind, bound) in clips {
             below = below.or(below_length(kind, &bound));
+            below_l = below_l.or(below_local(kind, &bound));
             let b = self.bound_node(mi, bound);
             let dst = self.tmp("narrow");
             self.zs_carrier(dst);
@@ -243,6 +260,7 @@ impl<'a> Gen<'a> {
             jumps: self.jumps,
             tries: self.tries,
             below_length: below,
+            below_local: below_l,
             assigned: false,
         });
         true
@@ -1743,9 +1761,11 @@ impl<'a> Gen<'a> {
             let start = self.tmp("guard");
             self.zs_carrier(start);
             let mut below = None;
+            let mut below_l = None;
             match fact {
                 Implied::Clip(_, kind, bound) => {
                     below = below_length(kind, &bound);
+                    below_l = below_local(kind, &bound);
                     let is_char = matches!(bound, Bound::Char(_));
                     let b = self.bound_node(mi, bound);
                     let op = match is_char {
@@ -1873,6 +1893,7 @@ impl<'a> Gen<'a> {
                 jumps: self.jumps,
                 tries: self.tries,
                 below_length: below,
+                below_local: below_l,
                 assigned: false,
             });
             pushed += 1;
@@ -1940,18 +1961,39 @@ impl<'a> Gen<'a> {
     /// stays the join of all its writes for every other read. Whether it
     /// pushed one.
     pub(crate) fn narrow_assigned(&mut self, fx: &Fx, s: &Stmt) -> usize {
-        let Some((mi, id, vn, guard)) = self.last_local_set.take() else {
-            return 0;
-        };
-        let direct = match s {
-            Stmt::Expr(Expr::LocalSet(l, _)) => *l == id,
+        let target = match s {
+            Stmt::Expr(Expr::LocalSet(l, _)) => Some(*l),
             Stmt::Let {
                 id: l,
                 init: Some(_),
                 ..
-            } => *l == id,
-            _ => false,
+            } => Some(*l),
+            _ => None,
         };
+        self.narrow_assigned_to(fx, target)
+    }
+
+    /// After element `e` of a comma expression is walked (`Expr::Sequence`):
+    /// when `e` is a direct write `x = v` of a local `narrow_assigned`
+    /// admits, the later elements of the sequence read `v`'s node until the
+    /// next write of `x` on the way. The elements run in order and no jump
+    /// lands between two of them (ECMA-262 13.16.1: the comma operator
+    /// evaluates its left operand, then its right one), so they are a
+    /// statement list for this purpose. The caller pops what this pushed
+    /// when the sequence ends. Whether it pushed one.
+    pub(crate) fn narrow_assigned_expr(&mut self, fx: &Fx, e: &Expr) -> usize {
+        let target = match e {
+            Expr::LocalSet(l, _) => Some(*l),
+            _ => None,
+        };
+        self.narrow_assigned_to(fx, target)
+    }
+
+    fn narrow_assigned_to(&mut self, fx: &Fx, target: Option<u32>) -> usize {
+        let Some((mi, id, vn, guard)) = self.last_local_set.take() else {
+            return 0;
+        };
+        let direct = target == Some(id);
         if !direct
             || mi != fx.module
             || !self
@@ -2006,6 +2048,7 @@ impl<'a> Gen<'a> {
             jumps: self.jumps,
             tries: self.tries,
             below_length: None,
+            below_local: None,
             assigned: true,
         });
         1
@@ -2188,6 +2231,7 @@ impl<'a> Gen<'a> {
                 jumps: self.jumps,
                 tries: self.tries,
                 below_length: None,
+                below_local: None,
                 assigned: true,
             });
         }

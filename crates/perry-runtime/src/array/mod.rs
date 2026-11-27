@@ -189,7 +189,10 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
-pub(crate) use self::from_concat::{define_constructed_index, finish_constructed_length};
+pub(crate) use self::from_concat::{
+    array_like_length, array_like_length_f64, boxed_primitive_source, define_constructed_index,
+    finish_constructed_length,
+};
 pub use self::generic::array_proto_mutator;
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,

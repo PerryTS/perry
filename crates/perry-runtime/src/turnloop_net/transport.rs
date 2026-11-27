@@ -227,7 +227,7 @@ const _: () = assert!(
 
 /// The driver's generational handle as four u32s (each exact as a JS
 /// number). No identity is minted.
-fn handle_parts(handle: Handle) -> [u32; 4] {
+pub(super) fn handle_parts(handle: Handle) -> [u32; 4] {
     let owner = handle.owner();
     let key = handle.key();
     [
@@ -666,15 +666,198 @@ pub unsafe fn tcp_connect(
         c.plan = Some(Box::new(ConnectPlan {
             subsystem: c.route,
             nodelay,
-            remaining: std::collections::VecDeque::new(),
-            retrying: false,
-            last_error: None,
             op: Some(op),
+            incarnation: next_incarnation(),
+            ..ConnectPlan::default()
         }));
         hold(link);
         Ok(())
     })
     .unwrap_or_else(|| Err(no_loop()))
+}
+
+/// Connect a TCP client to addresses the caller resolved, tried in order as a
+/// resolved hostname's are. With `attempt_timeout` and more than one address,
+/// an attempt still pending when it expires gives way to the next, and each
+/// attempt is reported as `NET_ATTEMPT`. A hostname connect whose resolve
+/// completed hands its plan to the binding this way.
+///
+/// # Safety
+/// See [`bind`].
+pub unsafe fn tcp_connect_addrs(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    addrs: Vec<SocketAddr>,
+    nodelay: bool,
+    attempt_timeout: Option<std::time::Duration>,
+) -> NetResult<()> {
+    let (c, _) = bind(core, link, "connect")?;
+    let resolved = c.entry.is_none() && c.plan.as_ref().is_some_and(|plan| plan.op.is_none());
+    if !resolved {
+        idle_or(c, "connect")?;
+    }
+    if addrs.is_empty() {
+        return Err(super::errors::invalid_input("connect"));
+    }
+    let multi = addrs.len() > 1;
+    c.plan = Some(Box::new(ConnectPlan {
+        subsystem: c.route,
+        nodelay,
+        remaining: addrs.into(),
+        attempt_timeout: attempt_timeout.filter(|_| multi),
+        incarnation: next_incarnation(),
+        ..ConnectPlan::default()
+    }));
+    if multi {
+        attempt_next_address(link);
+        return Ok(());
+    }
+    let first = c.plan.as_mut().and_then(|plan| plan.remaining.pop_front());
+    let submitted = first
+        .map(|addr| {
+            with_driver(|driver| connect_addr(driver, c, link, addr, nodelay))
+                .unwrap_or_else(|| Err(no_loop()))
+        })
+        .unwrap_or_else(|| Err(no_loop()));
+    if submitted.is_err() {
+        c.plan = None;
+    }
+    submitted
+}
+
+fn attempt_name(c: &TransportCore, link: OwnerLink) -> Name {
+    Name::Link {
+        route: c.route,
+        cell: link.0,
+    }
+}
+
+/// Start the timer of the attempt just submitted when addresses remain.
+unsafe fn arm_attempt_timer(c: &mut TransportCore, link: OwnerLink) {
+    let name = attempt_name(c, link);
+    let Some(plan) = c.plan.as_mut() else {
+        return;
+    };
+    let Some(timeout) = plan.attempt_timeout.filter(|_| !plan.remaining.is_empty()) else {
+        return;
+    };
+    // Node's attempt timer keeps the loop alive, even for an unref'd socket.
+    let timer = with_driver(|driver| {
+        driver
+            .timer(driver.now() + timeout, None, name.token(OP_ATTEMPT))
+            .ok()
+    })
+    .flatten();
+    if let Some(timer) = timer {
+        census::note_timer_create();
+        plan.timer = Some(timer);
+        hold(link);
+    }
+}
+
+/// Close the pending attempt's timer; its `Closed` releases its ref.
+unsafe fn disarm_attempt_timer(c: &mut TransportCore, link: OwnerLink) {
+    let name = attempt_name(c, link);
+    let Some(timer) = c.plan.as_mut().and_then(|plan| plan.timer.take()) else {
+        return;
+    };
+    let closed = with_driver(|driver| driver.close(timer, name.token(OP_ATTEMPT)).is_ok());
+    if closed != Some(true) {
+        release(link);
+    }
+}
+
+/// Report a multi-address plan's attempt to the binding. The sink may run JS
+/// that closes or reconnects the socket, so callers re-read the core after.
+fn emit_attempt(route: u8, link: OwnerLink, kind: u64, addr: SocketAddr, err: Option<NodeError>) {
+    let ip = addr.ip().to_string();
+    sink::emit(
+        route,
+        NetCompletion::attempt(link.0 as i64, kind, &ip, addr.port(), err).linked(),
+    );
+}
+
+thread_local! {
+    /// The last link plan's incarnation; a reconnect's plan never reuses one.
+    static PLANS: Cell<u64> = const { Cell::new(0) };
+}
+
+fn next_incarnation() -> u64 {
+    PLANS.with(|plans| {
+        plans.set(plans.get() + 1);
+        plans.get()
+    })
+}
+
+/// Whether `link` still runs the plan `incarnation` names.
+unsafe fn plan_is(link: OwnerLink, incarnation: u64) -> bool {
+    core_of(link)
+        .and_then(|c| c.plan.as_deref())
+        .is_some_and(|plan| plan.incarnation == incarnation)
+}
+
+unsafe fn dispatch_attempt_timer(link: OwnerLink, handle: Option<Handle>, result: OpResult) {
+    census::note_timer_result(&result);
+    match result {
+        OpResult::Timer => {
+            let Some(c) = core_of(link) else {
+                return;
+            };
+            let current = c
+                .plan
+                .as_ref()
+                .is_some_and(|plan| plan.timer.is_some() && plan.timer == handle);
+            if !current {
+                // Disarmed before this expiry was dispatched; whoever did so
+                // closed the handle.
+                return;
+            }
+            disarm_attempt_timer(c, link);
+            abandon_attempt(c, link);
+            let route = c.route;
+            let Some(plan) = c.plan.as_deref_mut() else {
+                return;
+            };
+            let plan_id = plan.incarnation;
+            let Some(addr) = plan.attempt else {
+                return;
+            };
+            #[cfg(windows)]
+            let timed_out = 10060; // WSAETIMEDOUT
+            #[cfg(not(windows))]
+            let timed_out = libc::ETIMEDOUT;
+            plan.last_error = Some(crate::event_pump::service_errors::from_os(
+                timed_out, "connect",
+            ));
+            emit_attempt(route, link, sink::NET_ATTEMPT_TIMEOUT, addr, None);
+            if plan_is(link, plan_id) {
+                attempt_next_address(link);
+            }
+        }
+        OpResult::Closed => release(link),
+        _ => {}
+    }
+}
+
+/// Detach a racing connect's attempt before it is reported failed or timed
+/// out, as Node's `internalConnectMultiple` replaces the handle: a listener
+/// that destroys the socket then cancels nothing, and the next attempt starts
+/// at once. The handle's own late completions no longer match the core; its
+/// `Closed` (`OP_ABANDON`) only releases its ref.
+unsafe fn abandon_attempt(c: &mut TransportCore, link: OwnerLink) {
+    let name = attempt_name(c, link);
+    let Some(entry) = c.entry.take() else {
+        return;
+    };
+    if !entry.closing {
+        census::note_submit(OP_CLOSE);
+        let handle = entry.handle;
+        if with_driver(|driver| driver.close(handle, name.token(OP_ABANDON)).is_ok()) == Some(true)
+        {
+            return;
+        }
+    }
+    release(link);
 }
 
 /// One connect attempt: a fresh handle, installed (+1 ref).
@@ -794,6 +977,9 @@ pub unsafe fn adopt_descriptor(
         return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
     }
     let stdio = fd <= 2;
+    if crate::fs::fd_is_embedded(fd) {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+    }
     let registered = if stdio {
         None
     } else {
@@ -893,8 +1079,12 @@ pub unsafe fn write(
     user: u64,
 ) -> NetResult<usize> {
     let (c, name) = bind(core, link, "write")?;
-    with_driver(|driver| unsafe { accept_write(driver, c, name, link, bytes, user) })
-        .unwrap_or_else(|| Err(no_loop()))
+    with_driver(|driver| unsafe {
+        let queued = accept_write(driver, c, name, link, bytes, user);
+        settle_ref(driver, c);
+        queued
+    })
+    .unwrap_or_else(|| Err(no_loop()))
 }
 
 /// `end()`: shut the write side down behind every write accepted before it.
@@ -903,16 +1093,22 @@ pub unsafe fn write(
 /// See [`bind`].
 pub unsafe fn shutdown(core: *mut TransportCore, link: OwnerLink, user: u64) -> NetResult<()> {
     let (c, name) = bind(core, link, "shutdown")?;
-    with_driver(|driver| accept_shutdown(driver, c, name, link, user))
-        .unwrap_or_else(|| Err(no_loop()))
+    with_driver(|driver| {
+        let submitted = accept_shutdown(driver, c, name, link, user);
+        settle_ref(driver, c);
+        submitted
+    })
+    .unwrap_or_else(|| Err(no_loop()))
 }
 
 /// Release the core's driver resources (rule 3). Takes the handle out and
 /// submits its close under the cell's token, closes the deadline, cancels a
 /// pending resolve and drops the backlog. Returns whether a `Closed` (a
-/// `NET_CLOSED` completion for this link) will follow; when it is `false`
-/// there was no handle, and a binding that owes a `close` event emits it
-/// itself. The binding releases the payload afterwards.
+/// `NET_CLOSED` completion for this link) will follow: a resolving connect's
+/// comes from the close-callbacks phase (`closing`), carrying no handle parts.
+/// When it is `false` there was neither a handle nor a connect, and a binding
+/// that owes a `close` event emits it itself. The binding releases the payload
+/// afterwards.
 ///
 /// # Safety
 /// See [`bind`].
@@ -924,18 +1120,27 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
                 release(link);
             }
         }
-        if let Some(plan) = c.plan.take() {
-            if let Some(op) = plan.op {
-                // Its terminal (`Cancelled`) result carries the resolve's ref.
-                driver.cancel(op);
+        let plan = c.plan.take();
+        if let Some(op) = plan.as_ref().and_then(|plan| plan.op) {
+            // Its terminal (`Cancelled`) result carries the resolve's ref.
+            driver.cancel(op);
+        }
+        if let Some(timer) = plan.as_ref().and_then(|plan| plan.timer) {
+            if driver.close(timer, name.token(OP_ATTEMPT)).is_err() {
+                release(link);
             }
         }
         c.backlog = Backlog::default();
-        let Some(entry) = c.entry.take() else {
-            return Ok(false);
+        let Some(mut entry) = c.entry.take() else {
+            if plan.is_none() {
+                return Ok(false);
+            }
+            // Still resolving: owed like a handle's close.
+            if closing::queue(link, c.route, None, true) {
+                hold(link);
+            }
+            return Ok(true);
         };
-        #[cfg(windows)]
-        let mut entry = entry;
         #[cfg(windows)]
         {
             windows_pipe::cancel_eof(driver, name, &mut entry);
@@ -947,11 +1152,25 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             // A failed connect attempt's close is already in flight; its
             // `Closed` no longer matches the core and is delivered as this
             // socket's close.
+            if closing::queue(link, c.route, Some(entry.handle), true) {
+                hold(link);
+            }
             return Ok(true);
         }
         census::note_submit(OP_CLOSE);
+        if c.referenced && !entry.referenced {
+            // An ended socket's close is work again: its `Closed` is owed.
+            if driver.set_ref(entry.handle, true).is_ok() {
+                entry.referenced = true;
+            }
+        }
         match driver.close(entry.handle, name.token(OP_CLOSE)) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                if closing::queue(link, c.route, Some(entry.handle), true) {
+                    hold(link);
+                }
+                Ok(true)
+            }
             Err(e) => {
                 // The handle is still live: keep it (and its ref) so no
                 // completion can outlive the cell.
@@ -978,17 +1197,52 @@ pub unsafe fn set_ref(
     let Some(entry) = c.entry.as_mut() else {
         return Ok(());
     };
-    if entry.referenced == referenced {
+    let wanted = referenced && holds_loop(entry, &c.backlog);
+    if entry.referenced == wanted {
         return Ok(());
     }
-    entry.referenced = referenced;
+    entry.referenced = wanted;
     let handle = entry.handle;
-    with_driver(|driver| {
-        driver
-            .set_ref(handle, referenced)
-            .map_err(|e| map_error(e, ""))
-    })
-    .unwrap_or_else(|| Err(no_loop()))
+    with_driver(|driver| driver.set_ref(handle, wanted).map_err(|e| map_error(e, "")))
+        .unwrap_or_else(|| Err(no_loop()))
+}
+
+/// libuv's active handle: an ended stream keeps the loop alive only while a
+/// write, a shutdown or a close is owed. The driver counts an open socket
+/// itself, so the core's reference is withdrawn in between.
+fn holds_loop(entry: &Entry, backlog: &Backlog) -> bool {
+    #[cfg(windows)]
+    if entry.pipe_drain.is_some() || entry.pipe_eof_timer.is_some() {
+        return true;
+    }
+    !entry.ended
+        || entry.closing
+        || entry.posted
+        || entry.inflight > 0
+        || !entry.writes.is_empty()
+        || !backlog.is_idle()
+}
+
+/// Re-derive an ended stream's reference after its owed work changed.
+fn settle_ref(driver: &mut turnloop::Loop, c: &mut TransportCore) {
+    let Some(entry) = c.entry.as_mut().filter(|entry| entry.ended) else {
+        return;
+    };
+    let wanted = c.referenced && holds_loop(entry, &c.backlog);
+    if entry.referenced != wanted && driver.set_ref(entry.handle, wanted).is_ok() {
+        entry.referenced = wanted;
+    }
+}
+
+/// The EOF of `handle` reached its sink. The sink may have closed or replaced
+/// the core's handle.
+unsafe fn note_ended(link: OwnerLink, handle: Option<Handle>) {
+    if let Some(c) = current(link, handle) {
+        if let Some(entry) = c.entry.as_mut() {
+            entry.ended = true;
+        }
+        with_driver(|driver| settle_ref(driver, c));
+    }
 }
 
 /// Bytes accepted and not yet reported written.
@@ -1431,12 +1685,32 @@ pub(super) fn dispatch(completion: Completion) {
     unsafe {
         match op {
             OP_TIMER => dispatch_timer(link, handle, result),
+            OP_ATTEMPT => dispatch_attempt_timer(link, handle, result),
+            OP_ABANDON => {
+                if matches!(result, OpResult::Closed) {
+                    release(link);
+                }
+            }
             OP_RESOLVE => dispatch_resolve(link, op_id, terminal, result),
             #[cfg(windows)]
             OP_PIPE_EOF => dispatch_pipe_eof(link, handle, result),
             #[cfg(windows)]
             OP_PIPE_DRAIN => dispatch_pipe_drain(link, op_id, terminal, result),
-            _ => dispatch_stream(route, op, link, handle, terminal, result),
+            _ => {
+                let ended = core_of(link)
+                    .and_then(|c| c.entry.as_ref())
+                    .is_some_and(|entry| entry.ended);
+                if ended {
+                    hold(link);
+                }
+                dispatch_stream(route, op, link, handle, terminal, result);
+                if ended {
+                    if let Some(c) = core_of(link) {
+                        with_driver(|driver| settle_ref(driver, c));
+                    }
+                    release(link);
+                }
+            }
         }
     }
 }
@@ -1482,11 +1756,32 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
     match result {
         OpResult::Resolved(addresses) => {
             if let Some(c) = current {
-                if let Some(plan) = c.plan.as_mut() {
-                    plan.op = None;
-                    plan.remaining = addresses.into_iter().collect();
+                let text = addresses
+                    .iter()
+                    .map(|a| a.ip().to_string())
+                    .collect::<Vec<_>>();
+                let route = c.route;
+                let Some(plan) = c.plan.as_mut() else {
+                    return finish_resolve(link, terminal);
+                };
+                plan.op = None;
+                plan.remaining = addresses.into_iter().collect();
+                let plan_id = plan.incarnation;
+                sink::emit(
+                    route,
+                    NetCompletion::lookup(link.0 as i64, &text.join("\n")).linked(),
+                );
+                // A 'lookup' listener may destroy or reconnect the socket; a new
+                // connect either resolves again or already owns a handle.
+                let same_plan = core_of(link).is_some_and(|c| {
+                    c.entry.is_none()
+                        && c.plan
+                            .as_deref()
+                            .is_some_and(|plan| plan.incarnation == plan_id && plan.op.is_none())
+                });
+                if same_plan {
+                    attempt_next_address(link);
                 }
-                attempt_next_address(link);
             }
         }
         OpResult::Err(err) => {
@@ -1511,8 +1806,24 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
         }
         _ => {}
     }
+    finish_resolve(link, terminal);
+}
+
+unsafe fn finish_resolve(link: OwnerLink, terminal: bool) {
     if terminal {
         release(link);
+    }
+}
+
+/// An empty read result of `handle` on `link`, as a turn reports one.
+#[cfg(test)]
+pub(crate) fn read_result_for_test(link: OwnerLink, route: u8, handle: Handle) -> Completion {
+    Completion {
+        token: link_token(route, OP_READ, link.0),
+        op: None,
+        handle: Some(handle),
+        terminal: false,
+        result: OpResult::Read { n: 0, lease: None },
     }
 }
 
@@ -1547,9 +1858,11 @@ unsafe fn attempt_next_address(link: OwnerLink) {
             return;
         };
         let route = c.route;
-        let Some(plan) = c.plan.as_mut() else {
+        let Some(plan) = c.plan.as_deref_mut() else {
             return;
         };
+        let plan_id = plan.incarnation;
+        let multi = plan.attempt_timeout.is_some();
         let (nodelay, next, last_error) =
             (plan.nodelay, plan.remaining.pop_front(), plan.last_error);
         let Some(addr) = next else {
@@ -1566,14 +1879,39 @@ unsafe fn attempt_next_address(link: OwnerLink) {
             );
             return;
         };
+        // A later attempt gets a fresh handle, which an earlier `unref()` did
+        // not reach (Node's `kReinitializeHandle`).
+        let reinitialize = multi && plan.attempt.is_some();
+        plan.attempt = Some(addr);
+        if multi {
+            emit_attempt(route, link, sink::NET_ATTEMPT_START, addr, None);
+            if !plan_is(link, plan_id) {
+                return;
+            }
+        }
+        let Some(c) = core_of(link) else {
+            return;
+        };
+        if reinitialize {
+            c.referenced = true;
+        }
         let submitted = with_driver(|driver| connect_addr(driver, c, link, addr, nodelay))
             .unwrap_or_else(|| Err(no_loop()));
         match submitted {
-            Ok(()) => return,
+            Ok(()) => {
+                arm_attempt_timer(c, link);
+                return;
+            }
             Err(err) => {
                 // Submission itself failed: record it and try the next one.
-                if let Some(plan) = core_of(link).and_then(|c| c.plan.as_mut()) {
+                if let Some(plan) = c.plan.as_mut() {
                     plan.last_error = Some(err);
+                }
+                if multi {
+                    emit_attempt(route, link, sink::NET_ATTEMPT_FAILED, addr, Some(err));
+                    if !plan_is(link, plan_id) {
+                        return;
+                    }
                 }
             }
         }
@@ -1581,21 +1919,46 @@ unsafe fn attempt_next_address(link: OwnerLink) {
 }
 
 /// A connect attempt failed: true when absorbed into a retry. The attempt's
-/// handle is closed here and its `Closed` starts the next address.
+/// handle is closed here and its `Closed` starts the next address. A failure
+/// of an attempt its timer already abandoned is absorbed too.
 unsafe fn connect_failed(c: &mut TransportCore, link: OwnerLink, err: NodeError) -> bool {
-    let Some(plan) = c.plan.as_mut() else {
+    disarm_attempt_timer(c, link);
+    let route = c.route;
+    let Some(plan) = c.plan.as_deref_mut() else {
         return false;
     };
+    if plan.retrying {
+        return true;
+    }
     plan.last_error = Some(err);
+    if let (Some(addr), true) = (plan.attempt, plan.attempt_timeout.is_some()) {
+        let (plan_id, last) = (plan.incarnation, plan.remaining.is_empty());
+        abandon_attempt(c, link);
+        emit_attempt(route, link, sink::NET_ATTEMPT_FAILED, addr, Some(err));
+        if !plan_is(link, plan_id) {
+            return true;
+        }
+        if last {
+            if let Some(c) = core_of(link) {
+                c.plan = None;
+            }
+            return false;
+        }
+        attempt_next_address(link);
+        return true;
+    }
     if plan.remaining.is_empty() {
         c.plan = None;
         return false;
     }
     plan.retrying = true;
-    let name = Name::Link {
-        route: c.route,
-        cell: link.0,
-    };
+    close_attempt(c, link);
+    true
+}
+
+/// Close the pending attempt's handle; its `Closed` starts the next address.
+unsafe fn close_attempt(c: &mut TransportCore, link: OwnerLink) {
+    let name = attempt_name(c, link);
     if let Some(entry) = c.entry.as_mut() {
         if !entry.closing {
             entry.closing = true;
@@ -1604,7 +1967,6 @@ unsafe fn connect_failed(c: &mut TransportCore, link: OwnerLink, err: NodeError)
             let _ = with_driver(|driver| driver.close(handle, name.token(OP_CLOSE)));
         }
     }
-    true
 }
 
 fn clear_op(c: &mut TransportCore, op_class: u64) {
@@ -1655,21 +2017,10 @@ unsafe fn dispatch_stream(
             if retry {
                 // A failed attempt's handle, not the socket the caller sees.
                 attempt_next_address(link);
-            } else {
-                let mut event = NetCompletion::closed(id).linked();
-                // Callback context belongs to the closing incarnation even if
-                // the owner already has a new payload. Lend the handle's
-                // parts for the sink call only.
-                let parts = handle.map(handle_parts);
-                if let Some(parts) = parts.as_ref() {
-                    event.flags |= sink::NET_FLAG_HANDLE_PARTS;
-                    event.data = parts.as_ptr().cast();
-                    event.len = std::mem::size_of_val(parts);
-                }
-                if stale && !sabotage("stale_closed_flag") {
-                    event.flags |= sink::NET_FLAG_STALE;
-                }
-                sink::emit(route, event);
+            } else if !handle.is_some_and(|h| closing::mark_closed(link, h, stale)) {
+                // A `Closed` no close queued still belongs to the phase.
+                hold(link);
+                closing::queue_closed(link, route, handle, stale);
             }
             for _ in 0..defer_eof::purge(defer_eof::Key::Link(link.0), handle) {
                 release(link);
@@ -1684,6 +2035,11 @@ unsafe fn dispatch_stream(
             let Some(c) = current(link, handle) else {
                 return;
             };
+            if c.plan.as_ref().is_some_and(|plan| plan.retrying) {
+                // Its timer abandoned this attempt; the handle is closing.
+                return;
+            }
+            disarm_attempt_timer(c, link);
             let route = c.route;
             let local =
                 handle.and_then(|h| with_driver(|driver| driver.local_addr(h).ok()).flatten());
@@ -1745,7 +2101,10 @@ unsafe fn dispatch_stream(
                 // Pins the cell until the parked EOF is delivered or dropped.
                 hold(link);
             } else {
+                hold(link);
                 sink::emit(route, NetCompletion::eof(id).linked());
+                note_ended(link, handle);
+                release(link);
             }
         }
         OpResult::Wrote(n) => {
@@ -1841,12 +2200,79 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
         if let Some(c) = current(link, handle) {
             let route = c.route;
             sink::emit(route, NetCompletion::eof(link.0 as i64).linked());
+            note_ended(link, handle);
         }
     }
     release(link);
 }
 
-/// Drop the ref of an EOF `defer_eof` parked and will never deliver.
+/// The payload cell a link completion names.
+pub(crate) fn link_cell(completion: &Completion) -> Option<usize> {
+    owns(completion.token).then(|| link_parts(completion.token).2)
+}
+
+/// Whether `completion` is the `Closed` of a handle [`close`] queued.
+pub(super) fn is_queued_close(completion: &Completion) -> bool {
+    let (_, op, cell) = link_parts(completion.token);
+    owns(completion.token)
+        && op == OP_CLOSE
+        && matches!(completion.result, OpResult::Closed)
+        && completion
+            .handle
+            .is_some_and(|h| closing::awaits(OwnerLink(cell), h))
+}
+
+/// Whether `earlier`, staged ahead of the queued `closed` of its cell, is
+/// dispatched with it: a terminal acknowledgement, or a result of the closed
+/// handle that no longer reaches the binding.
+pub(super) fn retires_with(earlier: &Completion, closed: &Completion) -> bool {
+    if matches!(
+        earlier.result,
+        OpResult::Closed | OpResult::Cancelled | OpResult::Stopped
+    ) {
+        return true;
+    }
+    let link = OwnerLink(link_parts(earlier.token).2);
+    earlier.handle.is_some()
+        && earlier.handle == closed.handle
+        // SAFETY: the queued close's ref pins the cell.
+        && unsafe { current(link, earlier.handle) }.is_none()
+}
+
+/// Deliver a `Closed` the close-callbacks phase owed, building its event.
+/// Callback context belongs to the closing incarnation even if the owner
+/// already has a new payload, so the handle's parts go with it; a resolving
+/// connect's carries none. When the binding released the payload with the
+/// close, any payload on the cell now is a newer incarnation.
+///
+/// # Safety
+/// The queued ref pins `link`'s cell; this call releases it.
+pub(super) unsafe fn deliver_closed(
+    link: OwnerLink,
+    route: u8,
+    handle: Option<Handle>,
+    released: bool,
+    stale: bool,
+) {
+    if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
+        let mut event = NetCompletion::closed(link.0 as i64).linked();
+        let parts = handle.map(handle_parts);
+        if let Some(parts) = parts.as_ref() {
+            event.flags |= sink::NET_FLAG_HANDLE_PARTS;
+            event.data = parts.as_ptr().cast();
+            event.len = std::mem::size_of_val(parts);
+        }
+        let stale = stale || released && core_of(link).is_some();
+        if stale && !sabotage("stale_closed_flag") {
+            event.flags |= sink::NET_FLAG_STALE;
+        }
+        sink::emit(route, event);
+    }
+    release(link);
+}
+
+/// Drop the ref of an EOF `defer_eof` parked, or of a `Closed` `closing`
+/// queued, that will never be delivered.
 ///
 /// # Safety
 /// As [`deliver_parked_eof`].
@@ -1966,7 +2392,11 @@ unsafe fn dispatch_pipe_drain(
 /// stays in the core, closing, and its `Closed` is delivered as the close.
 #[cfg(windows)]
 unsafe fn close_stream(link: OwnerLink, name: Name) {
-    let Some(entry) = core_of(link).and_then(|c| c.entry.as_mut()) else {
+    let Some(c) = core_of(link) else {
+        return;
+    };
+    let route = c.route;
+    let Some(entry) = c.entry.as_mut() else {
         return;
     };
     if entry.closing {
@@ -1979,7 +2409,12 @@ unsafe fn close_stream(link: OwnerLink, name: Name) {
     }
     census::note_submit(OP_CLOSE);
     let handle = entry.handle;
-    let _ = with_driver(|driver| driver.close(handle, name.token(OP_CLOSE)));
+    if with_driver(|driver| driver.close(handle, name.token(OP_CLOSE)).is_ok()) == Some(true) {
+        // The binding keeps this payload until the `Closed` is delivered.
+        if closing::queue(link, route, Some(handle), false) {
+            hold(link);
+        }
+    }
 }
 
 // ── The core as an ABI value ────────────────────────────────────────────────

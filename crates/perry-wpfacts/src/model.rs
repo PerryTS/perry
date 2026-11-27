@@ -1840,6 +1840,10 @@ pub struct Model {
     /// literal receiver, with the literal's length in code units: the
     /// native's result is in `[-1, len]` (`string_methods`).
     pub str_index_len: FxHashMap<CallId, i64>,
+    /// Rule CU: `a.charCodeAt(k)` calls whose text proves `k` an index below
+    /// the length of the String `a` holds (`Gen::code_unit_read`): on a
+    /// String receiver the native's result is a code unit, `[0, 65535]`.
+    pub code_unit_calls: crate::pts::FxHashSet<CallId>,
     /// −0 tolerance: spread argument arrays of calls whose callee observes
     /// its arguments: every element of every token they hold is observed.
     pub zs_spread: Vec<NodeId>,

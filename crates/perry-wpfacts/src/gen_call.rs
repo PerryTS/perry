@@ -89,6 +89,17 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
+        // Rule CU: decided on the text before the key is walked (a key
+        // `i++` writes the counter its narrowing tested).
+        self.code_unit_arg = match (callee, args) {
+            (
+                Expr::PropertyGet {
+                    object, property, ..
+                },
+                [key],
+            ) if property == "charCodeAt" => self.code_unit_read(fx, object, key),
+            _ => false,
+        };
         // Call arguments: the callee classifies them (`zero_sign`).
         let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
         if let Some((offset, _)) = site.filter(|_| self.int_ranges) {
@@ -154,6 +165,7 @@ impl<'a> Gen<'a> {
         site: Option<(u32, u32)>,
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
+        let code_unit = std::mem::take(&mut self.code_unit_arg);
         match callee {
             // The HIR's fused member call on a Proxy local: the runtime reads
             // the member off the Proxy and calls it with `this` = the Proxy
@@ -292,6 +304,9 @@ impl<'a> Gen<'a> {
                     self.m.call_lit.insert(call, a);
                 }
                 self.str_index_bound(object, property, call);
+                if code_unit && property == "charCodeAt" {
+                    self.m.code_unit_calls.insert(call);
+                }
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => {

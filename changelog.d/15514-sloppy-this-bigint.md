@@ -1,0 +1,1 @@
+A sloppy function boxes a BigInt `this` into its wrapper object, so `typeof this` is `"object"` when a builtin passes a BigInt `thisArg` (`[0].map(f, 1n)`, `Array.fromAsync([0], f, 1n)`), matching numbers, strings and booleans.

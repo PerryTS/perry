@@ -162,12 +162,28 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_async(
     options_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let pair = js_crypto_generate_key_pair_sync_named(alg_ptr, options_bits);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback_bits);
+    let generated = super::sign::generate_named_key_pair(alg_ptr, options_bits);
     let null = f64::from_bits(JSValue::null().bits());
     let undefined = f64::from_bits(JSValue::undefined().bits());
+    let pair = match generated {
+        Ok(pair) => pair,
+        Err(error) => {
+            let error = error.into_error().value();
+            schedule_node_style_callback3(
+                callback.get_nanbox_f64(),
+                error,
+                undefined,
+                undefined,
+                "KEYPAIRGENREQUEST",
+            );
+            return undefined;
+        }
+    };
     if pair.is_null() {
         schedule_node_style_callback3(
-            callback_bits,
+            callback.get_nanbox_f64(),
             null,
             undefined,
             undefined,
@@ -180,7 +196,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_async(
     let private_key =
         js_object_get_field_by_name(pair, js_string_from_bytes(b"privateKey".as_ptr(), 10));
     schedule_node_style_callback3(
-        callback_bits,
+        callback.get_nanbox_f64(),
         null,
         f64::from_bits(public_key.bits()),
         f64::from_bits(private_key.bits()),

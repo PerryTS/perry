@@ -231,7 +231,7 @@ fn asymmetric_key_surrogate(mat: CryptoKeyMaterial, bytes: &[u8]) -> Option<(Str
     let ed_key: Option<[u8; 32]> = bytes.try_into().ok();
     match (mat.algo, mat.kind) {
         (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Public) => {
-            let key = RsaPublicKey::from_public_key_der(bytes).ok()?;
+            let key = rsa_public_key_from_spki_der(bytes)?;
             Some((key.to_public_key_pem(Default::default()).ok()?, 1))
         }
         (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Private) => {
@@ -317,4 +317,50 @@ pub(super) unsafe fn js_webcrypto_key_object_from_crypto_key(key_bits: f64) -> f
     }
     perry_runtime::buffer::mark_as_asymmetric_key(ptr as usize, kind_id, asym_type);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+/// Modulus bit length and big-endian public exponent of an RSA CryptoKey's
+/// SPKI (public) or PKCS#8 (private) material.
+fn rsa_modulus_bits_and_exponent(kind: KeyKind, der: &[u8]) -> Option<(usize, Vec<u8>)> {
+    use rsa::pkcs1::UintRef;
+    let parts = |n: UintRef<'_>, e: UintRef<'_>| {
+        let bits = RsaBigUint::from_bytes_be(n.as_bytes()).bits();
+        (bits, e.as_bytes().to_vec())
+    };
+    if kind == KeyKind::Public {
+        let spki = rsa::pkcs8::SubjectPublicKeyInfoRef::try_from(der).ok()?;
+        let key = rsa::pkcs1::RsaPublicKey::try_from(spki.subject_public_key.as_bytes()?).ok()?;
+        Some(parts(key.modulus, key.public_exponent))
+    } else {
+        let info = rsa::pkcs8::PrivateKeyInfo::try_from(der).ok()?;
+        let key = rsa::pkcs1::RsaPrivateKey::try_from(info.private_key).ok()?;
+        Some(parts(key.modulus, key.public_exponent))
+    }
+}
+
+/// Adds `modulusLength` and `publicExponent` to the `algorithm` object the
+/// runtime is building for an RSA CryptoKey.
+pub(super) unsafe fn js_webcrypto_set_rsa_key_algorithm_fields(
+    key_bits: f64,
+    algorithm_bits: f64,
+) -> f64 {
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let algorithm = scope.root_nanbox_f64(algorithm_bits);
+    let addr = strip_ptr(key_bits.to_bits());
+    let Some((bits, exponent)) = lookup_crypto_key(addr)
+        .and_then(|mat| rsa_modulus_bits_and_exponent(mat.kind, &crypto_key_bytes(addr)))
+    else {
+        return undefined;
+    };
+    let set = |name: &[u8], value: JSValue| {
+        let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        let name = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let object = strip_ptr(algorithm.get_nanbox_f64().to_bits());
+        js_object_set_field_by_name(object as *mut _, name, value.get_nanbox_f64());
+    };
+    set(b"modulusLength", JSValue::number(bits as f64));
+    let exponent = alloc_uint8array_from_slice(&exponent);
+    set(b"publicExponent", JSValue::pointer(exponent as *const u8));
+    undefined
 }

@@ -7,7 +7,7 @@ use perry_parser::parse_typescript_with_cache;
 fn constructor_stores_do_not_declare_fields() {
     let mut cache = SourceCache::new();
     let parsed = parse_typescript_with_cache(
-        "class Cell { declared = 0; constructor(f) { this.before(); if(f) this.b=2; this.a=1; this.a=3; } before() { this.first=0; } } class Child extends Cell { constructor(f) { super(f); this.child=4; } }",
+        "class Cell { declared = 0; constructor(f) { this.before(); if(f) this.b=2; this.a=1; this.a=3; } before() { this.first=0; } later() { this.unreserved=0; } } class Child extends Cell { constructor(f) { super(f); this.child=4; } }",
         "test.ts", &mut cache,
     ).unwrap();
     let module = lower_module(&parsed.module, "test", "test.ts").unwrap();
@@ -32,11 +32,12 @@ fn constructor_stores_do_not_declare_fields() {
         .filter(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
         .map(|f| f.name.as_str())
         .collect();
-    // The reservations in first-store order (#14485, `constructor_store_keys`):
-    // the branch store `if (f) this.b = 2` reserves `b` at its place in the
-    // text, before `a`; `first`, stored only by the method `before()`, is no
-    // constructor store and stays unreserved.
-    assert_eq!(reserved, ["b", "a"]);
+    // The reservations in first-store order (`constructor_store_keys_of`): the
+    // constructor's own-method call `this.before()` reserves `first` at the
+    // call, the branch store `if (f) this.b = 2` reserves `b` at its place in
+    // the text, before `a`; `unreserved`, stored only by a method the
+    // constructor does not call, stays unreserved.
+    assert_eq!(reserved, ["first", "b", "a"]);
     assert!(!cell.constructor.as_ref().unwrap().body.is_empty());
     assert!(!child.constructor.as_ref().unwrap().body.is_empty());
 }

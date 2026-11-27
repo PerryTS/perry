@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createSecretKey } from "node:crypto";
 import { Deserializer, Serializer } from "node:v8";
 
 for (
@@ -8,6 +9,10 @@ for (
       () => new Serializer().writeRawBytes("bad" as any),
     ],
     ["writeRawBytes object", () => new Serializer().writeRawBytes({} as any)],
+    [
+      "writeRawBytes key object",
+      () => new Serializer().writeRawBytes(createSecretKey(Buffer.from([1, 2])) as any),
+    ],
     [
       "readDouble empty",
       () => new Deserializer(new Serializer().releaseBuffer()).readDouble(),

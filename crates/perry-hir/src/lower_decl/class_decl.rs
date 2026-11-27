@@ -1092,6 +1092,7 @@ pub fn lower_class_decl(
                                 is_static: false,
                                 kind: ClassComputedMemberKind::Method,
                                 source_order: member_index,
+                                names_declaration: false,
                             });
                             continue;
                         }

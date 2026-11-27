@@ -1799,13 +1799,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                     let prop_name = prop_ident.sym.as_ref();
                     if matches!(prop_name, "encoding" | "fatal" | "ignoreBOM") {
-                        let d =
-                            super::expr_new::lower_text_decoder_new(ctx, new_expr.args.as_deref())?;
-                        return Ok(match prop_name {
-                            "encoding" => Expr::TextDecoderEncoding(Box::new(d)),
-                            "fatal" => Expr::TextDecoderFatal(Box::new(d)),
-                            _ => Expr::TextDecoderIgnoreBom(Box::new(d)),
-                        });
+                        if let Some(d) =
+                            super::expr_new::lower_text_decoder_new(ctx, new_expr.args.as_deref())?
+                        {
+                            return Ok(match prop_name {
+                                "encoding" => Expr::TextDecoderEncoding(Box::new(d)),
+                                "fatal" => Expr::TextDecoderFatal(Box::new(d)),
+                                _ => Expr::TextDecoderIgnoreBom(Box::new(d)),
+                            });
+                        }
                     }
                 }
             }

@@ -262,41 +262,58 @@ struct ClangCompilePlan {
     asm_path: Option<PathBuf>,
 }
 
-fn native_tuning_arg_for_host() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        "-mcpu=native"
+/// The CPU every object for `effective_target` is compiled for when nothing
+/// asks otherwise: a fixed baseline per target triple, never the build
+/// machine. A program compiled on an AVX-512 box and on an AVX2 laptop is the
+/// same program.
+///
+///   - x86-64 desktop and server targets (Linux, macOS, Windows): `x86-64-v3`
+///     (AVX2, BMI1/2, FMA, MOVBE: Haswell / Zen 1 and later). The runtime and
+///     stdlib archives are built at the same level (`.cargo/config.toml`).
+///     Android, HarmonyOS and the iOS simulator on x86-64 keep the LLVM
+///     baseline.
+///   - Apple aarch64 macOS: `apple-m1`. Codegen decides whether to emit
+///     `llvm.aarch64.fjcvtzs` (FEAT_JSCVT) from the TRIPLE alone, because
+///     clang's default CPU for `arm64-apple-macos*` is `apple-m1`; see
+///     `inprocess::default_cpu_for_triple`, the other half of that pair.
+///     Naming the baseline makes what we emit and what we target the same
+///     decision (a virtualised macOS CI runner once detected a CPU without
+///     the feature and every compile died in instruction selection).
+///   - Everything else (aarch64 Linux/Android = armv8-a, iOS, riscv, wasm):
+///     no flag, the target's LLVM baseline.
+fn baseline_cpu_for_target(effective_target: &str) -> Option<&'static str> {
+    let os = crate::codegen::target_os_of(effective_target);
+    let is_aarch64 =
+        effective_target.starts_with("arm64") || effective_target.starts_with("aarch64");
+    if effective_target.starts_with("x86_64") && matches!(os, Some("linux" | "macos" | "windows")) {
+        Some("x86-64-v3")
+    } else if is_aarch64 && os == Some("macos") {
+        Some("apple-m1")
     } else {
-        "-march=native"
+        None
     }
 }
 
-/// Resolve the CPU-tuning clang flag for one `.ll` → `.o` compile (#6125).
+/// Resolve the CPU flag for one `.ll` → `.o` compile (#6125).
 ///
-/// `requested` is the value of `PERRY_TARGET_CPU` — set directly, or promoted
+/// `requested` is the value of `PERRY_TARGET_CPU`, set directly or promoted
 /// by the compile driver from `--march` / perry.toml `[build] march` /
 /// `[build] native_tuning`:
 ///
-///   - `None` (unset) — historical default: a host build (no explicit target
-///     triple) tunes to the build machine via `-march=native`/`-mcpu=native`;
-///     an explicit-triple build gets no tuning flag (the target's portable
-///     baseline).
-///   - `"native"` — force build-machine tuning.
-///   - `"generic"` / `"off"` / `"none"` / `"0"` / `"false"` — no tuning flag:
-///     the target architecture's portable baseline, even for host builds.
-///   - anything else — an explicit LLVM CPU name (`x86-64-v2`, `x86-64-v3`,
+///   - `None` (unset): the target triple's fixed baseline,
+///     `baseline_cpu_for_target`. Host and explicit-triple builds of the same
+///     triple get the same flag; the build machine's CPU never enters.
+///   - `"native"`: explicit opt-in to the build machine's full instruction
+///     set. The result only runs on CPUs with every extension the build box
+///     has (an AVX-512 build box gives a binary that SIGILLs without AVX-512).
+///   - `"generic"` / `"off"` / `"none"` / `"0"` / `"false"`: no flag, the
+///     target architecture's LLVM baseline (x86-64 v1 on x86-64).
+///   - anything else: an explicit LLVM CPU name (`x86-64-v2`, `x86-64-v4`,
 ///     `znver2`, `apple-m1`, …) the emitted code must not exceed.
 ///
 /// The flag spelling follows the EFFECTIVE target, not the host: x86 targets
 /// take `-march=<cpu>`, everything else (aarch64/arm, riscv) `-mcpu=<cpu>`.
-/// This knob exists because binaries built on one machine and run on another
-/// (the `perry publish` hub, shared CI caches) must not bake the build box's
-/// full instruction set — e.g. AVX-512 — into the shipped objects, which
-/// SIGILLs on any CPU missing those extensions.
-fn cpu_tuning_arg_for(
-    requested: Option<&str>,
-    target_triple: Option<&str>,
-    effective_target: &str,
-) -> Option<String> {
+fn cpu_tuning_arg_for(requested: Option<&str>, effective_target: &str) -> Option<String> {
     let arch_flag = |cpu: &str| {
         let is_x86 = effective_target.starts_with("x86_64")
             || effective_target.starts_with("i686")
@@ -308,27 +325,7 @@ fn cpu_tuning_arg_for(
         }
     };
     match requested.map(str::trim).filter(|s| !s.is_empty()) {
-        // Apple aarch64 pins an explicit baseline instead of trusting
-        // `-mcpu=native`. Codegen decides whether to emit
-        // `llvm.aarch64.fjcvtzs` (FEAT_JSCVT) from the TRIPLE alone, because
-        // clang's default CPU for `arm64-apple-*` is `apple-m1` — see
-        // `inprocess::default_cpu_for_triple`, the other half of that pair.
-        // `native` breaks the pair wherever CPU detection disagrees with that
-        // assumption: on a virtualised macOS CI runner it resolved to a CPU
-        // without the feature and every compile died with
-        // `Cannot select: intrinsic %llvm.aarch64.fjcvtzs`, while the same
-        // command worked on a physical Mac. Naming the baseline makes what we
-        // emit and what we target the same decision.
-        None if target_triple.is_none()
-            && (effective_target.starts_with("arm64")
-                || effective_target.starts_with("aarch64"))
-            && effective_target.contains("apple") =>
-        {
-            Some(arch_flag("apple-m1"))
-        }
-        None => target_triple
-            .is_none()
-            .then(|| native_tuning_arg_for_host().to_string()),
+        None => baseline_cpu_for_target(effective_target).map(arch_flag),
         Some("generic") | Some("off") | Some("none") | Some("0") | Some("false") => None,
         Some(cpu) => Some(arch_flag(cpu)),
     }
@@ -414,8 +411,7 @@ fn build_clang_compile_plan(
         .map(|s| s.to_string())
         .unwrap_or_else(crate::codegen::default_target_triple);
     let requested_cpu = std::env::var("PERRY_TARGET_CPU").ok();
-    let native_tuning_arg =
-        cpu_tuning_arg_for(requested_cpu.as_deref(), target_triple, &effective_target);
+    let native_tuning_arg = cpu_tuning_arg_for(requested_cpu.as_deref(), &effective_target);
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
     // Perry defaults to SIZE-optimized native output: `-Os` measured no runtime
@@ -1211,10 +1207,11 @@ fn compile_input_to_object_in_with_retention(
     // host default when target is None) makes clang trust the IR and
     // skips the override path.
     //
-    // CPU tuning rides the same plan: by default only host builds receive
-    // `-mcpu=native` / `-march=native`; `PERRY_TARGET_CPU` (from `--march` /
-    // perry.toml `[build]`) overrides that with an explicit baseline or
-    // disables tuning entirely. See `cpu_tuning_arg_for` (#6125).
+    // The CPU flag rides the same plan: by default every build gets its
+    // target triple's fixed baseline (`x86-64-v3` on x86-64, `apple-m1` on
+    // Apple aarch64), never the build machine's CPU; `PERRY_TARGET_CPU` (from
+    // `--march` / perry.toml `[build]`) picks another CPU, `native`, or none.
+    // See `cpu_tuning_arg_for` (#6125).
 
     log::debug!("perry-codegen: {:?}", cmd);
     let output = cmd.output().map_err(|error| {
@@ -1454,10 +1451,11 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let pid = std::process::id();
     let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    let mut cleanup = TempPathGuard::new(env::var_os("PERRY_LLVM_KEEP_IR").is_some());
+    let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
+    let mut cleanup = TempPathGuard::new(keep);
     let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(objs.len());
     for (i, bytes) in objs.iter().enumerate() {
-        let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
+        let p = tmp_dir.join(crate::debug_units::unit_object_name(nonce, i));
         cleanup.push(&p);
         fs::write(&p, bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
@@ -1505,6 +1503,10 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         }
     })?;
     let result = if out.status.success() {
+        #[cfg(not(target_os = "windows"))]
+        if keep_private_externs && !keep && crate::debug_units::retain(&obj_paths) {
+            cleanup.release(&obj_paths);
+        }
         fs::read(&combined)
             .with_context(|| format!("failed to read merged object {}", combined.display()))
     } else {
@@ -1521,8 +1523,8 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         ))
     };
 
-    // `cleanup` removes the objects and the merged output on every exit,
-    // including the early `?` returns above (#11495).
+    // `cleanup` removes the merged output on every exit, including the early
+    // `?` returns above (#11495), and the objects unless `retain` took them.
     result
 }
 

@@ -592,8 +592,30 @@ impl<'a> Gen<'a> {
         // The keys in the order construction defines them
         // (`perry_hir::private_names::construction_entries`): a private
         // field's entry is claimed at its declaration, so it holds the next
-        // slot like a public field's (#8969).
+        // slot like a public field's (#8969). A key the constructor stores
+        // that is no field of the class (a method or accessor name, an
+        // inherited field, a computed string key) goes where the constructor
+        // first stores it: before the first reservation stored after it, the
+        // order the class's layout lists it in (codegen `own_keys`).
+        let field_names: std::collections::BTreeSet<&str> = c
+            .fields
+            .iter()
+            .filter(|f| !f.is_private)
+            .map(|f| f.name.as_str())
+            .collect();
         for f in perry_hir::private_names::construction_entries([c.fields.as_slice()]) {
+            if let (Some(ph), perry_hir::ClassFieldOrigin::ConstructorStore, false) =
+                (phase.as_ref(), f.origin, f.is_private)
+            {
+                if let Some(at) = ph.assigned_order.iter().position(|k| *k == f.name) {
+                    for k in &ph.assigned_order[..at] {
+                        if !field_names.contains(k.as_str()) {
+                            let a = self.m.atom(k);
+                            push_unique(&mut keys, a);
+                        }
+                    }
+                }
+            }
             let a = if f.is_private {
                 let key = self.private_field_key(mi, c, &f.name);
                 self.m.private_atom(&key)

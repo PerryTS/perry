@@ -10,8 +10,8 @@
 //! readable: errored, or closed with queue and pending reads drained;
 //! writable: closed/errored with no write in flight; reader/writer:
 //! `releaseLock()` (an attached reader/writer also dies with its terminal
-//! stream); transform: its writable side reaching terminal; pipeTo lock ids
-//! (never registered anywhere): pipe completion. Retired ids sit in a FIFO
+//! stream; pipeTo's reader and writer at pipe completion); transform: its
+//! writable side reaching terminal. Retired ids sit in a FIFO
 //! quarantine with their registry entries INTACT, so a wrapper still held by
 //! user code keeps full post-terminal semantics (`locked`, `getReader()` on a
 //! closed stream, error values, promise getters). Only when the quarantine
@@ -31,11 +31,11 @@
 //! retire of a mid-eviction id is rejected, and `retire_*` entry checks run
 //! before the allocator lock is taken.
 
-use super::transform::TRANSFORM_PAIRS;
-use super::{
-    byob, expando, tee, ReadableState, WritableState, READABLE_STREAMS, READERS, STREAM_ALLOC_END,
-    STREAM_HANDLE_ID_START, TRANSFORM_STREAMS, WRITABLE_STREAMS, WRITERS,
+use super::state::{
+    evict, reader_rec, rs_rec, transform_of_writable, ts_exists, writer_rec, ws_rec, ReaderRef,
+    RsRef, WriterRef, WsRef,
 };
+use super::{ReadableState, WritableState, STREAM_ALLOC_END, STREAM_HANDLE_ID_START};
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -52,13 +52,6 @@ struct IdAlloc {
     /// Every id currently in `retired` or `free` — the double-retire /
     /// double-free guard. Ids leave on allocation.
     pooled: HashSet<usize>,
-    /// Live pipeTo lock ids. Pipe lock ids never own a registry entry, so the
-    /// allocator itself tracks their ownership: marked atomically at
-    /// allocation, unmarked exactly once at retire. A stale duplicate release
-    /// finds no mark and can never touch the id's next life (a registry-
-    /// absence probe instead would race the alloc→register window of a reused
-    /// id).
-    pipe_ids: HashSet<usize>,
 }
 
 // Keep the streams initializer out of globals merged with unrelated fetch state.
@@ -69,7 +62,6 @@ static IDALLOC: std::sync::LazyLock<Mutex<IdAlloc>> = std::sync::LazyLock::new(|
         free: VecDeque::new(),
         retired: VecDeque::new(),
         pooled: HashSet::new(),
-        pipe_ids: HashSet::new(),
     })
 });
 
@@ -125,7 +117,6 @@ fn alloc_locked(a: &mut IdAlloc) -> usize {
     if let Some(id) = a.free.pop_front() {
         a.pooled.remove(&id);
         // Free ids are never marked (the mark clears at retire) — defensive.
-        a.pipe_ids.remove(&id);
         return id;
     }
     if a.next >= STREAM_ALLOC_END {
@@ -145,15 +136,6 @@ fn alloc_locked(a: &mut IdAlloc) -> usize {
 /// called with registry locks held — takes only the allocator (leaf) lock.
 pub(super) fn next_stream_id() -> usize {
     alloc_locked(&mut IDALLOC.lock().unwrap())
-}
-
-/// Allocate a pipeTo lock id and mark its ownership in the same lock section,
-/// so retirement can key on the mark instead of probing registries.
-pub(super) fn next_pipe_lock_id() -> usize {
-    let mut a = IDALLOC.lock().unwrap();
-    let id = alloc_locked(&mut a);
-    a.pipe_ids.insert(id);
-    id
 }
 
 /// Under the allocator lock: pool `id` into quarantine. Returns the overflow
@@ -198,61 +180,7 @@ fn retire(id: usize) {
 /// ids answer like plain in-band numbers until they are reallocated; the GC
 /// scanners stop rooting their callbacks, chunks and promises.
 fn evict_ids(batch: &[usize]) {
-    {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = TRANSFORM_STREAMS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = READERS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = WRITERS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = TRANSFORM_PAIRS.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = super::transform::TRANSFORM_WRITE_RELEASES.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = super::transform::TRANSFORM_BACKPRESSURED_JOBS
-            .lock()
-            .unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    byob::evict_ids(batch);
-    tee::evict_ids(batch);
-    for &id in batch {
-        expando::stream_expando_clear(id);
-    }
+    evict(batch);
 }
 
 /// Retire a readable stream that reached a terminal state: errored, or closed
@@ -261,8 +189,7 @@ fn evict_ids(batch: &[usize]) {
 /// tee lock sentinel (`usize::MAX`) fails `retire`'s band guard.
 pub(super) fn retire_readable_terminal(stream_id: usize) {
     let reader = {
-        let g = READABLE_STREAMS.lock().unwrap();
-        match g.get(&stream_id) {
+        match rs_rec(RsRef(stream_id)).as_deref() {
             Some(s)
                 if s.tee_cancel_promise.is_none()
                     && match s.state {
@@ -278,10 +205,8 @@ pub(super) fn retire_readable_terminal(stream_id: usize) {
     };
     retire(stream_id);
     if let Some(reader_id) = reader {
-        let attached = READERS
-            .lock()
-            .unwrap()
-            .get(&reader_id)
+        let attached = reader_rec(ReaderRef(reader_id))
+            .as_deref()
             .map(|r| r.stream_handle == stream_id)
             .unwrap_or(false);
         if attached {
@@ -296,8 +221,7 @@ pub(super) fn retire_readable_terminal(stream_id: usize) {
 /// writable was (its readable side retires through its own terminal path).
 pub(super) fn retire_writable_terminal(stream_id: usize) {
     let writer = {
-        let g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref() {
             Some(s)
                 if matches!(s.state, WritableState::Closed | WritableState::Errored)
                     && !s.in_flight
@@ -310,24 +234,17 @@ pub(super) fn retire_writable_terminal(stream_id: usize) {
     };
     retire(stream_id);
     if let Some(writer_id) = writer {
-        let attached = WRITERS
-            .lock()
-            .unwrap()
-            .get(&writer_id)
+        let attached = writer_rec(WriterRef(writer_id))
+            .as_deref()
             .map(|w| w.stream_handle == stream_id)
             .unwrap_or(false);
         if attached {
             retire(writer_id);
         }
     }
-    let transform_id = TRANSFORM_PAIRS.lock().unwrap().get(&stream_id).copied();
-    if let Some(transform_id) = transform_id {
-        if TRANSFORM_STREAMS
-            .lock()
-            .unwrap()
-            .contains_key(&transform_id)
-        {
-            retire(transform_id);
+    if let Some(transform) = transform_of_writable(WsRef(stream_id)) {
+        if ts_exists(transform) {
+            retire(transform.0);
         }
     }
 }
@@ -336,10 +253,8 @@ pub(super) fn retire_writable_terminal(stream_id: usize) {
 /// return). Post-release calls already answer through the registry-miss arms
 /// (`read()` → TypeError, `closed` → resolved promise).
 pub(super) fn retire_reader_if_released(reader_id: usize) {
-    let released = READERS
-        .lock()
-        .unwrap()
-        .get(&reader_id)
+    let released = reader_rec(ReaderRef(reader_id))
+        .as_deref()
         .map(|r| !r.locked)
         .unwrap_or(false);
     if released {
@@ -349,10 +264,8 @@ pub(super) fn retire_reader_if_released(reader_id: usize) {
 
 /// Writer counterpart of [`retire_reader_if_released`].
 pub(super) fn retire_writer_if_released(writer_id: usize) {
-    let released = WRITERS
-        .lock()
-        .unwrap()
-        .get(&writer_id)
+    let released = writer_rec(WriterRef(writer_id))
+        .as_deref()
         .map(|w| !w.locked)
         .unwrap_or(false);
     if released {
@@ -360,22 +273,8 @@ pub(super) fn retire_writer_if_released(writer_id: usize) {
     }
 }
 
-/// Retire a pipeTo lock id. These ids are stamped into `reader_handle` /
-/// `writer_handle` as lock markers but never own a registry entry, so the
-/// terminal-state retires above can't see them. Retirement keys on the
-/// ownership mark set by [`next_pipe_lock_id`]: the mark clears exactly once,
-/// so a stale duplicate release is a no-op and can never retire the id's
-/// next life, however far allocation has moved on.
-pub(super) fn retire_pipe_lock_id(id: usize) {
-    if !(STREAM_HANDLE_ID_START..STREAM_ALLOC_END).contains(&id) {
-        return;
-    }
-    let evicted = {
-        let mut a = IDALLOC.lock().unwrap();
-        if !a.pipe_ids.remove(&id) {
-            return;
-        }
-        pool_retired(&mut a, id)
-    };
-    finish_eviction(evicted);
+/// Retire an id that owns no record: a failed pipeTo lock acquisition, or a
+/// released pipe reader/writer whose record `release_pipe_locks` removed.
+pub(super) fn retire_unused_id(id: usize) {
+    retire(id);
 }

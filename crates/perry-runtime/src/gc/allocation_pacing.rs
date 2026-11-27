@@ -83,7 +83,7 @@ pub(crate) fn note_allocation(bytes: usize, large: bool) {
 }
 
 pub(super) fn due(old_pressure: usize, burst_boundary: bool) -> bool {
-    due_arm(old_pressure, burst_boundary).is_some()
+    due_arm(|| old_pressure, burst_boundary).is_some()
 }
 
 /// Which arm of the byte-pacing policy asks for a full, if any.
@@ -96,14 +96,25 @@ pub(super) fn due(old_pressure: usize, burst_boundary: bool) -> bool {
 /// full (about 50 ms at 25 MB live) every few requests that freed almost
 /// nothing, because the volume of large births alone kept crossing the band
 /// even at the maximum backoff.
-fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
+///
+/// Every arm needs its debt term over its band, so the mature heap (an
+/// occupancy read and a walk of the malloc kind telemetry) is read only once
+/// some arm's debt term is: the same comparisons, the cheap ones first.
+fn due_arm(old_pressure: impl FnOnce() -> usize, burst_boundary: bool) -> Option<&'static str> {
     sample_arena();
     ACCOUNT.with(|account| {
         let debt = account.0.get();
         let large_band = LARGE_BAND_FLOOR.max(debt.live_after_full);
         let scale = 1usize << debt.backoff;
         let burst_scale = 1usize << debt.burst_backoff;
-        let mature = old_pressure.saturating_add(super::malloc::malloc_resident_bytes());
+        let pacing_owed = debt.published >= (128 * MIB).saturating_mul(scale);
+        let burst_owed = burst_boundary
+            && (debt.allocated >= large_band.saturating_mul(burst_scale)
+                || debt.burst >= large_band.saturating_mul(burst_scale));
+        if !pacing_owed && !burst_owed {
+            return None;
+        }
+        let mature = old_pressure().saturating_add(super::malloc::malloc_resident_bytes());
         if mature < 8 * MIB {
             return None;
         }
@@ -117,7 +128,7 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
         // live bytes. The absolute floors are unchanged. The multiplier is
         // read only once the floor is crossed (the band is never below it), so
         // a program that has not allocated that much pays nothing for it.
-        if debt.published >= (128 * MIB).saturating_mul(scale) {
+        if pacing_owed {
             let growth = super::policy::major_pacing_live_growth_multiplier();
             let band = (128 * MIB).max(debt.live_after_full.saturating_mul(2));
             let pacing_large_band =
@@ -225,7 +236,7 @@ pub(crate) fn burst_boundary() -> bool {
         super::policy::old_gen_reclaimable_pressure_bytes()
             .saturating_add(super::policy::external_side_live_bytes())
     };
-    let Some(arm) = due_arm(pressure(), true) else {
+    let Some(arm) = due_arm(pressure, true) else {
         return false;
     };
     // An unfinished non-moving minor blocks every precise safepoint. A
@@ -236,7 +247,7 @@ pub(crate) fn burst_boundary() -> bool {
     if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced()
     {
         super::policy::gc_drain_active_budgeted_cycle();
-        match due_arm(pressure(), true) {
+        match due_arm(pressure, true) {
             Some(again) => arm = again,
             None => return false,
         }

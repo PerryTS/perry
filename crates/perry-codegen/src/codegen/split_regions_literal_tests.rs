@@ -199,7 +199,7 @@ fn a_function_literal_passes_its_live_ins_by_value() {
     let x = build.params[0].id;
     let s = build.params[1].id;
     for call in calls {
-        let Expr::Call { args, .. } = call else {
+        let Expr::RegionCall { args, .. } = call else {
             unreachable!()
         };
         let live: Vec<u32> = args[1..]

@@ -1336,6 +1336,7 @@ mod tests {
 
     fn empty_closure_with_id(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params: vec![],
@@ -1737,6 +1738,7 @@ mod tests {
     /// anonymous IIFE and (by default) its inner `__perry_cjs_factory`.
     fn factory_closure(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params: vec![],

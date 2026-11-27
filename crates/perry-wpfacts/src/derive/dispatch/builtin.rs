@@ -509,6 +509,7 @@ mod tests {
             is_static: false,
             kind: perry_hir::ClassComputedMemberKind::Method,
             source_order: 1,
+            names_declaration: false,
         });
         let mut calls = 0;
         module(&hir, &mut |e| {

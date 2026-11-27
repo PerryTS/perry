@@ -466,6 +466,49 @@ fn a_hostname_connect_resolves_and_falls_through_to_a_reachable_family() {
     pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 2);
 }
 
+/// A close while the name resolves abandons the connect: the answer that
+/// arrives later must neither open a connection nor reach the binding.
+#[test]
+fn a_close_while_resolving_abandons_the_connect() {
+    let _fixture = Fixture::start();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let client = 4;
+    super::tcp_connect_host(
+        client,
+        SUBSYSTEM,
+        "localhost",
+        listener.local_addr().unwrap().port(),
+        false,
+    )
+    .expect("submit resolve+connect");
+    assert!(super::close(client).is_err(), "no handle exists yet");
+    assert!(
+        pump_until(|_| !super::loop_alive()),
+        "the loop must not stay alive for an abandoned connect: {:?}",
+        events()
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "the resolved address must never be connected"
+    );
+    assert!(events().iter().all(|e| e.id != client), "{:?}", events());
+    assert_eq!(super::live_handles(), 0);
+}
+
+/// Nor does a failed lookup of a closed connect report `ENOTFOUND`.
+#[test]
+fn a_close_while_resolving_drops_the_lookup_failure() {
+    let _fixture = Fixture::start();
+    let client = 5;
+    super::tcp_connect_host(client, SUBSYSTEM, "perry-turnloop-p1.invalid", 80, false)
+        .expect("submit resolve");
+    assert!(super::close(client).is_err(), "no handle exists yet");
+    assert!(pump_until(|_| !super::loop_alive()), "{:?}", events());
+    assert!(events().iter().all(|e| e.id != client), "{:?}", events());
+}
+
 #[test]
 fn an_unresolvable_hostname_reports_enotfound_on_getaddrinfo() {
     let _fixture = Fixture::start();
@@ -930,9 +973,7 @@ fn writes_between_connect_attempts_reach_the_attempt_that_succeeds() {
                 subsystem: SUBSYSTEM,
                 nodelay: true,
                 remaining: [dead, live].into_iter().collect(),
-                retrying: false,
-                last_error: None,
-                op: None,
+                ..ConnectPlan::default()
             },
         )
     });

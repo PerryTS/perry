@@ -105,22 +105,6 @@ pub(super) fn try_listen_on_turnloop(server_handle: i64, host: &str, port: u16) 
     }
 }
 
-/// `server.close()` on a turnloop HTTP/2 listener: stop accepting. Live
-/// sessions finish, which is Node's contract.
-pub(super) fn close_turnloop_listener(server_handle: i64) -> bool {
-    let id = match get_handle_mut::<Http2SecureServer>(server_handle) {
-        Some(server)
-            if perry_ext_net::native_transport::server_link(server.base.transport_listener)
-                .is_ok() =>
-        {
-            server.base.transport_listener
-        }
-        _ => return false,
-    };
-    crate::server::turnloop_h2::close_listener(id);
-    true
-}
-
 /// `options.settings` and `options.allowHTTP1` on `createServer` /
 /// `createSecureServer`, read once at construction because the options object
 /// is not kept until `listen()`.

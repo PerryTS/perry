@@ -1050,7 +1050,18 @@ pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut St
     if !(*error).stack.is_null() {
         return (*error).stack;
     }
-    let name = read_string_header_owned((*error).name);
+    // Reading the code allocates, and `error` is a bare pointer: root it
+    // first and re-read it after every allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+    let current =
+        || crate::value::js_nanbox_get_pointer(error_handle.get_nanbox_f64()) as *mut ErrorHeader;
+    let code = crate::node_submodules::error_code_for_error(error);
+    let error = current();
+    let mut name = read_string_header_owned((*error).name);
+    if let Some(code) = code {
+        name = format!("{name} [{code}]");
+    }
     let message = read_string_header_owned((*error).message);
     let head = if name.is_empty() {
         message
@@ -1067,15 +1078,9 @@ pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut St
     let payload = read_string_header_owned((*error).frames);
     let text = join_stack(&head, &frames_payload_to_lines(payload.as_bytes()));
 
-    // The string birth can collect, and `error` is a bare pointer: root it
-    // across the allocation and re-read it afterwards, or a moving scavenge
-    // leaves the memoising store writing into from-space.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
     let stack_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let stack_handle = scope.root_string_ptr(stack_ptr);
-    let error =
-        crate::value::js_nanbox_get_pointer(error_handle.get_nanbox_f64()) as *mut ErrorHeader;
+    let error = current();
     stack_handle.with_mut_ptr::<StringHeader, _>(|stack_ptr| {
         crate::gc::runtime_store_gc_heap_word_slot(
             error as usize,

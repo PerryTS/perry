@@ -1879,8 +1879,8 @@ pub(crate) fn _force_link_helpers(v: f64) -> bool {
 #[path = "response_turnloop.rs"]
 mod turnloop_shape;
 pub(crate) use turnloop_shape::{
-    alloc_http1_server_response_for_turnloop, alloc_server_response_for_turnloop, req_handle_of,
-    stream_receiver_gone,
+    alloc_http1_server_response_for_turnloop, alloc_server_response_for_turnloop,
+    exchange_response, req_handle_of, stream_receiver_gone,
 };
 
 #[cfg(test)]

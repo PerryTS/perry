@@ -99,7 +99,7 @@ impl CopyingMinorPhaseDiag {
         let mut out = String::new();
         write!(
             out,
-            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/stores:{}/{}+errors:{}/{}+lazytape:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
+            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/stores:{}/{}+lazytape:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
             self.root_scan_ns / 1000,
             scan_us,
             self.copy_evacuation_ns / 1000,
@@ -116,8 +116,6 @@ impl CopyingMinorPhaseDiag {
             self.from_space_finalization_ns / 1000,
             finalization.stores_ns / 1000,
             finalization.stores,
-            finalization.errors_ns / 1000,
-            finalization.errors,
             finalization.lazy_tape_ns / 1000,
             finalization.lazy_tapes,
             self.forwarding_fixups_ns / 1000,
@@ -133,8 +131,6 @@ impl CopyingMinorPhaseDiag {
 #[derive(Default)]
 pub(super) struct CopiedMinorFinalizationDiag {
     pub(super) total_ns: u64,
-    pub(super) errors_ns: u64,
-    pub(super) errors: usize,
     pub(super) dead_owner_ns: u64,
     pub(super) dead_owner_detail: String,
     pub(super) lazy_tapes: usize,
@@ -155,11 +151,6 @@ pub(super) fn finalize_dead_copied_minor_from_space_side_allocations<const DIAGN
     let start = diag.then(Instant::now);
     out.stores = crate::arena::finalize_dead_copied_minor_from_space_owned_stores();
     out.stores_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
-
-    let start = diag.then(Instant::now);
-    out.errors =
-        crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
-    out.errors_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
 
     let start = diag.then(Instant::now);
     out.lazy_tapes = crate::json_tape_store::finalize_dead_copied_minor_from_space_lazy_tapes();
