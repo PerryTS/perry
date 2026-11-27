@@ -387,6 +387,7 @@ pub(super) fn install_views(ctx: &mut FnCtx<'_>, admission: &Admission) -> Insta
                 native_owned: None,
                 pointer_state: BufferViewPointerState::Stable,
                 storage_inline_proven: true,
+                inline_until_exposed: false,
                 // The admitted body is call-free and the length lives in
                 // `length_slot`, read once per admission.
                 length_fixed: false,
