@@ -215,13 +215,7 @@ unsafe extern "C" fn socket_closed(closure: *const RawClosureHeader, _: JsThis) 
     let listeners = match perry_ffi::get_handle_mut::<Http2SessionHandle>(session) {
         Some(handle) => {
             handle.mark_destroyed();
-            // `close(cb)` callbacks are Node's `once('close', cb)`: they run
-            // in registration order and are removed before they run.
-            let once = std::mem::take(&mut handle.close_callbacks);
-            let listeners = handle.listeners.entry("close".into()).or_default();
-            let snapshot = listeners.clone();
-            listeners.retain(|listener| !once.contains(listener));
-            snapshot
+            handle.take_close_listeners()
         }
         None => return undefined(),
     };
