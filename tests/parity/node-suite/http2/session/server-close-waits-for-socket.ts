@@ -1,7 +1,8 @@
 import * as http2 from "node:http2";
 
 // A server session's graceful close() emits 'close' once its socket has
-// closed, not from the call: a check-phase callback runs first.
+// closed, not from the call: a check-phase callback runs first. Its callback
+// is a 'close' listener, in registration order.
 const server = http2.createServer();
 const opened = new Promise<http2.ServerHttp2Session>((resolve) => {
   server.on("session", resolve);
@@ -18,6 +19,7 @@ const closed = new Promise<void>((resolve) => {
     resolve();
   });
 });
+session.on("close", () => console.log("listener added after close()"));
 console.log("after close()", session.closed, session.destroyed);
 setImmediate(() => console.log("immediate"));
 await closed;

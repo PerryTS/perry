@@ -103,7 +103,14 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             }
             session.closed = true;
             if callback != 0 {
+                // A `'close'` listener, in registration order;
+                // `close_callbacks` marks it one-shot.
                 session.close_callbacks.push(callback);
+                session
+                    .listeners
+                    .entry("close".into())
+                    .or_default()
+                    .push(callback);
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
             // transport ends once every live stream has finished.
