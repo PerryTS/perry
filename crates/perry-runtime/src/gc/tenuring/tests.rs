@@ -148,24 +148,24 @@ fn census_carries_forward_across_a_cycle_that_moved_nothing() {
     // base, and the object denomination scales that.
     let base = nursery_cap_floor_bytes();
     assert_eq!(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         base,
         "unmeasured process must pace exactly as the pre-#7929 collector did"
     );
 
     note_surviving_object_census(56 * 1000, 1000);
-    let after_measurement = influx_driven_nursery_cap_bytes();
+    let after_measurement = ladder_nursery_cap_bytes();
     assert_eq!(after_measurement, base * 777 / 1000);
 
     note_surviving_object_census(0, 0);
     note_surviving_object_census(4096, 0);
     assert_eq!(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         after_measurement,
         "a cycle with no moved objects is a missing measurement, not a zero one"
     );
     reset_for_test();
-    assert_eq!(influx_driven_nursery_cap_bytes(), base);
+    assert_eq!(ladder_nursery_cap_bytes(), base);
 }
 
 /// #8122: the allocation census seeds the mean ONCE, only past half the
@@ -220,7 +220,7 @@ fn only_the_constant_band_is_re_denominated() {
     note_surviving_object_census(56 * 1000, 1000);
     let tenured = 512 * MB;
     assert_eq!(
-        scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes(), tenured),
+        scavenge_nursery_cap_from(ladder_nursery_cap_bytes(), tenured),
         tenured / TENURED_EDEN_DIVISOR,
         "the proportional arm must reach the max() unscaled"
     );
@@ -1247,10 +1247,368 @@ fn effective_nursery_cap_is_the_two_term_policy() {
     // that the #7377 floor survives whatever old-gen happens to be.
     reset_for_test();
     let expected = scavenge_nursery_cap_from(
-        influx_driven_nursery_cap_bytes(),
+        ladder_nursery_cap_bytes(),
         old_gen_reclaimable_pressure_bytes(),
     );
     assert_eq!(scavenge_nursery_cap_effective_bytes(), expected);
     assert!(scavenge_nursery_cap_effective_bytes() >= nursery_cap_floor_bytes() / 2);
     reset_for_test();
+}
+
+fn fixed_cost_scale() -> u8 {
+    FIXED_COST_SCALE.with(TriggerInput::get)
+}
+
+/// One fixed-cost reading at the current effective cap: `fixed_permille` of
+/// the mutator time that filled it. The mutator runs 1 us per Eden byte, so
+/// the window's time scales with the cap and a minor's fixed cost is many
+/// times the first touch of a doubling's pages (the price is paid at once).
+fn fixed_cost_reading(fixed_permille: u64) {
+    let cap = scavenge_nursery_cap_effective_bytes();
+    let mutator_ns = cap as u64 * 1000;
+    let fixed_ns = mutator_ns * fixed_permille / 1000;
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
+}
+
+/// One reading at the current effective cap with explicit times.
+fn fixed_cost_reading_ns(fixed_ns: u64, mutator_ns: u64) {
+    let cap = scavenge_nursery_cap_effective_bytes();
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
+}
+
+/// F4: a minor whose fixed cost is 4% of the mutator time that filled its
+/// Eden doubles Eden, where the same reading predicts 2%; one reading alone
+/// moves nothing.
+#[test]
+fn a_fixed_cost_above_two_percent_grows_the_floor_after_two_readings() {
+    reset_for_test();
+    let floor_cap = scavenge_nursery_cap_effective_bytes();
+    fixed_cost_reading(40);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN,
+        "one reading moves nothing"
+    );
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), floor_cap * 2);
+    // At the new size the same minor is 2% of the mutator time: inside the
+    // band, it holds.
+    fixed_cost_reading(20);
+    fixed_cost_reading(20);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    reset_for_test();
+}
+
+/// One slow minor between ordinary ones is not a level.
+#[test]
+fn one_heavy_fixed_cost_reading_moves_nothing() {
+    reset_for_test();
+    for _ in 0..4 {
+        fixed_cost_reading(5);
+        fixed_cost_reading(300);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    reset_for_test();
+}
+
+/// A truly fixed cost halves with every doubling: the floor grows one
+/// doubling per move, each step checked by the second reading at the new
+/// size, and stops at the first size where the share is at the edge.
+#[test]
+fn the_fixed_cost_floor_grows_one_checked_doubling_at_a_time() {
+    reset_for_test();
+    // 16% at the floor is 2% three doublings up.
+    fixed_cost_reading(160);
+    fixed_cost_reading(160);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2, "one step");
+    for scale in [2, 4] {
+        // The first window at the new size is not a reading of it, the
+        // second checks the step, the third (with the second) moves on.
+        let permille = 160 / scale as u64;
+        fixed_cost_reading(permille);
+        fixed_cost_reading(permille);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * scale);
+        fixed_cost_reading(permille);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * scale * 2);
+    }
+    for _ in 0..4 {
+        fixed_cost_reading(20);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 8, "2% holds");
+    // It never passes the ladder's ceiling.
+    fixed_cost_reading(1000);
+    fixed_cost_reading(1000);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MAX);
+    for _ in 0..4 {
+        fixed_cost_reading(500);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MAX);
+    reset_for_test();
+}
+
+/// A cost that grows with Eden is not bought down by a larger one: the step
+/// whose share does not fall is taken back, and the floor stays there until
+/// the share at that size doubles.
+#[test]
+fn a_fixed_cost_step_that_buys_nothing_is_taken_back_and_held() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(40);
+        fixed_cost_reading(70);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "held");
+    fixed_cost_reading(80);
+    fixed_cost_reading(80);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 2,
+        "a doubled share grows again"
+    );
+    reset_for_test();
+}
+
+/// The floor gives the memory back once the fixed cost is small: a reading
+/// at or below 1% at the smaller size, twice.
+#[test]
+fn a_small_fixed_cost_shrinks_the_floor_back() {
+    reset_for_test();
+    fixed_cost_reading(80);
+    fixed_cost_reading(80);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    fixed_cost_reading(20);
+    fixed_cost_reading(20);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    // 0.8% at 4x is 1.6% at 2x and 3.2% at 1x: it only shrinks to where 1%
+    // still holds, which is 4x itself. No move.
+    fixed_cost_reading(8);
+    fixed_cost_reading(8);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    // 0.1% at 4x is 0.4% at the floor.
+    fixed_cost_reading(1);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 4,
+        "one reading moves nothing"
+    );
+    fixed_cost_reading(1);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    reset_for_test();
+}
+
+/// The effective cap is the larger of the two dials, and the fixed-cost
+/// floor is priced against the Eden the reading was measured at.
+#[test]
+fn the_fixed_cost_floor_composes_with_the_influx_scale() {
+    reset_for_test();
+    NURSERY_CAP_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN * 8));
+    let cap8 = scavenge_nursery_cap_effective_bytes();
+    // 1.5% at 8x: inside the band, nothing to do.
+    fixed_cost_reading(15);
+    fixed_cost_reading(15);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap8);
+    // 4% at 8x: one step above the influx scale.
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 16);
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap8 * 2);
+    reset_for_test();
+}
+
+/// NXGC7: a doubling costs the first touch of the pages it adds. A short
+/// program with cheap minors (0.1 ns of mutator per Eden byte, a 4% fixed
+/// share) grows only once the fixed cost the doubling would have saved, over
+/// its readings at this size, adds up to that price.
+#[test]
+fn the_fixed_cost_floor_grows_only_once_the_saved_minors_pay_the_first_touch() {
+    reset_for_test();
+    let cap = scavenge_nursery_cap_effective_bytes();
+    let mutator_ns = cap as u64 / 10;
+    let fixed_ns = (mutator_ns * 4 / 100) & !1;
+    // The doubling adds `cap` bytes and would save half of every fixed cost.
+    let price_ns = first_touch_price_ns(cap);
+    let readings = price_ns.div_ceil(fixed_ns / 2);
+    assert!(
+        readings > 2,
+        "the price must outweigh the debounce: {readings}"
+    );
+    for _ in 1..readings {
+        fixed_cost_reading_ns(fixed_ns, mutator_ns);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "not paid yet");
+    fixed_cost_reading_ns(fixed_ns, mutator_ns);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2, "paid");
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap * 2);
+    reset_for_test();
+}
+
+/// A step whose fixed share halves but whose window costs more thread CPU per
+/// Eden byte (the larger Eden made the mutator dearer) saved less than it
+/// cost: taken back and held like a step that bought nothing.
+#[test]
+fn a_fixed_cost_step_whose_total_cpu_does_not_fall_is_taken_back() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    let cap2 = scavenge_nursery_cap_effective_bytes();
+    // The first window pays the first touch; not a reading of the size.
+    fixed_cost_reading_ns(cap2 as u64 * 4000, cap2 as u64 * 2000);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    // 2% of a mutator 10% slower per byte: 1100 * 1.02 > 1000 * 1.04.
+    let mutator_ns = cap2 as u64 * 1100;
+    fixed_cost_reading_ns(mutator_ns * 2 / 100, mutator_ns);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(40);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "held");
+    reset_for_test();
+}
+
+/// One reading with an Eden of `cap` bytes (the minor's own entry cap, not
+/// the ladder's): a fixed share of `share_ppm` of a mutator running 1 us per
+/// Eden byte.
+fn fixed_cost_reading_at(share_ppm: u64, cap: usize) {
+    let mutator_ns = cap as u64 * 1000;
+    let fixed_ns = mutator_ns * share_ppm / 1_000_000;
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
+}
+
+/// The step check scales with the cap the step actually bought: from B to A
+/// bytes a fixed share falls to B/A, and the step bought nothing above the
+/// midpoint `(A + B) / 2A`. A doubling keeps F4's three quarters.
+#[test]
+fn the_step_check_is_the_midpoint_of_the_fall_the_cap_ratio_buys() {
+    let step = FixedCostStep {
+        floor: NURSERY_CAP_SCALE_MIN,
+        share_ppm: 40_000,
+        cap_bytes: 3 << 20,
+        total_per_mib: 0,
+    };
+    assert!(
+        !step.bought_nothing(30_000, 6 << 20),
+        "doubling: 3/4 is kept"
+    );
+    assert!(
+        step.bought_nothing(30_001, 6 << 20),
+        "doubling: above 3/4 is not"
+    );
+    // +33%: the midpoint is 7/8 of the share.
+    assert!(!step.bought_nothing(35_000, 4 << 20));
+    assert!(step.bought_nothing(35_001, 4 << 20));
+}
+
+/// A step the ladder cut short (+33%, as the old-gen term cut low's 4.19 MB
+/// to 5.58 MB) whose share fell by a fifth paid off and is kept, though a
+/// fixed three quarters would take it back; one whose share fell by a
+/// twentieth bought nothing and is taken back.
+#[test]
+fn a_short_fixed_cost_step_is_judged_by_its_own_cap_ratio() {
+    for (share_after_ppm, kept) in [(32_000, true), (38_000, false)] {
+        reset_for_test();
+        let cap = scavenge_nursery_cap_effective_bytes();
+        fixed_cost_reading_at(40_000, cap);
+        fixed_cost_reading_at(40_000, cap);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+        let short = cap / 3 * 4;
+        // The first window pays the first touch; not a reading of the size.
+        fixed_cost_reading_at(share_after_ppm, short);
+        fixed_cost_reading_at(share_after_ppm, short);
+        let expected = if kept {
+            NURSERY_CAP_SCALE_MIN * 2
+        } else {
+            NURSERY_CAP_SCALE_MIN
+        };
+        assert_eq!(
+            fixed_cost_scale(),
+            expected,
+            "share after {share_after_ppm} ppm"
+        );
+    }
+    reset_for_test();
+}
+
+/// One slow minor at the held size does not release the hold of a step that
+/// bought nothing; two readings in a row at twice the held share do.
+#[test]
+fn a_single_outlier_does_not_release_the_fixed_cost_hold() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(80);
+        fixed_cost_reading(40);
+    }
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN,
+        "one outlier at a time holds"
+    );
+    fixed_cost_reading(80);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    fixed_cost_reading(80);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 2,
+        "two doubled readings in a row release it"
+    );
+    reset_for_test();
+}
+
+/// NXGC9: the idle Eden pages a minor advises back to the kernel after a
+/// take-back (a 2 MiB THP block: ~150-180 us beside ~65 us of minor) are the
+/// price of the shrink, not fixed cost; nor is a pooled block's later advice
+/// mutator time.
+#[test]
+fn page_returns_are_neither_fixed_cost_nor_mutator_time() {
+    let minor = FixedCostClock {
+        last_end_ns: Some(1_000_000),
+        begin_ns: Some(1_400_000),
+        drain_ns: 5_000,
+        returned_ns: 0,
+    };
+    // The discard right after the begin took 160 us; the minor ends 225 us in.
+    let returned = minor.page_returned(1_560_000);
+    assert_eq!(
+        returned.reading(1_625_000),
+        Some((60_000, 225_000, 400_000))
+    );
+    // Without the page return the same minor reads 220 us of fixed cost.
+    assert_eq!(minor.reading(1_625_000), Some((220_000, 225_000, 400_000)));
+    // No minor in progress: nothing to charge.
+    assert_eq!(
+        FixedCostClock::START.page_returned(9),
+        FixedCostClock::START
+    );
+    // A pooled block's advice after the reading closed at 1_625_000 ran until
+    // 1_790_000; the next minor begins at 2_000_000: 210 us of mutator.
+    let closed = FixedCostClock {
+        last_end_ns: Some(1_625_000),
+        ..FixedCostClock::START
+    };
+    let next = FixedCostClock {
+        begin_ns: Some(2_000_000),
+        ..closed.mutator_restarted(1_790_000)
+    };
+    assert_eq!(next.reading(2_050_000), Some((50_000, 50_000, 210_000)));
+    assert_eq!(
+        FixedCostClock::START.mutator_restarted(9),
+        FixedCostClock::START
+    );
 }

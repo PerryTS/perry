@@ -90,7 +90,7 @@ unsafe fn moving_array_like(scope: &RuntimeHandleScope) -> f64 {
 unsafe fn string_text(value: f64) -> String {
     let header = addr_of(value) as *const crate::StringHeader;
     let len = (*header).byte_len as usize;
-    let bytes = (header as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let bytes = crate::string::string_data(header);
     String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len)).into_owned()
 }
 

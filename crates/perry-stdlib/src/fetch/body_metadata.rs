@@ -414,7 +414,7 @@ pub extern "C" fn js_response_static_error() -> f64 {
             type_name: "error".to_string(),
             url: String::new(),
             redirected: false,
-            cached_headers_id: None,
+            cached_headers: 0,
             cached_body_stream: None,
             body_stream: None,
         },

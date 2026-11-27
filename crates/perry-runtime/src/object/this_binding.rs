@@ -191,10 +191,11 @@ pub unsafe extern "C" fn js_static_this_resolve_class(class_id: i32, slot: *mut 
 }
 
 /// OrdinaryCallBindThis for a non-strict body: `undefined`/`null` become
-/// `globalThis`, a boolean/string/number/BigInt its wrapper object; objects and
-/// class refs are unchanged. Emitted at the entry of a sloppy body that reads
-/// its receiver (the `this` parameter, `perry_abi::JS_BODY_THIS_PARAM`) —
-/// only on the non-object path. Can allocate: a GC safepoint.
+/// `globalThis`, a boolean/string/number/BigInt/Symbol its wrapper object;
+/// objects and class refs are unchanged. Emitted at the entry of a sloppy body
+/// that reads its receiver (the `this` parameter,
+/// `perry_abi::JS_BODY_THIS_PARAM`) — skipped for an ordinary object. Can
+/// allocate: a GC safepoint.
 #[no_mangle]
 pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
@@ -209,6 +210,9 @@ pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
     }
     if jv.is_bigint() {
         return crate::builtins::js_boxed_bigint_new(value);
+    }
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return crate::builtins::js_boxed_symbol_new(value);
     }
     // #5515: a class reference is an INT32-tagged class id, but it is
     // conceptually the class constructor OBJECT, not a primitive number.
@@ -608,4 +612,22 @@ static KEEP_JS_STATIC_METHOD_ENTRY_LEAVE: extern "C" fn() = js_static_method_ent
 pub extern "C" fn js_static_method_entry_leave() {
     static_private_owner_pop();
     static_this_disarm();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sloppy_coercion_wraps_a_symbol_and_keeps_an_object() {
+        let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+        let wrapped = super::js_this_coerce_sloppy(symbol);
+        assert_eq!(unsafe { crate::symbol::js_is_symbol(wrapped) }, 0);
+        let (_, payload) = crate::builtins::boxed_primitive_payload(wrapped)
+            .expect("a sloppy Symbol receiver becomes its wrapper object");
+        assert_eq!(payload.to_bits(), symbol.to_bits());
+
+        assert_eq!(
+            super::js_this_coerce_sloppy(wrapped).to_bits(),
+            wrapped.to_bits()
+        );
+    }
 }

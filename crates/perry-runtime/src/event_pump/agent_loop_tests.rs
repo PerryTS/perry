@@ -1212,6 +1212,30 @@ fn staged_completions_are_dispatched_by_a_loop_that_is_not_alive() {
     .unwrap();
 }
 
+/// A due deadline on a loop nothing keeps alive (every deadline is unref'd) is
+/// still work: the fast turn a due deadline takes must deliver it, or the loop
+/// reports the same past deadline on every iteration.
+#[test]
+fn a_fast_turn_delivers_a_due_deadline_on_a_loop_that_is_not_alive() {
+    let _g = serial();
+    std::thread::spawn(|| {
+        install_unrouted();
+        let at = Instant::now() + Duration::from_millis(1);
+        arm_timer(Some(at));
+        while Instant::now() <= at {
+            std::thread::yield_now();
+        }
+        assert!(!AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().driver.alive()));
+        assert_eq!(loop_deadline(), Some(at), "the subject was never armed");
+        fast_turn();
+        assert_eq!(stats().timer_expiries, 1, "the due deadline was not turned");
+        assert_eq!(loop_deadline(), None, "the due deadline is still reported");
+        shutdown_current_thread();
+    })
+    .join()
+    .unwrap();
+}
+
 /// The close-phase turn retires the JS-timer expiry it reads instead of
 /// leaving it staged behind the timer arming that follows the check phase.
 #[test]

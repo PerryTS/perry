@@ -281,7 +281,7 @@ fn response_head(link: usize, response: &ResponseOut) {
             .into(),
             url: response.final_url.clone(),
             redirected: response.redirected,
-            cached_headers_id: None,
+            cached_headers: 0,
             cached_body_stream: response.body_present.then_some(stream),
             body_stream: response.body_present.then_some(stream),
         },

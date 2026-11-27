@@ -271,7 +271,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
         fn js_write_barrier_root_nanbox(value_bits: u64);
     }
 
-    // Register before allocating — see `headers_bound_method_value`.
+    // Register before allocating: the collection that allocation can run
+    // scans the cache.
     super::gc::ensure_gc_registered();
     let closure =
         perry_runtime::closure::js_closure_alloc(&perry_runtime::closure::BOUND_METHOD_INFO, 3);
@@ -292,7 +293,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
 
 /// `instanceof` kind-probe for fetch handles (registered with the runtime at
 /// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
-/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob, 5 = File, 6 = FormData.
+/// 1 = Response, 2 = Request, 4 = Blob, 5 = File, 6 = FormData (3 was the
+/// Headers handle; a Headers is an ordinary object now).
 /// Lets `x instanceof Response` (etc.) resolve for the pointer-tagged
 /// small-integer handles these types use instead of heap objects. #10555
 /// additionally reuses this for `Object.prototype.toString` /
@@ -307,9 +309,6 @@ pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     }
     if REQUEST_REGISTRY.lock().unwrap().contains_key(&id) {
         return 2;
-    }
-    if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
-        return 3;
     }
     if let Some(blob) = BLOB_REGISTRY.lock().unwrap().get(&id) {
         return if blob.file_name.is_some() { 5 } else { 4 };
@@ -564,36 +563,6 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
     Some(f64::from_bits(JSValue::string_ptr(p).bits()))
 }
 
-/// Try to read a property off a Headers handle by registry id.
-/// Headers exposes prototype methods as function-valued properties, so method
-/// feature checks such as `typeof headers.getSetCookie === "function"` work
-/// while call sites still route through `HANDLE_METHOD_DISPATCH`.
-#[doc(hidden)]
-pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
-    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
-    {
-        let guard = HEADERS_REGISTRY.lock().unwrap();
-        guard.get(&headers_id)?;
-    }
-    let method_name: &'static str = match prop {
-        "append" => "append",
-        "delete" => "delete",
-        // WHATWG aliases `Headers.prototype[Symbol.iterator]` to `entries`.
-        // The property value must be identical to `headers.entries`, so both
-        // names return the same cached bound-method closure.
-        "entries" | "Symbol.iterator" | "@@iterator" => "entries",
-        "forEach" => "forEach",
-        "get" => "get",
-        "getSetCookie" => "getSetCookie",
-        "has" => "has",
-        "keys" => "keys",
-        "set" => "set",
-        "values" => "values",
-        _ => return None,
-    };
-    Some(headers_bound_method_value(headers_id, method_name))
-}
-
 /// Try to read a property off a FormData handle by registry id. FormData
 /// exposes prototype methods as function-valued properties, so any-typed
 /// feature checks such as `typeof form.append === "function"` work.
@@ -755,62 +724,6 @@ pub fn dispatch_blob_method(blob_id: usize, method: &str, args: &[f64]) -> Optio
                 let end = args.get(1).copied().unwrap_or(f64::NAN);
                 Some(js_blob_slice(blob_f64, start, end, std::ptr::null()))
             }
-            _ => None,
-        }
-    }
-}
-
-/// Try to dispatch a method call on a Headers handle. Returns `None` for
-/// unknown ids or methods.
-#[doc(hidden)]
-pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) -> Option<f64> {
-    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
-    {
-        let guard = HEADERS_REGISTRY.lock().unwrap();
-        guard.get(&headers_id)?;
-    }
-    let h_f64 = handle_to_f64(headers_id);
-    // String args can arrive as heap strings or SSO/short-string values; use
-    // the runtime's unified coercion helper before passing a StringHeader to
-    // the FFI helpers.
-    let str_arg = |i: usize| -> *const StringHeader {
-        if i < args.len() {
-            js_get_string_pointer_unified(args[i]) as *const StringHeader
-        } else {
-            std::ptr::null()
-        }
-    };
-    unsafe {
-        match method {
-            // WHATWG `Headers.get` returns `null` for an absent header, not the
-            // empty string. `js_headers_get` signals absence with a null
-            // `StringHeader` pointer; wrapping that in `string_ptr` would render
-            // as `""` and break `headers.get(x) === null` checks (the Hono
-            // adapter path behind #4004).
-            "get" => {
-                let p = js_headers_get(h_f64, str_arg(0));
-                if p.is_null() {
-                    Some(f64::from_bits(TAG_NULL))
-                } else {
-                    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
-                }
-            }
-            "set" => Some(js_headers_set(h_f64, str_arg(0), str_arg(1))),
-            "append" => Some(js_headers_append(h_f64, str_arg(0), str_arg(1))),
-            "has" => Some(js_headers_has(h_f64, str_arg(0))),
-            "delete" => Some(js_headers_delete(h_f64, str_arg(0))),
-            "getSetCookie" => Some(js_headers_get_set_cookie(h_f64)),
-            "forEach" => {
-                let cb = args.first().copied().unwrap_or(f64::NAN);
-                Some(js_headers_for_each(h_f64, cb))
-            }
-            // The iterator helpers each return a (sorted) JS array, which is
-            // itself iterable — `for (const [k,v] of req.headers.entries())`
-            // and `[...req.headers.keys()]` both work off the untyped path
-            // Hono's type-stripped JS takes (#1649).
-            "keys" => Some(js_headers_keys(h_f64)),
-            "values" => Some(js_headers_values(h_f64)),
-            "entries" | "Symbol.iterator" | "@@iterator" => Some(js_headers_entries(h_f64)),
             _ => None,
         }
     }

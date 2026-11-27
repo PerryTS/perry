@@ -462,7 +462,6 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 let builtin = match unsafe { probe(raw_addr as usize) } {
                     1 => Some("Response"),
                     2 => Some("Request"),
-                    3 => Some("Headers"),
                     4 => Some("Blob"),
                     5 => Some("File"),
                     6 => Some("FormData"),

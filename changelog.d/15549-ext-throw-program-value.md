@@ -1,0 +1,1 @@
+Extensions can throw a value the program handed over unchanged with `perry_ffi::throw_program_value`, backed by the runtime's new `js_throw_program_value` entry. `http.Server#emit('error', err)` with no listener now throws `err` through it instead of naming the compiled-code `js_throw` entry.

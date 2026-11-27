@@ -1512,6 +1512,7 @@ js_ext_zlib_subclass_init	f64	ptr,usize,f64,f64
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize
+js_fetch_headers_prototype	ptr	
 js_fetch_headers_to_json	i64	f64
 js_fetch_input_ptr	i64	f64
 js_fetch_notify_signal_aborted	void	i64
@@ -1803,20 +1804,19 @@ js_handle_property_set_dispatch	void	i64,ptr,usize,f64
 js_handle_prototype_dispatch	f64	i64
 js_has_exception	i32s	
 js_has_path_module	f64	f64
-js_headers_append	f64	f64,ptr,ptr
-js_headers_delete	f64	f64,ptr
+js_headers_append	f64	f64,f64,f64
+js_headers_delete	f64	f64,f64
 js_headers_entries	f64	f64
 js_headers_fetch_object_json	ptr	f64
 js_headers_for_each	f64	f64,f64
 js_headers_from_value	f64	f64
-js_headers_get	ptr	f64,ptr
+js_headers_get	f64	f64,f64
 js_headers_get_set_cookie	f64	f64
-js_headers_has	f64	f64,ptr
+js_headers_has	f64	f64,f64
 js_headers_init_from_value	f64	f64,f64
 js_headers_keys	f64	f64
-js_headers_method_value	f64	f64,ptr,usize
 js_headers_new	f64	
-js_headers_set	f64	f64,ptr,ptr
+js_headers_set	f64	f64,f64,f64
 js_headers_setheaders_entries_json	ptr	f64
 js_headers_values	f64	f64
 js_http_agent_create_connection	i64	i64
@@ -3504,6 +3504,7 @@ js_reflect_get_prototype_of	f64	f64
 js_reflect_has	f64	f64,f64
 js_reflect_has_metadata	f64	f64,f64,f64
 js_reflect_has_own_metadata	f64	f64,f64,f64
+js_reflect_install_metadata	f64	f64
 js_reflect_is_extensible	f64	f64
 js_reflect_own_keys	f64	f64
 js_reflect_prevent_extensions	f64	f64
@@ -3573,6 +3574,7 @@ js_register_global_fetch_notify_abort	void	ptr
 js_register_global_fetch_with_options	void	ptr
 js_register_global_headers_entries_json	void	ptr
 js_register_global_headers_object_json	void	ptr
+js_register_global_headers_prototype	void	ptr
 js_register_handle_method_dispatch	void	ptr
 js_register_handle_method_dispatch_extension	void	ptr
 js_register_handle_own_property_names_dispatch	void	ptr
@@ -3690,6 +3692,7 @@ js_runtime_install_date	void
 js_runtime_install_diagnostics	void	
 js_runtime_install_dyn_eval	void	
 js_runtime_install_event_target	void	
+js_runtime_install_gc_diagnostics	void	
 js_runtime_install_global_atomics	void	
 js_runtime_install_global_json	void	
 js_runtime_install_global_math	void	
@@ -4277,6 +4280,7 @@ js_throw_json_constructor_type_error	f64
 js_throw_local	void	f64
 js_throw_math_constructor_type_error	f64	
 js_throw_not_a_constructor	f64	
+js_throw_program_value	void	f64
 js_throw_reference_error_super_delete	f64	
 js_throw_reference_error_tdz	f64	f64
 js_throw_reference_error_this_before_super	f64	

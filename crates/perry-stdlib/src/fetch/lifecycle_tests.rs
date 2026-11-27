@@ -48,7 +48,7 @@ const SCRUB_WORDS: usize = 8192;
 /// the reader, from the case's own frame.
 ///
 /// Masking the id in the case's frame is not enough: the calls that minted it
-/// (`garbage` → `js_headers_new` → id allocation) and the aging collection in
+/// (`garbage` → `alloc_blob` → id allocation) and the aging collection in
 /// [`arm_full_trace`] ran at the depth the reader's frame occupies next, and
 /// left the raw id in slots there. The conservative scan reads the reader's
 /// uninitialized slots as roots, so the "garbage" is retained and the case
@@ -158,51 +158,11 @@ fn response_string_readers_survive_a_full_trace_in_their_allocation() {
     });
 }
 
-/// `release()` locks HEADERS_REGISTRY and BLOB_REGISTRY only when some id died,
-/// so these cases leave one old, unreachable id of the right kind behind.
+/// `release()` locks BLOB_REGISTRY only when some id died, so the case leaves
+/// one old, unreachable id of the right kind behind.
 #[test]
 fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
     let _band = crate::fetch::handle_band_test_lock();
-    run_without_deadlock("js_headers_setheaders_entries_json", || {
-        let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let headers = js_headers_new();
-        let _root = scope.root_nanbox_f64(headers);
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get_mut(&handle_id(headers))
-            .unwrap()
-            .set("x-big", &big('h'));
-        let garbage = garbage(|| handle_id(js_headers_new()));
-        let before = arm_full_trace();
-        scrub_dead_stack();
-        js_headers_setheaders_entries_json(headers);
-        assert!(
-            full_traces() > before,
-            "no full trace ran inside the reader"
-        );
-        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
-    });
-    run_without_deadlock("js_headers_fetch_object_json", || {
-        let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let headers = js_headers_new();
-        let _root = scope.root_nanbox_f64(headers);
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get_mut(&handle_id(headers))
-            .unwrap()
-            .set("x-big", &big('h'));
-        let garbage = garbage(|| handle_id(js_headers_new()));
-        let before = arm_full_trace();
-        scrub_dead_stack();
-        js_headers_fetch_object_json(headers);
-        assert!(
-            full_traces() > before,
-            "no full trace ran inside the reader"
-        );
-        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
-    });
     run_without_deadlock("dispatch_blob_property(type)", || {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let blob = alloc_blob(BlobData::blob(vec![1], big('b')));
@@ -225,26 +185,20 @@ fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
 #[test]
 fn a_stale_dead_stack_copy_of_the_id_is_scrubbed_before_the_reader() {
     let _band = crate::fetch::handle_band_test_lock();
-    run_without_deadlock("planted js_headers_setheaders_entries_json", || {
+    run_without_deadlock("planted dispatch_blob_property(type)", || {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let headers = js_headers_new();
-        let _root = scope.root_nanbox_f64(headers);
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get_mut(&handle_id(headers))
-            .unwrap()
-            .set("x-big", &big('h'));
-        let garbage = garbage(|| handle_id(js_headers_new()));
+        let blob = alloc_blob(BlobData::blob(vec![1], big('b')));
+        let _root = scope.root_nanbox_f64(handle_to_f64(blob));
+        let garbage = garbage(|| alloc_blob(BlobData::blob(vec![2], String::new())));
         let before = arm_full_trace();
         plant_in_dead_stack(&garbage);
         scrub_dead_stack();
-        js_headers_setheaders_entries_json(headers);
+        dispatch::dispatch_blob_property(blob, "type").unwrap();
         assert!(
             full_traces() > before,
             "no full trace ran inside the reader"
         );
-        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
+        assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
     });
 }
 
@@ -263,7 +217,9 @@ fn object_url_keeps_its_blob_until_revoked() {
         // The blob handle itself is now unreferenced.
         collect();
         // Reuse any recycled ids.
-        let reused: Vec<f64> = (0..64).map(|_| js_headers_new()).collect();
+        let reused: Vec<usize> = (0..64)
+            .map(|_| alloc_blob(BlobData::blob(Vec::new(), String::new())))
+            .collect();
         let resolved = crate::fetch_blob::js_buffer_resolve_object_url(url.get_nanbox_f64());
         // node: a new Blob of the registered bytes, never the registered one.
         let copy = handle_id(resolved);
@@ -277,7 +233,7 @@ fn object_url_keeps_its_blob_until_revoked() {
             Some(b"x".to_vec())
         );
         assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&blob));
-        assert!(!reused.iter().any(|h| handle_id(*h) == blob));
+        assert!(!reused.contains(&blob));
 
         crate::fetch_blob::js_url_revoke_object_url(url.get_nanbox_f64());
         collect();
@@ -299,19 +255,24 @@ fn a_young_id_and_its_edges_survive_the_first_full_trace() {
     let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| {
         perry_runtime::gc::gc_init();
-        let id = handle_id(js_headers_new());
-        let method = headers_bound_method_value(id, "get");
+        let id = handle_id(body_metadata::js_form_data_new());
+        let method = dispatch::dispatch_form_data_property(id, "get").unwrap();
         let before = full_traces();
         perry_runtime::gc::js_gc_collect();
         assert!(full_traces() > before, "gc() must run a full trace");
-        assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&id));
+        assert!(body_metadata::FORM_DATA_REGISTRY
+            .lock()
+            .unwrap()
+            .contains_key(&id));
         // The cached closure was marked through the young root: churn the
         // heap, then check it still names this handle.
         for _ in 0..4096 {
             perry_runtime::js_array_alloc(8);
         }
         assert_eq!(
-            headers_bound_method_value(id, "get").to_bits(),
+            dispatch::dispatch_form_data_property(id, "get")
+                .unwrap()
+                .to_bits(),
             method.to_bits()
         );
         let closure = perry_runtime::value::js_nanbox_get_pointer(method)
@@ -324,7 +285,10 @@ fn a_young_id_and_its_edges_survive_the_first_full_trace() {
         );
         // Once old, an unreachable id is reclaimed by the next full trace.
         perry_runtime::gc::js_gc_collect();
-        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&id));
+        assert!(!body_metadata::FORM_DATA_REGISTRY
+            .lock()
+            .unwrap()
+            .contains_key(&id));
     })
     .join()
     .unwrap();
@@ -343,7 +307,7 @@ fn full_trace_requests_scale_with_the_surviving_handle_count() {
         for _ in 0..live {
             let array = perry_runtime::js_array_push_f64(
                 keep.get_raw_mut_ptr::<perry_runtime::ArrayHeader>(),
-                js_headers_new(),
+                handle_to_f64(alloc_blob(BlobData::blob(Vec::new(), String::new()))),
             );
             keep.set_raw_mut_ptr(array);
         }
@@ -362,7 +326,6 @@ fn full_trace_requests_scale_with_the_surviving_handle_count() {
 /// can self-deadlock (see the `lifecycle` module doc).
 const LOCKED_BY_GC: &[&str] = &[
     "FETCH_RESPONSES",
-    "HEADERS_REGISTRY",
     "REQUEST_REGISTRY",
     "BLOB_REGISTRY",
     "FORM_DATA_REGISTRY",
@@ -382,7 +345,6 @@ const ALLOCATES: &[&str] = &[
     "js_object_alloc",
     "js_jsvalue_to_string",
     "buffer_alloc",
-    "headers_bound_method_value",
     "form_data_bound_method_value",
     "tee_readable_stream_ids",
     "throw_",
@@ -480,10 +442,6 @@ fn no_registry_guard_is_held_across_an_allocation() {
         ("fetch/dispatch.rs", include_str!("dispatch.rs")),
         ("fetch/gc.rs", include_str!("gc.rs")),
         ("fetch/headers.rs", include_str!("headers.rs")),
-        (
-            "fetch/headers_method_value.rs",
-            include_str!("headers_method_value.rs"),
-        ),
         ("fetch/lifecycle.rs", include_str!("lifecycle.rs")),
         ("fetch/request_ctor.rs", include_str!("request_ctor.rs")),
         ("fetch/request_handle.rs", include_str!("request_handle.rs")),
@@ -506,10 +464,10 @@ fn no_registry_guard_is_held_across_an_allocation() {
 
     // The scan must see every shape it forbids, or it is decoration. These are
     // the shapes #11165's review found (response_string_field,
-    // dispatch_response_property, js_headers_get, js_response_clone).
+    // dispatch_response_property, the registry-backed js_headers_get, js_response_clone).
     let planted = [
         "fn f() {\n    let guard = FETCH_RESPONSES.lock().unwrap();\n    match guard.get(&id) {\n        Some(r) => js_string_from_bytes(r.url.as_ptr(), 1),\n        None => null(),\n    }\n}\n",
-        "fn f() {\n    if let Some(s) = HEADERS_REGISTRY.lock().unwrap().get(&id) {\n        return js_string_from_bytes(p, 1);\n    }\n}\n",
+        "fn f() {\n    if let Some(s) = BLOB_REGISTRY.lock().unwrap().get(&id) {\n        return js_string_from_bytes(p, 1);\n    }\n}\n",
         "fn f() {\n    let mut guard = FETCH_RESPONSES.lock().unwrap();\n    if used {\n        throw_fetch_type_error(\"x\");\n    }\n}\n",
     ];
     for shape in planted {
@@ -520,6 +478,6 @@ fn no_registry_guard_is_held_across_an_allocation() {
         );
     }
     // And must not flag the fixed shape.
-    let fixed = "fn f() {\n    let guard = HEADERS_REGISTRY.lock().unwrap();\n    let s = guard.len();\n    drop(guard);\n    js_string_from_bytes(p, s);\n}\n";
+    let fixed = "fn f() {\n    let guard = BLOB_REGISTRY.lock().unwrap();\n    let s = guard.len();\n    drop(guard);\n    js_string_from_bytes(p, s);\n}\n";
     assert!(guards_held_across_allocation("fixed", fixed).is_empty());
 }

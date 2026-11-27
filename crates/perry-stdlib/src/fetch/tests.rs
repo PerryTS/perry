@@ -119,52 +119,46 @@ fn string_from_header_rejects_handle_band_ids() {
     }
 }
 
+/// A boxed JS string, rooted in `scope`.
+fn rooted_str(scope: &perry_runtime::gc::RuntimeHandleScope, s: &str) -> f64 {
+    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    scope
+        .root_nanbox_u64(JSValue::string_ptr(ptr).bits())
+        .get_nanbox_f64()
+}
+
 #[test]
 fn response_constructor_copies_headers_initializer() {
     let _band = crate::fetch::handle_band_test_lock();
-    let mut source = HeadersStore::default();
-    source.set("x", "a");
-    let source_id = alloc_headers(source);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let mut store = HeadersStore::default();
+    store.set("x", "a");
+    let source = scope.root_nanbox_f64(headers::headers_object(store, false));
 
     let response = unsafe {
         js_response_new(
             std::ptr::null(),
             200.0,
             std::ptr::null(),
-            handle_to_f64(source_id),
+            source.get_nanbox_f64(),
         )
     };
     let response_id = handle_id(response);
-    let response_headers_id = handle_id(js_response_get_headers(response));
-    assert_ne!(response_headers_id, source_id);
+    let response_headers = scope.root_nanbox_f64(js_response_get_headers(response));
+    assert_ne!(response_headers.get_nanbox_u64(), source.get_nanbox_u64());
 
-    HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get_mut(&source_id)
-        .unwrap()
-        .set("x", "b");
+    let x = rooted_str(&scope, "x");
+    let b = rooted_str(&scope, "b");
+    unsafe { js_headers_set(source.get_nanbox_f64(), x, b) };
     assert_eq!(
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&response_headers_id)
-            .and_then(|headers| headers.get("x")),
+        headers::headers_store_of(response_headers.get_nanbox_f64()).and_then(|h| h.get("x")),
         Some("a".to_string())
     );
 
-    HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get_mut(&response_headers_id)
-        .unwrap()
-        .set("x", "c");
+    let c = rooted_str(&scope, "c");
+    unsafe { js_headers_set(response_headers.get_nanbox_f64(), x, c) };
     assert_eq!(
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&source_id)
-            .and_then(|headers| headers.get("x")),
+        headers::headers_store_of(source.get_nanbox_f64()).and_then(|h| h.get("x")),
         Some("b".to_string())
     );
     assert_eq!(
@@ -178,22 +172,15 @@ fn response_constructor_copies_headers_initializer() {
     );
 
     FETCH_RESPONSES.lock().unwrap().remove(&response_id);
-    HEADERS_REGISTRY.lock().unwrap().remove(&source_id);
-    HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .remove(&response_headers_id);
 }
 
-/// #8163: the Headers / FormData bound-method caches and `RequestRecord::signal`
+/// #8163: the FormData bound-method cache and `RequestRecord::signal`
 /// are heap values held in Rust tables outside the GC heap. The registered
 /// scanner must EMIT them (mark) — a value it does not emit dies on the next
 /// collection and the cache hands out a dangling closure.
 #[test]
 fn fetch_root_scanner_emits_method_caches_and_request_signal() {
     let _band = crate::fetch::handle_band_test_lock();
-    let headers_id = alloc_headers(HeadersStore::default());
-    let headers_get = headers_bound_method_value(headers_id, "get");
     let form_id = handle_id(body_metadata::js_form_data_new());
     let form_bits: u64 = 0x7FFD_0000_0000_1230;
     body_metadata::FORM_DATA_REGISTRY
@@ -232,10 +219,6 @@ fn fetch_root_scanner_emits_method_caches_and_request_signal() {
     gc::scan_fetch_roots(&mut |value| emitted.push(value.to_bits()));
 
     assert!(
-        emitted.contains(&headers_get.to_bits()),
-        "cached Headers bound-method closure must be a root"
-    );
-    assert!(
         emitted.contains(&form_bits),
         "cached FormData bound-method closure must be a root"
     );
@@ -248,13 +231,13 @@ fn fetch_root_scanner_emits_method_caches_and_request_signal() {
         .lock()
         .unwrap()
         .remove(&form_id);
-    HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
     REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
 }
 
 /// #8163: marking alone is not enough under a moving collector — the cache
 /// slot must be REWRITTEN, or the next `headers.get` read returns the
-/// pre-move address (exactly what Next's `ReflectAdapter.get` hit). The
+/// pre-move address (exactly what Next's `ReflectAdapter.get` hit on the
+/// Headers cache, before Headers became a GC object). The
 /// visitor here relocates only the slots this test planted, so parallel tests
 /// sharing the process-global tables are untouched.
 #[test]
@@ -276,8 +259,6 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
         }
     }
 
-    let headers_id = alloc_headers(HeadersStore::default());
-    let before = headers_bound_method_value(headers_id, "entries");
     let form_id = handle_id(body_metadata::js_form_data_new());
     let form_before = dispatch::dispatch_form_data_property(form_id, "entries").unwrap();
     let request = unsafe {
@@ -301,16 +282,10 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
     let signal_before = js_request_get_signal(request);
 
     gc::scan_fetch_roots_with(&mut Relocate {
-        targets: vec![
-            before.to_bits(),
-            form_before.to_bits(),
-            signal_before.to_bits(),
-        ],
+        targets: vec![form_before.to_bits(), signal_before.to_bits()],
     });
 
     // The cache HIT path must hand back the relocated value, not the planted one.
-    let after = headers_bound_method_value(headers_id, "entries");
-    assert_eq!(after.to_bits(), before.to_bits() + 0x1000);
     assert_eq!(
         js_request_get_signal(request).to_bits(),
         signal_before.to_bits() + 0x1000
@@ -328,7 +303,6 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
         .remove(&form_id);
 
     // Leave no bogus (relocated) pointers behind for other tests.
-    HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
     REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
 }
 
@@ -548,11 +522,11 @@ fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
     // The negative list alone is satisfiable by renaming a binding, so require the
     // root positively: every iteration entry point must open a scope.
     const MUST_OPEN_A_SCOPE: &[(&str, &str)] = &[
-        ("fetch/headers.rs", "js_headers_for_each"),
-        ("fetch/headers.rs", "js_headers_keys"),
-        ("fetch/headers.rs", "js_headers_values"),
+        // Backs `forEach` (both arities).
+        ("fetch/headers.rs", "headers_for_each_with"),
         ("fetch/headers.rs", "js_headers_entries"),
-        ("fetch/headers.rs", "js_headers_get_set_cookie"),
+        // Backs `keys` / `values` / `getSetCookie`.
+        ("fetch/headers.rs", "string_array"),
         ("fetch/body_metadata.rs", "js_form_data_for_each"),
         ("fetch/body_metadata.rs", "js_form_data_entries"),
         // Backs `js_form_data_keys` / `js_form_data_values`.
@@ -593,25 +567,13 @@ fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
 }
 
 /// Dropping an owner must stop rooting its cached closures. Repeated reads
-/// retain identity while the record is live, including after data mutation.
+/// retain identity while the record is live.
 #[test]
 fn method_caches_stop_rooting_after_handle_removal() {
     let _band = crate::fetch::handle_band_test_lock();
     for _ in 0..32 {
-        let headers_id = alloc_headers(HeadersStore::default());
         let form_id = handle_id(body_metadata::js_form_data_new());
-        let headers_method = headers_bound_method_value(headers_id, "entries");
         let form_method = dispatch::dispatch_form_data_property(form_id, "entries").unwrap();
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get_mut(&headers_id)
-            .unwrap()
-            .set("x", "y");
-        assert_eq!(
-            headers_method.to_bits(),
-            headers_bound_method_value(headers_id, "entries").to_bits()
-        );
         assert_eq!(
             form_method.to_bits(),
             dispatch::dispatch_form_data_property(form_id, "entries")
@@ -620,9 +582,7 @@ fn method_caches_stop_rooting_after_handle_removal() {
         );
         let mut roots = Vec::new();
         gc::scan_fetch_roots(&mut |v| roots.push(v.to_bits()));
-        assert!(roots.contains(&headers_method.to_bits()));
         assert!(roots.contains(&form_method.to_bits()));
-        HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
         body_metadata::FORM_DATA_REGISTRY
             .lock()
             .unwrap()
@@ -630,45 +590,10 @@ fn method_caches_stop_rooting_after_handle_removal() {
         roots.clear();
         gc::scan_fetch_roots(&mut |v| roots.push(v.to_bits()));
         assert!(
-            !roots.contains(&headers_method.to_bits()),
-            "removed Headers must release its cache root"
-        );
-        assert!(
             !roots.contains(&form_method.to_bits()),
             "removed FormData must release its cache root"
         );
     }
-}
-
-#[test]
-fn copied_headers_bind_methods_to_the_new_handle() {
-    let _band = crate::fetch::handle_band_test_lock();
-    let source = alloc_headers(HeadersStore::default());
-    let original = headers_bound_method_value(source, "get");
-    let copy = HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&source)
-        .unwrap()
-        .store
-        .clone();
-    let target = alloc_headers(copy);
-    // Only the header list is copyable; the new record's cache starts empty.
-    assert!(HEADERS_REGISTRY.lock().unwrap()[&target]
-        .method_values
-        .is_empty());
-    let copied = headers_bound_method_value(target, "get");
-    assert_ne!(original.to_bits(), copied.to_bits());
-    let closure = perry_runtime::value::js_nanbox_get_pointer(copied)
-        as *const perry_runtime::closure::ClosureHeader;
-    assert_eq!(
-        handle_id(perry_runtime::closure::js_closure_get_capture_f64(
-            closure, 0
-        )),
-        target
-    );
-    HEADERS_REGISTRY.lock().unwrap().remove(&source);
-    HEADERS_REGISTRY.lock().unwrap().remove(&target);
 }
 
 #[test]
@@ -687,9 +612,9 @@ fn copied_form_data_does_not_inherit_bound_methods() {
         .remove(&source);
 }
 
-/// #12629: `Reflect.construct(Headers, [], newTarget)` gives an instance whose
-/// [[Prototype]] is `newTarget.prototype` and that still carries a Headers
-/// handle. A same-prototype `newTarget` keeps the bare handle.
+/// #12629: `Reflect.construct(Headers, [], newTarget)` gives a Headers object
+/// whose [[Prototype]] is `newTarget.prototype`. A same-prototype `newTarget`
+/// gives a plain Headers object on `Headers.prototype`.
 #[test]
 fn reflect_construct_with_new_target_links_its_prototype() {
     use perry_runtime::object::{js_get_global_this, js_object_get_field_by_name};
@@ -715,14 +640,17 @@ fn reflect_construct_with_new_target_links_its_prototype() {
         perry_runtime::object::js_object_get_prototype_of(instance.get_nanbox_f64()).to_bits(),
         map_prototype.to_bits()
     );
-    let backing = perry_runtime::object::js_fetch_unwrap_handle(instance.get_nanbox_f64());
-    assert_eq!(
-        dispatch::js_fetch_handle_kind(handle_id(backing)),
-        3,
-        "the instance keeps its Headers handle"
+    assert!(
+        headers::is_headers(instance.get_nanbox_f64()),
+        "the instance is a Headers object"
     );
-    let bare = construct(headers.get_nanbox_f64());
-    assert!(perry_runtime::JSValue::from_bits(bare.to_bits()).is_handle());
+    let bare = scope.root_nanbox_f64(construct(headers.get_nanbox_f64()));
+    assert!(headers::is_headers(bare.get_nanbox_f64()));
+    let headers_prototype = get(headers.get_nanbox_f64(), "prototype");
+    assert_eq!(
+        perry_runtime::object::js_object_get_prototype_of(bare.get_nanbox_f64()).to_bits(),
+        headers_prototype.to_bits()
+    );
 }
 
 /// Reading a Request body hands its bytes to the reader: the record keeps only
