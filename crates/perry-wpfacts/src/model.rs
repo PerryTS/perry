@@ -740,8 +740,8 @@ pub struct FuncInfo {
     pub ctor_of: Option<TmplId>,
     /// Arrow function / `captures_this` closure: `this` is the enclosing one.
     pub lexical_this: bool,
-    /// Something outside the call protocol writes the parameters (an object
-    /// literal IIFE, a computed accessor): never summarized.
+    /// Something outside the call protocol writes the parameters (a
+    /// computed accessor): never summarized.
     pub no_summary: bool,
     /// The same outside writes of the parameters, recorded apart from
     /// `no_summary` (which the activation pass sets on every function to
