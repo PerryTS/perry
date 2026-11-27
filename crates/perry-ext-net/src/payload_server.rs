@@ -828,11 +828,6 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
             return;
         }
     }
-    // Node's constructor `read(0)`: the accepted socket reads before its
-    // `connection` listeners run, so pausing there keeps the read going.
-    if !pause_on_connect {
-        socket::flow(child.get());
-    }
     let child_snapshot = super::payload_io::snapshot(child_link);
     let child_resource = scope.root_nanbox(provider::resource(child.get()));
     events::emit_in(

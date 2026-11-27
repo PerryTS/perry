@@ -1024,22 +1024,6 @@ pub unsafe extern "C" fn js_perry_net_link_read_start(
     )
 }
 
-/// Stop the link's read until `js_perry_net_link_read_start`.
-///
-/// # Safety
-/// As [`js_perry_net_link_tcp_listen`].
-#[no_mangle]
-pub unsafe extern "C" fn js_perry_net_link_read_stop(
-    core: *mut c_void,
-    link: usize,
-    err: *mut PerryNetError,
-) -> i32 {
-    finish(
-        unsafe { transport::read_stop(core.cast(), link_arg(link)) },
-        err,
-    )
-}
-
 /// Link form of [`js_perry_net_write`] (the bytes are copied).
 ///
 /// # Safety

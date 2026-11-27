@@ -225,10 +225,8 @@ macro_rules! add_listener {
             let callback = scope.root_nanbox(callback);
             socket::link(owner.get());
             $runtime(p::raw_owner(owner.get()), event.get(), callback.get());
-            match crate::jsvalue_to_owned_string(event.get()).as_deref() {
-                Some("data") => socket::flow(owner.get()),
-                Some("readable") => socket::readable_listener(owner.get()),
-                _ => {}
+            if crate::jsvalue_to_owned_string(event.get()).as_deref() == Some("data") {
+                socket::flow(owner.get());
             }
             owner.get()
         }

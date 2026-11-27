@@ -166,24 +166,6 @@ fn lower_stream_ctor_args(
     Ok((named, object, extra_values))
 }
 
-pub(super) fn lower_sqlite_database_ctor<'a>(
-    ctx: &mut FnCtx<'_>,
-    args: &'a [Expr],
-    group: &mut RootedGroup<'a>,
-) -> Result<String> {
-    let path = if args.is_empty() {
-        "0".to_string()
-    } else {
-        let filename = adopt_leading_arg_discard_rest(ctx, args, group)?;
-        super::raw_string_ptr_of(ctx, &filename)
-    };
-    let blk = ctx.block();
-    let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path)]);
-    Ok(crate::expr::nanbox_inline::nanbox_handle_inline(
-        blk, &handle,
-    ))
-}
-
 pub(super) fn lower_builtin_new<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -770,7 +752,25 @@ pub(super) fn lower_builtin_new<'a>(
                 blk, &handle,
             )))
         }
-        "Database" => lower_sqlite_database_ctor(ctx, args, group).map(Some),
+        // better-sqlite3 Database — `new Database(filename)` opens a SQLite
+        // connection. Without this, `new Database(...)` falls into lower_new's
+        // empty-object placeholder, so `db` is a generic ObjectHeader pointer
+        // instead of a real Handle from `js_sqlite_open`. `db.prepare(...)`
+        // then unboxes that bogus pointer; `get_handle::<SqliteDbHandle>`
+        // returns None; prepare returns -1; every chained `.run()`/`.get()`/
+        // `.all()` dispatches against junk and silently produces undefined.
+        "Database" => {
+            let path_ptr = if let Some(arg) = args.first() {
+                get_raw_string_ptr(ctx, arg)?
+            } else {
+                "0".to_string()
+            };
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &handle,
+            )))
+        }
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.
         // The result is an ordinary object (#11919).

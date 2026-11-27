@@ -3343,25 +3343,20 @@ fn lower_module(
             }
             map
         },
-        // Preserve the export identity of aliased constructors. The default
-        // SQLite constructor has no named export to recover from its local name.
+        // Per-module alias → original imported export name. Only renamed named
+        // imports (`local != imported`) are recorded; this lets `lower_new`
+        // recover the canonical built-in constructor name when a bundle aliases
+        // the import (e.g. `import { AsyncLocalStorage as xQ5 }`). See the
+        // field doc on `CompileOptions::imported_class_original_names`.
         imported_class_original_names: {
-            let mut map = HashMap::new();
+            let mut map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             for import in &hir.imports {
                 for spec in &import.specifiers {
-                    match spec {
-                        perry_hir::ImportSpecifier::Named { imported, local }
-                            if local != imported =>
-                        {
+                    if let perry_hir::ImportSpecifier::Named { imported, local } = spec {
+                        if local != imported {
                             map.insert(local.clone(), imported.clone());
                         }
-                        perry_hir::ImportSpecifier::Default { local }
-                            if import.has_native_value_bindings()
-                                && import.source == "better-sqlite3" =>
-                        {
-                            map.insert(local.clone(), "default".to_string());
-                        }
-                        _ => {}
                     }
                 }
             }

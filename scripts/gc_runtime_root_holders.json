@@ -1115,7 +1115,7 @@
       "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
     },
     {
-      "file": "crates/perry-stdlib/src/streams/reader.rs",
+      "file": "crates/perry-stdlib/src/streams.rs",
       "name": "N",
       "verdict": "not_a_gc_pointer",
       "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."

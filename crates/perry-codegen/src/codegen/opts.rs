@@ -1353,7 +1353,7 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// "pg" (named or default). See issue #602.
     pub imported_class_sources: std::collections::HashMap<String, String>,
     /// Per-module mapping: local alias → original imported export name, for
-    /// a native default constructor or a renamed named import (`import { AsyncLocalStorage
+    /// named imports where the binding was renamed (`import { AsyncLocalStorage
     /// as xQ5 } from "async_hooks"` records `xQ5 -> "AsyncLocalStorage"`). Built
     /// once in `compile_module` from `hir.imports`. Lets `lower_new` recover the
     /// real export name so the built-in constructor arms in `lower_builtin_new`

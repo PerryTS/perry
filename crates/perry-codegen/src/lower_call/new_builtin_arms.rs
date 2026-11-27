@@ -22,19 +22,6 @@ pub(super) fn lower_non_class_new<'a>(
     args: &'a [Expr],
     group: &mut RootedGroup<'a>,
 ) -> Result<Option<String>> {
-    if ctx
-        .imported_class_sources
-        .get(class_name)
-        .map(String::as_str)
-        == Some("better-sqlite3")
-        && ctx
-            .imported_class_original_names
-            .get(class_name)
-            .map(String::as_str)
-            == Some("default")
-    {
-        return super::builtin::lower_sqlite_database_ctor(ctx, args, group).map(Some);
-    }
     if matches!(class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
         for a in args {
             let _ = lower_expr(ctx, a)?;

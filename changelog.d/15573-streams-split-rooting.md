@@ -1,1 +1,0 @@
-Web Streams code that holds a heap value across an allocation (the readable-stream async iterator, captured closure values, source-object field reads, multi-action settlement and the `renderToReadableStream` input) keeps it in a root slot, so a moving collection cannot leave it stale. Address checks on stream chunks and strings reject handle-band words.

@@ -3073,7 +3073,6 @@ js_perry_net_link_pipe_connect	i32s	ptr,usize,ptr,usize,ptr
 js_perry_net_link_pipe_listen	i32s	ptr,usize,ptr,usize,i32u,ptr
 js_perry_net_link_queued_bytes	usize	ptr,usize
 js_perry_net_link_read_start	i32s	ptr,usize,ptr
-js_perry_net_link_read_stop	i32s	ptr,usize,ptr
 js_perry_net_link_retained_bytes	usize	ptr,usize
 js_perry_net_link_set_ref	i32s	ptr,usize,i32s
 js_perry_net_link_set_route	i32s	ptr,usize,i32s,ptr

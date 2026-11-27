@@ -1162,11 +1162,6 @@ extern "C" {
         link: usize,
         err: *mut RawNetError,
     ) -> i32;
-    fn js_perry_net_link_read_stop(
-        core: *mut std::ffi::c_void,
-        link: usize,
-        err: *mut RawNetError,
-    ) -> i32;
     fn js_perry_net_link_write(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1527,17 +1522,6 @@ pub fn link_adopt_descriptor(
 pub fn link_read_start(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
     runtime_call!(
         { link_call(|err| unsafe { js_perry_net_link_read_start(core.raw(), link.raw(), err) }) },
-        {
-            let _ = (core, link);
-            Err(unavailable())
-        }
-    )
-}
-
-/// Stop the multishot read until [`link_read_start`].
-pub fn link_read_stop(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
-    runtime_call!(
-        { link_call(|err| unsafe { js_perry_net_link_read_stop(core.raw(), link.raw(), err) }) },
         {
             let _ = (core, link);
             Err(unavailable())

@@ -40,33 +40,6 @@ fn new_builtin(class_name: &str, args: Vec<Expr>) -> Stmt {
     })
 }
 
-#[test]
-fn sqlite_ctor_keeps_filename_rooted_until_all_arguments_are_evaluated() {
-    let file = "sqlite_ctor_rooted.ts";
-    let ast =
-        perry_parser::parse_typescript(r#"import Alias from "better-sqlite3";"#, file).unwrap();
-    let mut module = perry_hir::lower_module(&ast, file, file).unwrap();
-    // Use the suite's movable operand shape rather than a static filename literal.
-    module.init.push(new_builtin(
-        "Alias",
-        vec![allocating(), allocating(), allocating()],
-    ));
-    under_both_lowerings(|lowering| {
-        let bytes = crate::compile_module(&module, super::entry_opts()).unwrap();
-        let ir = String::from_utf8(bytes).unwrap();
-        let main = crate::testing::root_slots::function_slice(&ir, "main");
-        let producer = first_call_result(main, "js_object_alloc_plain").unwrap();
-        assert_rooted_across(main, &producer, "js_get_string_pointer_unified", lowering);
-        let last_arg = main.rfind("call i64 @js_object_alloc_plain(").unwrap();
-        let convert = main
-            .find("call i64 @js_get_string_pointer_unified(")
-            .unwrap();
-        let open = main.find("call i64 @js_sqlite_open(").unwrap();
-        assert!(last_arg < convert && convert < open, "{lowering}");
-        assert_eq!(main.matches("call i64 @js_sqlite_open(").count(), 1);
-    });
-}
-
 /// `new RegExp(<allocating>, <allocating>)`: `pattern_box` must survive
 /// `flags_box`'s lowering, which is itself an allocation.
 #[test]

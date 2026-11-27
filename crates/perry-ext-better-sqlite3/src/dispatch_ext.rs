@@ -301,44 +301,6 @@ mod tests {
     }
 
     #[test]
-    fn statement_flags_use_metadata_without_stepping() {
-        perry_ffi::initialize_runtime_fixture();
-        let db = unsafe { crate::js_sqlite_open(alloc_string(":memory:").as_raw() as *const _) };
-        assert_eq!(
-            unsafe { crate::js_sqlite_exec(db, alloc_string("CREATE TABLE t(v)").as_raw()) },
-            1
-        );
-        for (sql, reader, readonly) in [
-            ("SELECT v FROM t", true, true),
-            ("INSERT INTO t VALUES(1)", false, false),
-            ("INSERT INTO t VALUES(2) RETURNING v", true, false),
-        ] {
-            let stmt =
-                unsafe { crate::js_sqlite_prepare(db, alloc_string(sql).as_raw() as *const _) };
-            for (key, expected) in [("reader", reader), ("readonly", readonly)] {
-                let mut out = 0.0;
-                assert_eq!(
-                    unsafe {
-                        sqlite_property_dispatch_ext(stmt, key.as_ptr(), key.len(), &mut out)
-                    },
-                    1
-                );
-                assert_eq!(out.to_bits(), JsValue::from_bool(expected).bits());
-            }
-            perry_ffi::drop_handle(stmt);
-        }
-        let rows = perry_ffi::with_handle::<SqliteDbHandle, _, _>(db, |h| {
-            h.conn
-                .lock()
-                .unwrap()
-                .query_row("SELECT count(*) FROM t", [], |r| r.get::<_, i64>(0))
-                .unwrap()
-        });
-        assert_eq!(rows, Some(0));
-        assert_eq!(crate::js_sqlite_close(db), 1);
-    }
-
-    #[test]
     fn database_close_is_claimed() {
         let path = alloc_string(":memory:");
         let db = unsafe { crate::js_sqlite_open(path.as_raw() as *const _) };

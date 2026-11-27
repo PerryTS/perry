@@ -172,7 +172,7 @@ handle-floor | crates/perry-runtime/src/value/dynamic_object.rs | 2
 handle-floor | crates/perry-runtime/src/value/equality.rs | 1
 handle-floor | crates/perry-runtime/src/value/to_string_primitive.rs | 3
 handle-floor | crates/perry-runtime/src/weakref.rs | 2
-handle-floor | crates/perry-stdlib/src/crypto/kdf.rs | 2
+handle-floor | crates/perry-stdlib/src/crypto/kdf.rs | 3
 handle-floor | crates/perry-stdlib/src/crypto/keys.rs | 1
 handle-floor | crates/perry-stdlib/src/crypto/random.rs | 1
 handle-floor | crates/perry-stdlib/src/crypto/util.rs | 4
@@ -182,6 +182,7 @@ handle-floor | crates/perry-stdlib/src/fetch/dispatch.rs | 4
 handle-floor | crates/perry-stdlib/src/querystring.rs | 5
 handle-floor | crates/perry-stdlib/src/readline/mod.rs | 1
 handle-floor | crates/perry-stdlib/src/sqlite/options.rs | 3
+handle-floor | crates/perry-stdlib/src/streams.rs | 6
 handle-floor | crates/perry-stdlib/src/streams/byob.rs | 1
 handle-floor | crates/perry-stdlib/src/streams/transform.rs | 1
 handle-floor | crates/perry-stdlib/src/string_decoder.rs | 4

@@ -128,8 +128,12 @@ pub(crate) fn build_optimized_libs(
                 // feature; stripping it removes the dispatch arm
                 // entirely and the `.raw()` / `.all()` call falls
                 // through to the no-such-method sentinel. The
-                // dispatch arm calls `js_sqlite_*` via extern "C", so it
-                // reaches the same provider as the typed calls.
+                // duplicate `js_sqlite_*` symbols (one from each
+                // crate) are resolved by the linker picking one impl;
+                // perry-ext typically wins because it appears later on
+                // the link line. The dispatch arm calls those symbols
+                // via extern "C", so it routes through whichever impl
+                // the linker picked.
                 if *feat == "database-sqlite" {
                     continue;
                 }
