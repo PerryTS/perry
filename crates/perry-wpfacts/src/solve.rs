@@ -1558,6 +1558,33 @@ impl Model {
     // --------------------------------------------------------------- fields
 
     /// The node holding the prototype objects of `t`.
+    /// Rule OPROTO (M1): chain node `n` of `t` starts at the exact intrinsic
+    /// prototypes `t` is born with (`builtins::intrinsic_proto_seeds`), or
+    /// at `Object.prototype` where it has none of its own.
+    fn seed_chain(&mut self, n: NodeId, t: Tok, objproto: Tok) {
+        let seeds = crate::builtins::intrinsic_proto_seeds(self, t);
+        if seeds.is_empty() {
+            self.add_tok(n, objproto);
+        }
+        for &s in &seeds {
+            self.add_tok(n, s);
+        }
+        if !seeds.is_empty() {
+            self.birth_protos.insert(t, seeds);
+        }
+    }
+
+    /// Rule OPROTO (M1): does a walk of `t`'s chain end at its prototype `p`
+    /// as at the collapsed `ObjectProto`? `ObjectProto` itself, or an
+    /// intrinsic prototype `t` was born with (`birth_protos`): a lookup there
+    /// reads the collapsed chain with `t` as origin (`builtins::chain_link`),
+    /// which stands for every link above it.
+    pub fn collapsed_end(&self, t: Tok, p: Tok) -> bool {
+        matches!(self.toks[p as usize], TokKind::ObjectProto)
+            || (matches!(self.toks[p as usize], TokKind::NativeProto(..))
+                && self.birth_protos.get(&t).is_some_and(|v| v.contains(&p)))
+    }
+
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
         #[cfg(test)]
         if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
@@ -1614,7 +1641,9 @@ impl Model {
                             self.add_tok(n, pt);
                         }
                     }
-                    None => self.add_tok(n, objproto),
+                    None => {
+                        self.seed_chain(n, t, objproto)
+                    }
                 },
             },
             TokKind::Proto(tm) => match (
@@ -1634,10 +1663,22 @@ impl Model {
                     Some((_, pp)) => self.edge(pp, n),
                     // A null-prototype record: the chain ends here.
                     None if self.tmpls[tm as usize].null_proto => {}
-                    None => self.add_tok(n, objproto),
+                    // Rule OPROTO (M1): a generator function's `prototype`
+                    // object is born with %GeneratorPrototype% (27.3.4.3).
+                    None => self.seed_chain(n, t, objproto),
                 },
             },
-            TokKind::NativeProto(..) => self.add_tok(n, objproto),
+            // Rule OPROTO (M1): an intrinsic prototype's chain is the one the
+            // realm declares (`%ArrayIteratorPrototype%` ->
+            // `%IteratorPrototype%`; null ends it).
+            TokKind::NativeProto(..) => match crate::builtins::declared_proto(self, t) {
+                Ok(Some(p)) => {
+                    self.add_tok(n, p);
+                    self.birth_protos.insert(t, vec![p]);
+                }
+                Ok(None) => {}
+                Err(()) => self.add_tok(n, objproto),
+            },
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
@@ -1687,8 +1728,12 @@ impl Model {
                 };
                 self.edge(rn, n);
             }
-            TokKind::Func(_, _) | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
-                self.add_tok(n, objproto)
+            // Rule OPROTO (M1): a builtin-made receiver's chain starts at
+            // its exact intrinsic prototype (`builtins::intrinsic_proto_seeds`).
+            TokKind::Func(_, _)
+            | TokKind::BuiltinFn(_)
+            | TokKind::Builtin(_) => {
+                self.seed_chain(n, t, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
@@ -1716,7 +1761,9 @@ impl Model {
                                 None => self.add_tok(n, objproto),
                             }
                         }
-                        _ => self.add_tok(n, objproto),
+                        _ => {
+                            self.seed_chain(n, t, objproto)
+                        }
                     },
                 },
             },

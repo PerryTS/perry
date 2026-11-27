@@ -197,6 +197,7 @@ pub(crate) fn lookup_native_descriptor(
     dst: NodeId,
     setter: bool,
 ) {
+    let holder = super::chain_link(m, origin, holder);
     let Key::Named(a) = key else {
         native_accessor_any(m, origin, holder, dst, setter);
         return;

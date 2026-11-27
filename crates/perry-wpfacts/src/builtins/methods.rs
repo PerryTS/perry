@@ -622,6 +622,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    let p = super::chain_link(m, origin, p);
     crate::family_reach::chain(m, origin, p, key);
     computed_method(m, key);
     if native_waits(m, NativeRecv::Proto(p, origin), key, call) {

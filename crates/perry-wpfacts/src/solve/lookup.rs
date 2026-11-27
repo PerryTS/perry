@@ -1358,7 +1358,6 @@ impl Model {
             self.builtin_field_use(r, key, ChainAct::Load(dst, self.thrown));
         }
         self.proto_value_at(t, dst);
-        self.with_b(|m| builtins::intrinsic_proto_values(m, t, dst));
         // A program function born with another intrinsic prototype
         // (`%AsyncGeneratorFunction.prototype%`, a generator object's
         // `%GeneratorPrototype%` chain) has one the model does not
@@ -1782,7 +1781,8 @@ impl Model {
 
     /// ENUM2: prototype `q` of chain link `from` has no enumerable built-in
     /// member: a built-in object of `enum_free`, a program value
-    /// (`enum_obj`), or the collapsed `ObjectProto` where the seed of
+    /// (`enum_obj`), or the collapsed `ObjectProto` (or an intrinsic
+    /// prototype `from` was born with, `Model::collapsed_end`) where the seed of
     /// `from` makes it such an intrinsic prototype
     /// (`builtins::enum_free_seed`), or a built-in instance whose own
     /// enumerable properties are its program-written fields and, for a
@@ -1791,8 +1791,7 @@ impl Model {
         self.enum_free(q)
             || self.enum_obj(q)
             || builtins::enum_free_link_obj(self, q)
-            || matches!(self.toks[q as usize], TokKind::ObjectProto)
-                && builtins::enum_free_seed(self, from)
+            || self.collapsed_end(from, q) && builtins::enum_free_seed(self, from)
     }
 
     /// A builtin prototype on a chain (`ObjectProto` stands for each of

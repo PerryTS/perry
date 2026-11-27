@@ -907,7 +907,7 @@ impl Model {
                 return None;
             }
             for p in pr.pts.to_sorted() {
-                if p == op {
+                if p == op || self.collapsed_end(h, p) {
                     continue;
                 }
                 if !matches!(self.toks[p as usize], TokKind::Proto(_)) {
