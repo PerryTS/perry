@@ -136,44 +136,81 @@ pub(super) unsafe fn link_of(
     cur: *const ObjectHeader,
     rc: *const ShapeRecord,
 ) -> Next {
+    match link_of_in::<true>(dir, cur, rc) {
+        Some(n) => n,
+        None => Next::Unknown,
+    }
+}
+
+/// [`link_of`]; with `CALLS` false the two arms that call out (a record-held
+/// link, a class identity's word) answer `None` instead, and the caller
+/// finishes them with [`link_called`] out of line, so its own path keeps
+/// to a leaf's registers.
+#[inline(always)]
+unsafe fn link_of_in<const CALLS: bool>(
+    dir: *const u8,
+    cur: *const ObjectHeader,
+    rc: *const ShapeRecord,
+) -> Option<Next> {
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
     let mut bits = 0u64;
     if !meta.is_null() {
         if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
-            return Next::Unknown;
+            return Some(Next::Unknown);
         }
         bits = (*meta).prototype;
     }
     if bits == 0 {
         if (*rc).weak_collection_brand().is_some() {
-            return Next::Unknown;
+            return Some(Next::Unknown);
         }
         let pid = (*rc).proto_id;
         if pid == super::super::PROTO_ID_DEFAULT {
-            return match object_prototype(dir) {
+            return Some(match object_prototype(dir) {
                 Some(p) if p != cur => Next::Object(p),
                 _ => Next::Unknown,
-            };
+            });
         }
         if pid == super::super::PROTO_ID_NULL {
-            return Next::End;
+            return Some(Next::End);
         }
-        bits = if pid == super::super::PROTO_ID_RECORD_HELD {
-            record_held_link(cur)
-        } else if (super::super::PROTO_ID_CLASS..super::super::PROTO_ID_MIXED).contains(&pid) {
-            let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
-            if word_dir.is_null() {
-                return Next::Unknown;
+        if pid == super::super::PROTO_ID_RECORD_HELD
+            || (super::super::PROTO_ID_CLASS..super::super::PROTO_ID_MIXED).contains(&pid)
+        {
+            if !CALLS {
+                return None;
             }
-            match super::super::shapes_prototype::identity_word_slot_in(word_dir, pid) {
-                Some(slot) => *slot,
-                None => return Next::Unknown,
-            }
-        } else {
-            (*rc).prototype_word()
-        };
+            return Some(link_called(dir, cur, pid));
+        }
+        bits = (*rc).prototype_word();
     }
+    Some(link_of_bits(bits))
+}
+
+/// The link of `cur` whose record's prototype id `pid` is record-held or a
+/// class identity's: the arms of [`link_of`] that call out.
+#[inline(always)]
+unsafe fn link_called(dir: *const u8, cur: *const ObjectHeader, pid: u64) -> Next {
+    let bits = if pid == super::super::PROTO_ID_RECORD_HELD {
+        record_held_link(cur)
+    } else {
+        let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
+        if word_dir.is_null() {
+            return Next::Unknown;
+        }
+        match super::super::shapes_prototype::identity_word_slot_in(word_dir, pid) {
+            Some(slot) => *slot,
+            None => return Next::Unknown,
+        }
+    };
+    link_of_bits(bits)
+}
+
+/// The link a prototype word names: null ends the chain, a heap object is
+/// the next hop, anything else is unknown.
+#[inline(always)]
+fn link_of_bits(bits: u64) -> Next {
     if bits == TAG_NULL {
         return Next::End;
     }
@@ -206,12 +243,43 @@ pub(super) unsafe fn inherited_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    ordinary_chain::<ABSENT>(dir, obj, r, key_bits, hash)
+}
+
+/// The body of [`inherited_get`], inlined into [`own_miss`] so the probe's
+/// own miss reaches the chain in the same frameless leaf.
+#[inline(always)]
+unsafe fn ordinary_chain<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
     // `cur` is an object the walk may continue from (`walks_from`): the
     // receiver is checked here, each prototype before it becomes `cur`.
     if !(*r).kind_is(super::super::ShapeObjectKind::Ordinary) {
         return inherited_walk::<ABSENT>(dir, obj, r, key_bits, hash);
     }
-    match link_of(dir, obj, r) {
+    match link_of_in::<false>(dir, obj, r) {
+        Some(Next::Object(next)) => chain_from::<ABSENT>(dir, obj, next, key_bits, hash),
+        Some(Next::End) => chain_absent::<ABSENT>(),
+        Some(Next::Unknown) => hole(),
+        None => chain_called::<ABSENT>(dir, obj, r, key_bits, hash),
+    }
+}
+
+/// [`ordinary_chain`] for a receiver whose link calls out ([`link_called`]):
+/// its own frame, so the leaf's other arms keep none.
+#[inline(never)]
+unsafe fn chain_called<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    r: *const ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    match link_called(dir, obj, (*r).proto_id) {
         Next::Object(next) => chain_from::<ABSENT>(dir, obj, next, key_bits, hash),
         Next::End => chain_absent::<ABSENT>(),
         Next::Unknown => hole(),
@@ -400,9 +468,8 @@ pub(super) unsafe fn list_position(
     }
 }
 
-/// The hit path's proven own miss (its list proved the key absent): the
-/// overflow, then the prototype chain. The record is read again from the
-/// object, so the hit path passes four values and keeps no frame.
+/// [`own_miss`] for a caller that no longer holds the receiver's record
+/// (the site memo's misses): the record is read again from the object.
 #[inline(never)]
 pub(super) unsafe fn absent_from<const ABSENT: bool>(
     dir: *const u8,
@@ -410,10 +477,24 @@ pub(super) unsafe fn absent_from<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let word = (*obj).parent_class_id;
-    let r = record_of(dir, LayoutWord(word));
+    let r = record_of(dir, LayoutWord((*obj).parent_class_id));
+    own_miss::<ABSENT>(dir, obj, key_bits, hash, r)
+}
+
+/// The probe's proven own miss (`obj`'s list, record `r`, proved the key
+/// absent): the overflow, then the prototype chain, in one leaf. The front
+/// passes the record it proved the miss on, so nothing is derived twice, and
+/// the ordinary chain's desc answers keep to caller-saved registers.
+#[inline(never)]
+pub(super) unsafe fn own_miss<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+    r: *mut ShapeRecord,
+) -> f64 {
     let probe = (*r).probe;
-    if word & crate::object::overflow::SHADOW_BIT != 0 {
+    if (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0 {
         return overflow_then_inherited::<ABSENT>(dir, obj, r, probe, key_bits, hash);
     }
     // A list with a key no compare can match (`PROBE_ATOMS` clear) proves
@@ -421,7 +502,7 @@ pub(super) unsafe fn absent_from<const ABSENT: bool>(
     if probe & PROBE_ATOMS == 0 {
         return hole();
     }
-    inherited_get::<ABSENT>(dir, obj, r, key_bits, hash)
+    ordinary_chain::<ABSENT>(dir, obj, r, key_bits, hash)
 }
 
 /// The complete prototype walk of [`inherited_get`].

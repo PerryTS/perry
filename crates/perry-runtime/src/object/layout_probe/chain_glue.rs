@@ -376,20 +376,55 @@ pub(super) unsafe fn read<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    match ChainDesc::lookup(d, key_bits, hash) {
+    match ChainDesc::lookup_first(d, key_bits, hash) {
+        Some(f) => answer::<ABSENT>(dir, cur, next, d, f, key_bits, hash),
+        None => read_rest::<ABSENT>(dir, cur, next, d, key_bits, hash),
+    }
+}
+
+/// [`read`] past the desc's first bucket: the rest of the probe, then the
+/// same answer. Out of line, so the leaf saves no registers for the probe.
+#[cold]
+#[inline(never)]
+unsafe fn read_rest<const ABSENT: bool>(
+    dir: *const u8,
+    cur: *const ObjectHeader,
+    next: *const ObjectHeader,
+    d: *const ChainDesc,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let f = ChainDesc::lookup_rest(d, key_bits, hash);
+    answer::<ABSENT>(dir, cur, next, d, f, key_bits, hash)
+}
+
+/// [`read`]'s answer to the desc's lookup `f`.
+#[inline(always)]
+unsafe fn answer<const ABSENT: bool>(
+    dir: *const u8,
+    cur: *const ObjectHeader,
+    next: *const ObjectHeader,
+    d: *const ChainDesc,
+    f: Found,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    match f {
         Found::Hit(e) => {
             // The entry names the holder's inline slot (the desc is rebuilt
             // at every publication of the holder's layout), so a data hit
             // reads it without the holder's record. A hit on the first hop
             // reads `next` itself, the object the desc was reached from.
-            if e.load != NO_LOAD {
-                let h = if e.holder == (*d).node {
+            let load = (*e).load;
+            if load != NO_LOAD {
+                let holder = (*e).holder;
+                let h = if holder == (*d).node {
                     next
                 } else {
-                    obj_of(e.holder)
+                    obj_of(holder)
                 };
                 let v = *((h as *const u8)
-                    .add(std::mem::size_of::<ObjectHeader>() + e.load as usize * 8)
+                    .add(std::mem::size_of::<ObjectHeader>() + load as usize * 8)
                     as *const f64);
                 if v.to_bits() != TAG_HOLE {
                     return v;
@@ -410,22 +445,25 @@ unsafe fn read_hit_rest<const ABSENT: bool>(
     dir: *const u8,
     cur: *const ObjectHeader,
     node: *mut ChainNode,
-    e: cd::ChainEntry,
+    e: *const cd::ChainEntry,
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let h = obj_of(e.holder);
+    // The entry's words are read before any getter runs: user code may
+    // republish (and so free) the desc that holds it.
+    let (holder, loc, load, entry_act) = ((*e).holder, (*e).loc, (*e).load, (*e).act);
+    let h = obj_of(holder);
     let r = record_of(dir, LayoutWord((*h).parent_class_id));
-    if e.load == NO_LOAD {
-        let v = value_at(h, r, e.loc);
+    if load == NO_LOAD {
+        let v = value_at(h, r, loc);
         if v.to_bits() != TAG_HOLE {
             return v;
         }
     }
-    if e.act == act::ACCESSOR {
-        return accessor_answer_at(h, r, e.loc);
+    if entry_act == act::ACCESSOR {
+        return accessor_answer_at(h, r, loc);
     }
-    read_at::<ABSENT>(dir, cur, node, e.holder, key_bits, hash)
+    read_at::<ABSENT>(dir, cur, node, holder, key_bits, hash)
 }
 
 /// [`read`]'s continuation in the hop loop at `hop`, the hop the desc did
@@ -461,10 +499,11 @@ pub(super) unsafe fn has(
 ) -> i32 {
     match ChainDesc::lookup(d, key_bits, hash) {
         Found::Hit(e) => {
-            let h = if e.holder == (*d).node {
+            let holder = (*e).holder;
+            let h = if holder == (*d).node {
                 obj
             } else {
-                obj_of(e.holder)
+                obj_of(holder)
             };
             super::has::probe_has_walk_from(dir, h, key_bits, hash)
         }
@@ -549,7 +588,7 @@ pub(crate) unsafe fn test_desc_holds(obj: *const ObjectHeader, key_bits: u64, ha
     let n = node_of(obj);
     !n.is_null()
         && matches!(ChainDesc::lookup((*n).desc, key_bits, hash),
-            Found::Hit(e) if e.holder as usize == n as usize)
+            Found::Hit(e) if (*e).holder as usize == n as usize)
 }
 
 /// Test view: the node of `obj` as the live structure holds it, unchanged:
@@ -580,7 +619,7 @@ pub(crate) unsafe fn test_desc_holder(obj: *const ObjectHeader, key_bits: u64, h
         return 0;
     }
     match ChainDesc::lookup((*n).desc, key_bits, hash) {
-        Found::Hit(e) => e.holder as usize,
+        Found::Hit(e) => (*e).holder as usize,
         _ => 0,
     }
 }
