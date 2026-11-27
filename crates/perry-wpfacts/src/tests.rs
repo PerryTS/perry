@@ -372,6 +372,18 @@ pub(super) fn unseen(src: &str) -> String {
     format!("import \"unseen-host\";\n{src}")
 }
 
+/// The path a fixture is parsed and lowered under. The module kind (module
+/// goal, strictness) of a `.ts` file comes from the nearest `package.json`
+/// above it (`perry_parser::file_is_es_module_by_format`), and a bare
+/// relative name resolves against the process cwd: a test run from a
+/// checkout whose root `package.json` says `"type": "module"` would lower
+/// every sloppy-script fixture as a module. A directory that holds no
+/// `package.json` pins the kind to CommonJS whatever the cwd. The module's
+/// key in `ProgramFacts` stays the bare `name`.
+pub(crate) fn fixture_source_path(name: &str) -> String {
+    format!("/nonexistent-perry-wpfacts-fixtures/{name}")
+}
+
 fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
 }
