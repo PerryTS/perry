@@ -508,6 +508,50 @@ fn preconnect_backpressure_returns_false_then_one_drain_after_bytes_arrive() {
     .join()
     .unwrap();
 }
+#[test]
+fn a_paused_socket_reads_to_the_high_water_mark_and_releases_the_loop_until_resumed() {
+    let _serial = crate::test_serial();
+    std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // More than the kernel buffers hold, so a read that never stops would drain it all.
+        let total = 128 * socket::HIGH_WATER_MARK;
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&vec![b'x'; total]).unwrap();
+            stream
+        });
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(net::new_socket(io::ROUTE, p::undefined()));
+        socket::set_paused(owner.get(), true);
+        let host = scope.root_nanbox(events::string("127.0.0.1"));
+        socket::connect(owner.get(), port as f64, host.get(), p::undefined());
+        let state = || unsafe {
+            let payload = p::socket_ptr(socket::link(owner.get())).unwrap();
+            (
+                (*payload).ext.read_buffer.len(),
+                (*payload).ext.read_stopped,
+            )
+        };
+        until(|| state().1);
+        until(|| !perry_runtime::turnloop_net::loop_alive());
+        let (buffered, _) = state();
+        assert!(
+            (socket::HIGH_WATER_MARK..total).contains(&buffered) && !peer.is_finished(),
+            "a paused socket reads until its buffer reaches the mark, then stops: {buffered}"
+        );
+        socket::set_paused(owner.get(), false);
+        assert!(!state().1, "resume restarts the read");
+        assert!(perry_runtime::turnloop_net::loop_alive());
+        until(|| peer.is_finished());
+        drop(peer.join().unwrap());
+        socket::destroy(owner.get(), p::undefined());
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}
 unsafe extern "C" fn tls_data(_: *const RawClosureHeader, _: JsThis, chunk: f64) -> f64 {
     let bytes = crate::jsvalue_to_socket_bytes(chunk).unwrap();
     SEEN.with(|seen| seen.borrow_mut().push(String::from_utf8(bytes).unwrap()));

@@ -282,6 +282,8 @@ struct Entry {
     closing: bool,
     /// The peer's EOF was delivered: nothing is read any more.
     ended: bool,
+    /// The binding stopped the read (a paused buffer at its high-water mark).
+    read_stopped: bool,
     referenced: bool,
     #[cfg(windows)]
     pipe_drain: Option<OpId>,
@@ -308,6 +310,7 @@ impl Entry {
             connecting: false,
             closing: false,
             ended: false,
+            read_stopped: false,
             referenced: true,
             #[cfg(windows)]
             pipe_drain: None,

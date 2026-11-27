@@ -1697,6 +1697,13 @@ pub(crate) fn read(owner: f64, size: f64) -> f64 {
             Some(buffer.drain(..count).collect::<Vec<u8>>())
         })
     };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field access ends before allocation or JS.
+    let restart =
+        unsafe { p::socket_ptr(socket).is_ok_and(|payload| read_again(&mut (*payload).ext)) };
+    if restart {
+        start_read(owner.get(), socket);
+    }
     queue_read_end(owner.get());
     match bytes {
         Some(bytes) => {
@@ -2080,48 +2087,63 @@ pub(crate) fn flow(owner: f64) {
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let action = unsafe {
-        p::socket_ptr(socket).ok().and_then(|payload| {
+        p::socket_ptr(socket).ok().map(|payload| {
             let fields = &mut (*payload).ext;
-            if fields.paused && !fields.raw_consumer {
-                return None;
-            }
-            if listeners != 0 && !fields.raw_consumer {
+            let consume = !fields.paused && !fields.raw_consumer;
+            if consume && listeners != 0 {
                 fields.flowing = Some(true);
             }
-            let start = fields.opened && !fields.read_started && !fields.read_ended;
-            if start {
-                fields.read_started = true;
-            }
-            let bytes = if (listeners != 0 || fields.flowing == Some(true)) && !fields.raw_consumer
-            {
+            let bytes = if consume && (listeners != 0 || fields.flowing == Some(true)) {
                 fields.read_buffer.drain(..).collect::<Vec<u8>>()
             } else {
                 Vec::new()
             };
-            Some((start, bytes))
+            // A paused socket reads too, until its buffer reaches the high-water mark.
+            let start = fields.opened && !fields.read_started && !fields.read_ended;
+            if start {
+                fields.read_started = true;
+            }
+            (start || read_again(fields), bytes)
         })
     };
     let Some((start, bytes)) = action else {
         return;
     };
-    if start {
-        // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
-        // and field/core access ends before allocation or JS.
-        let result = unsafe {
-            p::socket_core(socket)
-                .ok()
-                .map(|core| tl::link_read_start(&mut *core, socket))
-        };
-        if let Some(Err(failure)) = result {
-            let failure = error(&failure.code, &failure.message());
-            destroy(owner.get(), failure);
-            return;
-        }
+    if start && !start_read(owner.get(), socket) {
+        return;
     }
     if !bytes.is_empty() {
         data(owner.get(), &bytes);
     }
     queue_read_end(owner.get());
+}
+
+/// Node's `_read`: a read the high-water mark stopped restarts once the
+/// buffer drains below it.
+fn read_again(fields: &mut SocketFields) -> bool {
+    let again =
+        fields.read_stopped && !fields.read_ended && fields.read_buffer.len() < HIGH_WATER_MARK;
+    if again {
+        fields.read_stopped = false;
+    }
+    again
+}
+
+/// Returns false when the failure destroyed the socket.
+fn start_read(owner: f64, socket: OwnerLink) -> bool {
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+    // and field/core access ends before allocation or JS.
+    let result = unsafe {
+        p::socket_core(socket)
+            .ok()
+            .map(|core| tl::link_read_start(&mut *core, socket))
+    };
+    let Some(Err(failure)) = result else {
+        return true;
+    };
+    let failure = error(&failure.code, &failure.message());
+    destroy(owner, failure);
+    false
 }
 
 /// Owned policy copied out before allocating a chunk or invoking listeners.
@@ -2131,15 +2153,23 @@ enum DataDelivery {
     Chunk(Option<String>),
 }
 
-fn data_delivery(payload: &mut p::SocketPayload, bytes: &[u8], listeners: usize) -> DataDelivery {
+fn data_delivery(
+    payload: &mut p::SocketPayload,
+    socket: OwnerLink,
+    bytes: &[u8],
+    listeners: usize,
+) -> DataDelivery {
     let fields = &mut payload.ext;
     if fields.paused || fields.raw_consumer || (listeners == 0 && fields.flowing != Some(true)) {
         fields.read_buffer.extend(bytes.iter().copied());
-        return if fields.raw_consumer {
-            DataDelivery::Silent
-        } else {
-            DataDelivery::Readable
-        };
+        if fields.raw_consumer {
+            return DataDelivery::Silent;
+        }
+        // Node's `onStreamRead`: a push the full buffer refuses stops the read.
+        if !fields.read_stopped && fields.read_buffer.len() >= HIGH_WATER_MARK {
+            fields.read_stopped = tl::link_read_stop(&mut payload.core, socket).is_ok();
+        }
+        return DataDelivery::Readable;
     }
     if listeners == 0 {
         DataDelivery::Silent
@@ -2159,7 +2189,7 @@ pub(crate) unsafe fn data_proven(
     bytes: &[u8],
     listeners: usize,
 ) {
-    let delivery = data_delivery(&mut *window.payload, bytes, listeners);
+    let delivery = data_delivery(&mut *window.payload, window.link, bytes, listeners);
     if !matches!(delivery, DataDelivery::Chunk(_)) {
         p::account_socket(window.link);
     }
@@ -2178,7 +2208,7 @@ pub(crate) fn data(owner: f64, bytes: &[u8]) {
     let delivery = unsafe {
         p::socket_ptr(socket)
             .ok()
-            .map(|payload| data_delivery(&mut *payload, bytes, listeners))
+            .map(|payload| data_delivery(&mut *payload, socket, bytes, listeners))
     };
     if let Some(delivery) = delivery {
         let resource = scope.root_nanbox(provider::resource(owner.get()));

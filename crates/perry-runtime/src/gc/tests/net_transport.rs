@@ -1413,6 +1413,87 @@ fn a_racing_attempt_keeps_the_loop_alive_after_the_socket_is_unrefd() {
     assert_eq!(crate::turnloop_net::live_handles(), 0);
 }
 
+/// libuv's `readStop`: a stopped read no longer holds the loop or takes the
+/// peer's bytes; a restart reads them, and the stopped read's last
+/// completion leaves a restart issued before it arrived alone.
+#[test]
+fn a_stopped_read_releases_the_loop_and_a_restart_reads_again() {
+    use std::io::Write;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let server = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        let addr = transport::tcp_listen(c, link, "127.0.0.1:0".parse().unwrap(), 16, false, true)
+            .unwrap();
+        transport::accept_start(c, link).unwrap();
+        addr
+    };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    let child = OwnerLink(CHILD.with(Cell::get));
+    let owner = scope.root_nanbox_f64(unsafe { np::link_event_owner(child) }.unwrap());
+    let c = || core(owner.get_nanbox_f64());
+    let received = || {
+        EVENTS.with(|events| {
+            events
+                .borrow()
+                .iter()
+                .filter(|e| e.link == child.0 && e.kind == NET_DATA)
+                .flat_map(|e| e.bytes.iter().copied())
+                .collect::<Vec<_>>()
+        })
+    };
+    unsafe {
+        transport::set_ref(core(server.get_nanbox_f64()), link, false).unwrap();
+        transport::read_start(c(), child).unwrap();
+        assert!(
+            crate::turnloop_net::loop_alive(),
+            "a reading socket holds the loop"
+        );
+        transport::read_stop(c(), child).unwrap();
+        assert_eq!((*c()).read_operation(), None);
+    }
+    assert!(
+        pump_until(|| !crate::turnloop_net::loop_alive()),
+        "a stopped socket that owes nothing releases the loop"
+    );
+    peer.write_all(b"held").unwrap();
+    let deadline = Instant::now() + Duration::from_millis(50);
+    poll_until(|| Instant::now() >= deadline);
+    assert!(received().is_empty(), "a stopped read takes no bytes");
+
+    unsafe { transport::read_start(c(), child).unwrap() };
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "a restarted read holds the loop again"
+    );
+    assert!(pump_until(|| received() == b"held"));
+
+    let restarted = unsafe {
+        transport::read_stop(c(), child).unwrap();
+        transport::read_start(c(), child).unwrap();
+        (*c()).read_operation()
+    };
+    assert!(restarted.is_some());
+    let deadline = Instant::now() + Duration::from_millis(50);
+    pump_until(|| Instant::now() >= deadline);
+    assert_eq!(
+        unsafe { (*c()).read_operation() },
+        restarted,
+        "the stopped read's completion must not clear its restart"
+    );
+    peer.write_all(b"+again").unwrap();
+    assert!(pump_until(|| received() == b"held+again"));
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
 thread_local! {
     static REPLACEMENT: Cell<Option<std::net::SocketAddr>> = const { Cell::new(None) };
 }
