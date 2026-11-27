@@ -9,6 +9,7 @@
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
 mod accessor_lookup;
+mod accessors;
 mod copy;
 mod define;
 mod lookup;
