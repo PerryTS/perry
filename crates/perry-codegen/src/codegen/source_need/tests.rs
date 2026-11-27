@@ -198,7 +198,7 @@ fn a_parent_class_is_reachable_from_its_subclass() {
 
 #[test]
 fn a_fresh_class_evaluation_carries_its_template() {
-    let (m, need) = run("function f() { class K {} return K; } const a: any = f(), b: any = f(); console.log(String(a));");
+    let (m, need) = run("function K() {} function f() { class K {} return K; } const a: any = f(), b: any = f(); console.log(String(a), K());");
     let e = Ent::Class(0, class_id(&m, "K"));
     assert_eq!(strict(&need, e), Class3::MayStringify);
     assert!(known(&need, e));

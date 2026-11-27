@@ -932,9 +932,12 @@ impl<'a> Build<'a> {
             // Every evaluation of a class shares its template's source text.
             Expr::ClassExprFresh { template, .. } => {
                 self.unmodeled(cx, e);
-                match self.resolve_name(mi, template) {
-                    Some(Resolved::Node(n)) => vec![n],
-                    _ => vec![],
+                match self.class_by_name(mi, template) {
+                    Some(cid) => {
+                        self.mark_valued(Ent::Class(mi, cid));
+                        vec![self.node(Key::Ent(Ent::Class(mi, cid)))]
+                    }
+                    None => vec![],
                 }
             }
             Expr::ExternFuncRef { name, .. } => match self.resolve_name(mi, name) {
