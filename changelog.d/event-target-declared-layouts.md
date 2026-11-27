@@ -1,0 +1,1 @@
+EventTarget, AbortSignal, AbortController, Event and CustomEvent instances are born on layouts each family declares when its prototype is created, so the first object is as cheap as later ones. The learned birth shape recorded from the first object is removed.
