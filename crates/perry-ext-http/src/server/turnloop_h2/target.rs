@@ -56,7 +56,7 @@ impl Target {
                 // resolving): the session's `'close'` is owed now. The id is
                 // not freed, because the lookup may still answer under it.
                 if tl::close(id).is_err() && super::conn::owns(id) {
-                    let session_handle = super::conn::release(id);
+                    let session_handle = super::conn::release(id, false);
                     crate::server::http2_server::push_h2_event(
                         crate::server::http2_server::Http2PendingEvent::ClientClose {
                             session_handle,

@@ -925,6 +925,16 @@ pub fn close(id: i64) -> NetResult<()> {
                 return Err(not_found("close"));
             };
             if entry.closing {
+                if attempt {
+                    // The caller closes the socket a failed attempt is still
+                    // closing: its `Closed` ends the connect instead.
+                    let (handle, subsystem) = (entry.handle, entry.subsystem);
+                    net.plans.remove(&id);
+                    net.backlogs.remove(&id);
+                    if !transport::tearing_down() {
+                        closing::queue_id(id, subsystem, handle);
+                    }
+                }
                 return Ok(());
             }
             entry.closing = true;

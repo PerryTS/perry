@@ -253,6 +253,7 @@ pub(crate) fn decline_client_session(session_handle: i64) {
         message: NO_LOOP_MESSAGE.to_string(),
         code: None,
     });
+    push_h2_event(Http2PendingEvent::ClientClose { session_handle });
 }
 
 /// `options.rejectUnauthorized` for `http2.connect`, defaulting to Node's own

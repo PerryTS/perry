@@ -1317,7 +1317,7 @@ pub(super) fn on_eof(id: impl Into<Target>) {
 /// The connection's terminal completion, delivered in the close-callbacks
 /// phase: the session it carried is destroyed and emits `'close'` here.
 fn on_closed(id: i64, teardown: bool) {
-    let session = release(id);
+    let session = release(id, teardown);
     // No completion can name this id again, so it goes back to the shared
     // band rather than leaking one per connection.
     perry_ffi::free_handle_id(id);
@@ -1328,8 +1328,10 @@ fn on_closed(id: i64, teardown: bool) {
 
 /// Release a connection whose transport is gone, returning the session it
 /// carried. The ownership entry may be all that is left — an earlier failed
-/// write dropped the record — and it still has to go.
-pub(super) fn release(id: i64) -> i64 {
+/// write dropped the record — and it still has to go. During agent teardown
+/// its streams queue no events: no JS may run for them, here or on another
+/// agent's pump.
+pub(super) fn release(id: i64, teardown: bool) -> i64 {
     let session = owned_ids()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1343,7 +1345,7 @@ pub(super) fn release(id: i64) -> i64 {
     if let Some(mut conn) = record {
         conn.destroyed = true;
         let live: Vec<u32> = conn.streams.iter().map(|s| s.h2_id).collect();
-        for stream_id in live {
+        for stream_id in live.into_iter().filter(|_| !teardown) {
             stream::terminate(&mut conn, stream_id, Some("ECONNRESET"));
         }
         crate::server::http2_server::mark_turnloop_session_closed(conn.session_handle);

@@ -307,6 +307,12 @@ fn dispatch_h2_event(event: Http2PendingEvent) {
             }
         }
         Http2PendingEvent::ClientConnect { session_handle } => {
+            // A session that closed first never connects.
+            if get_handle::<Http2SessionHandle>(session_handle)
+                .is_some_and(|session| session.close_emitted || session.destroyed)
+            {
+                return;
+            }
             if !local_client_connect_ready(session_handle) {
                 push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
                 return;
