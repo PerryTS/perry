@@ -311,6 +311,13 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        // P-PROTOKEY: a field made later joins the class constructor's
+        // unknown-key read, `prototype` never (`class_any_read`).
+        if let Some(&w) = self.class_any_reads.get(&t) {
+            if self.atoms[a as usize] != "prototype" {
+                self.edge(n, w);
+            }
+        }
         if self.is_num_atom(a) || self.is_escaped(t) {
             self.enum_index_field(t, n);
         }

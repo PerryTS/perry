@@ -537,7 +537,12 @@ impl<'a> Gen<'a> {
                     }
                     (Expr::ObjectKeys(..), Some(&o)) => self.m.cons(o, Cons::OwnKeys { dst: fa }),
                     (Expr::ObjectGetOwnPropertySymbols(..), _) => self.m.add_prim(fa, prim::SYMBOL),
-                    (Expr::ReflectOwnKeys(..), _) => self.m.add_prim(fa, prim::STR | prim::SYMBOL),
+                    // P-PROTOKEY: its Strings are reflective keys.
+                    (Expr::ReflectOwnKeys(..), _) => {
+                        self.m.add_prim(fa, prim::SYMBOL);
+                        let set = self.m.reflective_key_strs();
+                        self.m.add_s(fa, &[], prim::STR, set);
+                    }
                     _ => self.m.add_prim(fa, prim::STR),
                 }
                 let n = self.new_ordinary_arr_from(mi, "keys", &[fa]);

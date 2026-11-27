@@ -2315,6 +2315,18 @@ impl Model {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
                             self.load_from(origin, obj, Key::Any(shape), dst);
                         }
+                        // P-PROTOKEY: a reflective own key beside other
+                        // values (a Symbol of `Reflect.ownKeys`) reads
+                        // under its shape too: a class's `prototype`.
+                        if named
+                            && self.key_may_be_reflective(n)
+                            && self
+                                .idx_done
+                                .insert((n, obj, dst, crate::model::IDX_REFL_KEY))
+                        {
+                            let s = self.any_string_shape();
+                            self.load_from(origin, obj, Key::Any(s), dst);
+                        }
                     }
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
@@ -2491,7 +2503,7 @@ impl Model {
                 // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
                 // ForIn/OfHeadEvaluation step 6.a).
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.for_in_every_key(call, ft);
+                    self.for_in_every_key(call, ft, list == crate::model::KeyList::OwnNames);
                 }
                 for &t in toks {
                     self.for_in_tok(call, ft, t, list);

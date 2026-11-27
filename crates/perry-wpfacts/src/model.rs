@@ -90,6 +90,9 @@ pub const IDX_SPREAD_STR: u16 = 47;
 /// (`builtins::collections::apply_positions`): once per (array node, target,
 /// call).
 pub const IDX_APPLY_POS: u16 = 69;
+/// P-PROTOKEY: an `IdxKey` read under a key that may be a reflective own key
+/// (`Model::key_may_be_reflective`).
+pub const IDX_REFL_KEY: u16 = 70;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -3091,6 +3094,9 @@ pub struct Model {
     /// shape admits and every write under a computed key
     /// (`solve/shaped_keys.rs`).
     pub shaped_reads: FxHashMap<(Tok, KeyShapeId), NodeId>,
+    /// P-PROTOKEY: a class constructor's own fields under a key of unknown
+    /// String (`Model::class_any_read`): every own field but `prototype`.
+    pub class_any_reads: FxHashMap<Tok, NodeId>,
     /// A shaped key's store into an object: it reaches only the fields
     /// whose name the shape admits, and computed-key reads.
     pub shaped_stores: FxHashMap<(Tok, KeyShapeId), NodeId>,

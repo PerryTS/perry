@@ -347,6 +347,39 @@ impl Model {
                 .all(|&a| !self.atom_is_mark(a))
     }
 
+    /// P-PROTOKEY: the Strings a reflective own-key enumeration gives
+    /// (`Object.getOwnPropertyNames`, ECMA-262 20.1.2.10; `Reflect.ownKeys`,
+    /// 28.1.11; the keys of `Object.getOwnPropertyDescriptors`, 20.1.2.9)
+    /// when the keys are not known: any String, as the prefix entry of ""
+    /// (rule M3: every String starts with ""), whose shape is the glob `*`
+    /// (`any_string_shape`). A read under it reads every own key a String
+    /// may name, a class constructor's `prototype` among them; a key of
+    /// unknown String (`STRS_TOP`, shape 0) does not (`class_any_read`).
+    pub(crate) fn reflective_key_strs(&mut self) -> StrSet {
+        let a = self.prefix_atom("");
+        let set = self.str_set(&[a]);
+        self.run_born(set)
+    }
+
+    /// May the key node `n` hold a reflective own key
+    /// (`reflective_key_strs`)?
+    pub(crate) fn key_may_be_reflective(&mut self, n: NodeId) -> bool {
+        let s = self.nodes[n as usize].strs;
+        if s & !STRS_RUN < STRS_SET0 {
+            return false;
+        }
+        let a = self.prefix_atom("");
+        self.str_atoms(s).contains(&a)
+    }
+
+    /// Is `t` the object `Object.getOwnPropertyDescriptors` made (one
+    /// property per own key of its argument, enumerable or not)?
+    pub(crate) fn reflective_box(&self, t: Tok) -> bool {
+        t != TOP
+            && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "descriptors", .. }))
+    }
+
     /// Is the entry a solver spelling (a prefix or an infix), not a
     /// program constant (`str_const_atom`)?
     pub(crate) fn atom_is_mark(&self, a: Atom) -> bool {
