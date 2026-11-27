@@ -237,7 +237,7 @@ pub(super) unsafe fn value_string_equals(value: f64, expected: &[u8]) -> bool {
 
     let ptr = perry_runtime::value::js_get_string_pointer_unified(value)
         as *const perry_runtime::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !perry_runtime::value::addr_class::is_above_handle_band(ptr as usize) {
         return false;
     }
 
@@ -261,7 +261,7 @@ pub(super) unsafe fn js_string_value_to_string(value: f64, coerce: bool) -> Opti
         perry_runtime::value::js_get_string_pointer_unified(value)
             as *const perry_runtime::StringHeader
     };
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !perry_runtime::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     let len = (*ptr).byte_len as usize;

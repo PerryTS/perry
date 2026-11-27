@@ -695,12 +695,14 @@ unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
     let top = chunk_bits >> 48;
     let addr = if top == 0x7FFD || top == 0x7FFF {
         (chunk_bits & POINTER_MASK) as usize
-    } else if top == 0 && chunk_bits >= 0x10000 {
+    } else if top == 0
+        && perry_runtime::value::addr_class::is_above_handle_band(chunk_bits as usize)
+    {
         chunk_bits as usize
     } else {
         return None;
     };
-    if addr < 0x1000 {
+    if !perry_runtime::value::addr_class::is_above_handle_band(addr) {
         return None;
     }
     perry_runtime::buffer::bytes::no_gc(|scope| {
@@ -715,7 +717,7 @@ unsafe fn raw_pointer_addr(bits: u64) -> Option<usize> {
     let top = bits >> 48;
     if top == 0x7FFD || top == 0x7FFF {
         Some((bits & POINTER_MASK) as usize)
-    } else if top == 0 && bits >= 0x10000 {
+    } else if top == 0 && perry_runtime::value::addr_class::is_above_handle_band(bits as usize) {
         Some(bits as usize)
     } else {
         None

@@ -48,7 +48,7 @@ pub(super) fn ptr_addr_from_nanbox(value: f64) -> Option<usize> {
     let top = bits >> 48;
     if top == 0x7FFD || top == 0x7FFF {
         Some((bits & POINTER_MASK) as usize)
-    } else if top == 0 && bits >= 0x10000 {
+    } else if top == 0 && perry_runtime::value::addr_class::is_above_handle_band(bits as usize) {
         Some(bits as usize)
     } else {
         None
