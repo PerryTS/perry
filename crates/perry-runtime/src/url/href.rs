@@ -359,31 +359,35 @@ pub(crate) fn offsets(url: *mut ObjectHeader) -> Offsets {
     }
 }
 
-/// The href string header and its text. A URL's serialization is ASCII.
-///
-/// # Safety
-/// `url` is a live URL object. The returned text borrows the href string,
-/// so it is valid only until the next allocation.
-unsafe fn href_text<'a>(url: *mut ObjectHeader) -> (*const crate::StringHeader, &'a str) {
-    let v = href_value(url);
-    let s = crate::value::js_nanbox_get_pointer(v) as *const crate::StringHeader;
-    let bytes = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
-    (s, std::str::from_utf8_unchecked(bytes))
+/// Run `f` over the href text. A URL's serialization is ASCII, and `store`
+/// writes it as a string, so the value is never anything else. `f` must not
+/// allocate on the GC heap while it holds the text.
+fn with_href<R: Default>(url: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> R {
+    crate::string::with_string_value_bytes(href_value(url), |bytes| {
+        // SAFETY: the serialization of a parsed URL is ASCII.
+        f(unsafe { std::str::from_utf8_unchecked(bytes) })
+    })
+    .unwrap_or_default()
 }
 
 /// The href as an owned Rust string.
 pub(crate) fn href_string(url: *mut ObjectHeader) -> String {
-    unsafe { href_text(url).1.to_string() }
+    with_href(url, str::to_string)
 }
 
 /// `url.<component>` as a JS string: a slice of href.
 pub(crate) fn component_value(url: *mut ObjectHeader, component: Component) -> f64 {
-    let (s, href) = unsafe { href_text(url) };
-    let (start, end) = offsets(url).range(href, component);
-    if start == 0 && end == href.len() {
+    let o = offsets(url);
+    let (start, end, href_len) = with_href(url, |href| {
+        let (start, end) = o.range(href, component);
+        (start, end, href.len())
+    });
+    if start == 0 && end == href_len {
         return href_value(url);
     }
     let len = (end - start) as u32;
+    // `store` creates href with `create_string_f64`: a heap string.
+    let s = crate::value::js_nanbox_get_pointer(href_value(url)) as *const crate::StringHeader;
     let part = crate::string::string_copy_range(
         s,
         start,
@@ -396,22 +400,24 @@ pub(crate) fn component_value(url: *mut ObjectHeader, component: Component) -> f
 
 /// `url.<component>` as a Rust string.
 pub(crate) fn component_string(url: *mut ObjectHeader, component: Component) -> String {
-    let (_, href) = unsafe { href_text(url) };
-    let (start, end) = offsets(url).range(href, component);
-    href[start..end].to_string()
+    let o = offsets(url);
+    with_href(url, |href| {
+        let (start, end) = o.range(href, component);
+        href[start..end].to_string()
+    })
 }
 
 /// `url.origin` as a JS string.
 pub(crate) fn origin_value(url: *mut ObjectHeader) -> f64 {
-    let (_, href) = unsafe { href_text(url) };
-    let text = origin(href, &offsets(url));
+    let o = offsets(url);
+    let text = with_href(url, |href| origin(href, &o));
     create_string_f64(&text)
 }
 
 /// The URL's raw query (`None` without one), owned.
 pub(crate) fn query_string(url: *mut ObjectHeader) -> Option<String> {
-    let (_, href) = unsafe { href_text(url) };
-    offsets(url).query(href).map(str::to_string)
+    let o = offsets(url);
+    with_href(url, |href| o.query(href).map(str::to_string))
 }
 
 /// `url.<component>` of an object that may not be a URL: "" for any other
@@ -538,5 +544,38 @@ mod tests {
             "http://h:8080/p?a=1#f"
         );
         assert!(apply(href, Setter::Href("nope")).is_err());
+    }
+
+    /// The four WHATWG steps third_party/url fixes (see its VENDORED.md);
+    /// expected strings from node 26.
+    #[test]
+    fn whatwg_file_slashes_drive_letters_and_opaque_spaces() {
+        for (input, base, href) in [
+            ("file:////x", None, "file:////x"),
+            (r"file:\\\\x", None, "file:////x"),
+            ("file://localhost//x", None, "file:////x"),
+            ("file://", None, "file:///"),
+            ("file:///C|/x", None, "file:///C:/x"),
+            ("file:///C|/../..", None, "file:///C:/"),
+            ("C|/", Some("file://host/dir/file"), "file://host/C:/"),
+            ("/", Some("file://h/C:/a/b"), "file://h/C:/"),
+            ("///test", Some("http://example.org/"), "http://test/"),
+            ("/\\x/y", Some("sc://h/a"), "sc://h/\\x/y"),
+            ("data:space  %20", None, "data:space  %20"),
+            ("data:space  ?q", None, "data:space %20?q"),
+            ("sc:a \t ?q#f", None, "sc:a %20?q#f"),
+        ] {
+            assert_eq!(parts(input, base)[0], href, "{input:?} against {base:?}");
+        }
+        assert_eq!(
+            apply("data:space  ?q#f", Setter::Query(None)).unwrap().href,
+            "data:space %20#f"
+        );
+        assert_eq!(
+            apply("file:///unicorn", Setter::Pathname("//monkey/..//"))
+                .unwrap()
+                .href,
+            "file://///"
+        );
     }
 }

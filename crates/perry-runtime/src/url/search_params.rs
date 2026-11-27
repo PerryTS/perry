@@ -475,18 +475,8 @@ fn stored_pairs(params: *mut ObjectHeader) -> Vec<(f64, f64)> {
 
 /// True when the stored string `value` spells `text`.
 fn stored_eq(value: f64, text: &str) -> bool {
-    let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    if jsval.is_string() {
-        let ptr = jsval.as_string_ptr();
-        unsafe {
-            let bytes = std::slice::from_raw_parts(
-                crate::string::string_data(ptr),
-                (*ptr).byte_len as usize,
-            );
-            return bytes == text.as_bytes();
-        }
-    }
-    get_string_content(value) == text
+    crate::string::with_string_value_bytes(value, |bytes| bytes == text.as_bytes())
+        .unwrap_or_else(|| get_string_content(value) == text)
 }
 
 /// An array of fresh `[name, value]` pairs over the stored strings.
