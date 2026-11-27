@@ -191,7 +191,10 @@ unsafe fn with_arguments<R>(args: *const f64, len: usize, f: impl FnOnce(*const 
 include!(concat!(env!("OUT_DIR"), "/native_export_values.rs"));
 
 /// These declarations share an intrinsic value with the global object. Giving
-/// them a fresh callable would break Buffer/URL/TextDecoder identity.
+/// them a fresh callable would break Buffer/URL/TextDecoder identity. The
+/// value is the realm's original constructor (`%Blob%`), as in node: after
+/// `globalThis.Blob = X`, `require("buffer").Blob` is still `%Blob%`, so the
+/// export never reads the global binding.
 #[inline(always)]
 fn intrinsic_export(module: &str, property: &str) -> Option<f64> {
     if let Some(value) = worker_messaging_constructor_value(module, property) {
@@ -206,10 +209,7 @@ fn intrinsic_export(module: &str, property: &str) -> Option<f64> {
             | ("url", "URL" | "URLSearchParams" | "URLPattern")
             | ("util", "TextEncoder" | "TextDecoder")
     ) {
-        return Some(js_get_global_this_builtin_value(
-            property.as_ptr(),
-            property.len(),
-        ));
+        return Some(crate::object::builtin_constructor_value(property));
     }
     if module == "crypto.webcrypto" {
         return super::super::global_this::webcrypto_method_value(property);

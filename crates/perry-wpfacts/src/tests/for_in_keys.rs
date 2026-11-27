@@ -171,7 +171,7 @@ fn a_literal_that_escapes_after_the_runs_runs_the_body_with_every_key() {
     g.feed_parent_values();
     g.m.summarize_and_replay();
     g.m.solve();
-    let &(call, ft, t) = g.m.for_in_runs.first().expect("a run per key");
+    let &(call, ft, t, _) = g.m.for_in_runs.first().expect("a run per key");
     assert!(!g.m.for_in_any.contains(&(call, ft)));
     assert!(!g.m.settle_for_in(), "nothing changed since the runs");
     let r = g.m.reason("test: unknown code");

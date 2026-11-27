@@ -116,7 +116,7 @@ impl Model {
         (o, a)
     }
 
-    fn json_clone(&mut self, like: Tok, ctx: CallId, display: String) -> Tok {
+    pub(super) fn json_clone(&mut self, like: Tok, ctx: CallId, display: String) -> Tok {
         let TokKind::Obj(tm, _) = self.toks[like as usize] else {
             unreachable!("a JSON root is an object token")
         };

@@ -18,7 +18,7 @@ fn top_store(key: &str) -> String {
 fn top_store_of(key: &str, value: &str) -> String {
     format!(
         r#"
-        const f: any = (globalThis as any)[process.argv[2] ?? "Object"];
+        declare function opaque(): any; const f: any = opaque();
         const u: any = f(process.argv[3]);
         u[{key}] = {value};
         "#
@@ -100,9 +100,11 @@ fn a_computed_store_of_a_known_arrow_leaves_for_of_final() {
 }
 
 /// Twin: a key that may be `[Symbol.iterator]` and a stored value unknown
-/// code returns: the loop may iterate what that value returns.
+/// code returns. P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype: the store into `u` writes no
+/// `%GeneratorPrototype%` member, so the loop steps the generator: the
+/// yielded `Svc` (or the throw).
 #[test]
-fn a_computed_store_of_an_unknown_value_leaves_for_of_open() {
+fn a_computed_store_of_an_unknown_value_leaves_for_of_final() {
     let store = top_store_of(
         r#"Math.random() > 0.5 ? Symbol.iterator : "z""#,
         "f(process.argv[5])",
@@ -112,13 +114,14 @@ fn a_computed_store_of_an_unknown_value_leaves_for_of_open() {
         "for (const s of gen()) { console.log(g(s)); break; }",
     );
     let s = site(&pf, "size");
-    assert!(!proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
+    assert!(proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
 }
 
-/// Twin: a stored function under `[Symbol.iterator]` runs as the loop's
-/// iterator method; the iterator it returns comes from unknown code.
+/// Twin: a stored function under `[Symbol.iterator]`. P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype:
+/// it is stored on no `%GeneratorPrototype%`, so the loop steps the
+/// generator.
 #[test]
-fn a_stored_iterator_method_returning_an_unknown_value_leaves_for_of_open() {
+fn a_stored_iterator_method_returning_an_unknown_value_leaves_for_of_final() {
     let store = top_store_of(
         "Symbol.iterator",
         "function () { return f(process.argv[5]); }",
@@ -128,7 +131,7 @@ fn a_stored_iterator_method_returning_an_unknown_value_leaves_for_of_open() {
         "for (const s of gen()) { console.log(g(s)); break; }",
     );
     let s = site(&pf, "size");
-    assert!(!proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
+    assert!(proven(&s.verdict), "{:?} {:?}", s.receivers, s.verdict);
 }
 
 /// Control: a key outside the image (`forEach`, an add on

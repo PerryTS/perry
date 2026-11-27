@@ -82,9 +82,12 @@ const FUNCTION: &[(&str, Mem)] = &[
     ("name", Mem::Prim(prim::STR)),
     ("toString", Mem::Fn),
     (WK_HAS_INSTANCE, Mem::Fn),
-    // Annex B: throwing accessors on %Function.prototype%.
-    ("arguments", Mem::Prim(prim::NULL)),
-    ("caller", Mem::Prim(prim::NULL)),
+    // %Function.prototype%'s `arguments` and `caller` accessors, whose
+    // getter and setter are %ThrowTypeError% (ECMA-262 10.2.4
+    // AddRestrictedFunctionProperties): a getter the model lists as a
+    // method (`loads::family_member` runs its declaration).
+    ("arguments", Mem::Fn),
+    ("caller", Mem::Fn),
 ];
 
 const ARRAY: &[(&str, Mem)] = &[
@@ -701,7 +704,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" | "nullrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
         | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
@@ -723,7 +726,7 @@ pub(crate) fn box_chain(what: &str) -> BoxChain {
             BoxChain::Object
         }
         "keys" | "arraybox" => BoxChain::Array,
-        "groups" => BoxChain::Null,
+        "groups" | "nullrecord" => BoxChain::Null,
         _ => BoxChain::Unknown,
     }
 }
@@ -1011,6 +1014,24 @@ fn realm_statics(ns: BuiltinNs, prototype: NsProto) -> NsStatics {
     NsStatics { prototype, members }
 }
 
+/// A host object the realm declares as entry `name` (its one birth): its
+/// own properties (`RealmEntry::own`) and its [[Prototype]]
+/// (`RealmEntry::proto`), as the runtime builds them. No declaration, or an
+/// own value this description has no member for: undescribed.
+fn host_statics(name: &str) -> NsStatics {
+    let entry = realm_entry(name);
+    let prototype = match entry.and_then(|e| e.proto) {
+        Some("Object.prototype") => NsProto::Object,
+        Some("Function.prototype") => NsProto::Function,
+        _ => NsProto::Unknown(Family::Object),
+    };
+    let members = entry
+        .map(|e| e.own)
+        .filter(|own| own.iter().all(|p| realm_mem(p).is_some()))
+        .map(Own::Realm);
+    NsStatics { prototype, members }
+}
+
 /// The own properties and [[Prototype]] of a builtin namespace. Missing
 /// own descriptions remain opaque even when a structural parent is known.
 pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
@@ -1267,7 +1288,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
             (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
         }
-        BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
+        // `console` is one native namespace object (native_module.rs
+        // `js_create_native_module_namespace`), its one birth declared by
+        // the realm: its own keys and [[Prototype]] are that declaration.
+        BuiltinNs::Console => return host_statics("console"),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
         // `Other`, the HIR global sentinel (what a bare global name is read
@@ -1282,28 +1306,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         prototype,
     }
 }
-
-/// The members of `console` the runtime gives every program (its methods).
-const CONSOLE: &[(&str, Mem)] = &[
-    ("assert", FN),
-    ("count", FN),
-    ("countReset", FN),
-    ("debug", FN),
-    ("dir", FN),
-    ("dirxml", FN),
-    ("error", FN),
-    ("group", FN),
-    ("groupCollapsed", FN),
-    ("groupEnd", FN),
-    ("info", FN),
-    ("log", FN),
-    ("table", FN),
-    ("time", FN),
-    ("timeEnd", FN),
-    ("timeLog", FN),
-    ("trace", FN),
-    ("warn", FN),
-];
 
 /// The own members of `process.stdout` / `process.stderr` in both of the
 /// runtime's layouts (`build_stream_object_with_write`: the TTY write stream
@@ -1344,9 +1346,15 @@ const STDIN: &[(&str, Mem)] = &[
     ("write", FN),
 ];
 
-/// A host object of perry's runtime (`console`, the stdio streams): only its
-/// own members are described ([`ns_statics`]); a key it does not list may be
-/// on a chain the model does not describe, so it is no absent key.
+/// A host object of perry's runtime (`console`, the stdio streams): its own
+/// members are the runtime's host methods (DECISIONS 255 funnel,
+/// `builtins::host_of`). `console` is described by its realm declaration,
+/// own keys and chain ([`host_statics`]). A stdio stream is born in one of
+/// two layouts chosen at run time (`build_stream_object_with_write`:
+/// `tty::is_tty_fd`); the realm declares the non-TTY birth only, the TTY one
+/// (its tty class, chain `node:tty.WriteStream.prototype`) is not declared:
+/// only the members both layouts own are listed, and a key they do not list
+/// may be on the TTY layout or its chain, so it is no absent key.
 pub(super) fn is_host(ns: BuiltinNs) -> bool {
     matches!(
         ns,
@@ -1373,21 +1381,17 @@ pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
     }
 }
 
-/// The global object's own properties the runtime reads by name, beside
-/// its declared constructors (`undeclared::global_store_escapes`): the
-/// `Temporal` namespace its Temporal constructors are found through
-/// (`object/global_this/math_temporal.rs`, `js_object_get_field_by_name`
-/// of the global under "Temporal"), and a worker global's message
-/// handlers (`worker_threads/worker_surface.rs` `web_worker_global_handler`,
-/// read by `inbox.rs` and `channel_pump.rs`; `worker_pump.rs`'s
-/// `on<type>`). Every other key of the global object is read only by
-/// program code, through the global's fields (a declared global's load
-/// reads the field beside the realm's value, `declared_global_load`).
+/// The global object's own properties perry-runtime reads by name at run
+/// time (owner decision 2026-11-24, RTREAD): derived by the realm table
+/// from the runtime's own by-name reads (`RUNTIME_GLOBAL_READS`,
+/// perry-runtime-manifest `realm_global_reads`), never written down. A name
+/// compiled code picks (`x instanceof Name`, a native-module export getter)
+/// is read at that program site, which the model reads there. Every other
+/// key of the global object is read only by program code, through the
+/// global's fields (a declared global's load reads the field beside the
+/// realm's value, `declared_global_load`).
 pub(super) fn global_runtime_reads(name: &str) -> bool {
-    matches!(
-        name,
-        "Temporal" | "WebAssembly" | "onmessage" | "onmessageerror" | "onerror"
-    )
+    perry_realm_table::RUNTIME_GLOBAL_READS.contains(&name)
 }
 
 /// The member `name` of a builtin namespace object: its own statics, then
@@ -1446,6 +1450,18 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
             NsProto::Unknown(family) => return family,
         }
     }
+}
+
+/// Is namespace `ns` an ordinary object, never callable: the realm
+/// describes its [[Prototype]] as `Object.prototype` (`NsProto::Object`:
+/// `Reflect`, `JSON`, `Math`, the global object, `process`, a node module
+/// namespace object, a host object declared with that prototype such as
+/// `console`). Every realm function object has `Function.prototype` or a
+/// constructor as its [[Prototype]] (CreateBuiltinFunction, ECMA-262
+/// 10.3.4), and [[Call]] is fixed at birth. An undescribed chain
+/// (`NsProto::Unknown`) may be a function.
+pub(super) fn ns_ordinary_object(ns: BuiltinNs) -> bool {
+    matches!(ns_statics(ns).prototype, NsProto::Object)
 }
 
 /// What a key that may name any member reads on the family's chain

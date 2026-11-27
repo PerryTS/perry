@@ -12,11 +12,12 @@ use super::*;
 fn verdict(recv: &str, body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const k = Math.floor(Math.random() * 2);
         const w: any = k > 0 ? 3n : 2;
-        const take = (x: any) => (globalThis as any).hostTake(x);
+        const take = (x: any) => external(x);
         const r: any = {recv};
         const o: any = new Svc();
         {body}
@@ -79,7 +80,7 @@ case!(
     arr_digits_unknown_string,
     true,
     ARR,
-    "r[w] = o; const s: any = (globalThis as any).hostKey(); take(r[s]);"
+    "r[w] = o; const s: any = external(); take(r[s]);"
 );
 case!(
     arr_digits_for_in,
@@ -122,7 +123,7 @@ case!(
     obj_digits_unknown_string,
     true,
     OBJ,
-    "r[w] = o; const s: any = (globalThis as any).hostKey(); take(r[s]);"
+    "r[w] = o; const s: any = external(); take(r[s]);"
 );
 case!(
     obj_digits_for_in,
@@ -248,11 +249,11 @@ case!(
     arr_unknown_key_names_to_json,
     true,
     ARR,
-    "const s: any = (globalThis as any).hostKey(); r[s] = o; take(r.toJSON);"
+    "const s: any = external(); r[s] = o; take(r.toJSON);"
 );
 case!(
     obj_unknown_key_names_to_json,
     true,
     OBJ,
-    "const s: any = (globalThis as any).hostKey(); r[s] = o; take(r.toJSON);"
+    "const s: any = external(); r[s] = o; take(r.toJSON);"
 );

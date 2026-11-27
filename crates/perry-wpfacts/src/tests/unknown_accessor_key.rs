@@ -11,10 +11,11 @@ use super::*;
 fn kind_verdict(define: &str, read: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         declare const c: boolean;
         declare const name: string;
-        const h: any = (globalThis as any)[process.argv[2]]();
-        const g: any = (globalThis as any)[process.argv[2]];
+        const h: any = external();
+        const g: any = external();
         {define}
         class Node {{ kind: number; constructor(k: number) {{ this.kind = k; }} }}
         class Holder {{ a = 1; }}
@@ -69,9 +70,10 @@ fn an_unknown_getter_under_a_computed_key_writes_every_key() {
 fn an_unknown_getter_on_a_program_object_reads_top_under_its_key() {
     // The holder is the program's own object: its accessor key reads ⊤
     // (the getter is unknown code), and the object escapes to it.
-    let src = r#"import "unseen-host";
+    let src = r#"
+        declare function external(x?: unknown): any;import "unseen-host";
 
-        const g: any = (globalThis as any).hostGet;
+        const g: any = external();
         class Node { kind: number; constructor(k: number) { this.kind = k; } }
         const o: any = { k: new Node(1) };
         Object.defineProperty(o, "k", { get: g });

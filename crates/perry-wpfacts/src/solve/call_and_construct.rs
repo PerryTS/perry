@@ -93,7 +93,13 @@ impl Model {
             call
         };
         let prev = self.cur_native_call.replace(call);
+        if let Some(s) = self.stop_top.as_mut() {
+            s.natives.push((call, t));
+        }
         let native = self.native_call(call, t, this_tok);
+        if let Some(s) = self.stop_top.as_mut() {
+            s.natives.pop();
+        }
         self.cur_native_call = prev;
         if native {
             return;
@@ -142,11 +148,15 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
-            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
-            // a direct one takes today's path too.
+            // Rule PXAPPLY: a direct call of a Proxy is its [[Call]]
+            // (`proxy_call`: the apply trap or the forward, once its
+            // target is callable).
             TokKind::Proxy(p) => {
-                self.proxy_degrade(p, "call");
-                self.call_tok(call, TOP, this_tok);
+                let c = match this_tok {
+                    Some(this) => Cons::CallThis { call, this },
+                    None => Cons::Call { call },
+                };
+                self.proxy_call(NO_NODE, c, p);
             }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
@@ -169,7 +179,13 @@ impl Model {
             TokKind::Builtin(ns) => self.with_b(|m| {
                 let prev = std::mem::replace(&mut m.cur_this, this_tok);
                 let pc = m.cur_native_call.replace(call);
+                if let Some(s) = m.stop_top.as_mut() {
+                    s.natives.push((call, t));
+                }
                 builtins::call_builtin_ns(m, ns, call);
+                if let Some(s) = m.stop_top.as_mut() {
+                    s.natives.pop();
+                }
                 m.cur_native_call = pc;
                 m.cur_this = prev;
             }),
@@ -309,7 +325,7 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
-        if !self.realm_held && self.prov.is_some() {
+        if !self.realm_held && self.realm_nameable() && self.prov.is_some() {
             self.why_hold(
                 if t == TOP {
                     "callee-top"
@@ -333,8 +349,9 @@ impl Model {
                 crate::unksrc::held(kind, &why, call, f);
             }
         }
-        // Unknown code runs, handed values or not: it holds the realm.
-        if !self.realm_held {
+        // Unknown code runs, handed values or not: it holds the realm where
+        // code beside the program may name it (`realm_nameable`).
+        if !self.realm_held && self.realm_nameable() {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             if self.keysnap.is_some() {
                 self.keysnap_at(
@@ -352,7 +369,17 @@ impl Model {
         if t == TOP {
             self.top_calls += 1;
         }
-        let r = if t == TOP && self.diagnostic.is_some() {
+        let foreign = self.foreign_calls.contains(&call) || (t == TOP && self.foreign_fn_value);
+        let r = if foreign {
+            match self.foreign_reason {
+                Some(r) => r,
+                None => {
+                    let r = self.reason("passed to foreign code (a declared extern)");
+                    self.foreign_reason = Some(r);
+                    r
+                }
+            }
+        } else if t == TOP && self.diagnostic.is_some() {
             self.reason(&format!(
                 "passed to a call of an unknown function value [call {call}]"
             ))
@@ -441,9 +468,7 @@ impl Model {
         }
         if !self.sum.ready {
             // Summaries do not exist yet: bind once they do.
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Bind(call, t));
+            self.defer(crate::summary::Deferred::Bind(call, t));
             return;
         }
         if self.sum.templates.contains(&call) {
@@ -815,9 +840,7 @@ impl Model {
     /// `new Name(...)` of a builtin constructor, once per call.
     pub(crate) fn new_named(&mut self, name: Atom, call: CallId) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::NewNamed(name, call));
+            self.defer(crate::summary::Deferred::NewNamed(name, call));
             return;
         }
         if !self.construct_done.insert((call, TOP)) {
@@ -894,9 +917,7 @@ impl Model {
     pub fn construct(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Construct(call, t));
+            self.defer(crate::summary::Deferred::Construct(call, t));
             return;
         }
         if !self.construct_done.insert((call, t)) {
@@ -908,6 +929,16 @@ impl Model {
             return self.construct(call, TOP);
         }
         let c = self.calls[call as usize].clone();
+        // `new` of a `node:vm` function (`new vm.Script(src)`, its value
+        // through the module object): it compiles source text its methods
+        // run, so interpreted code runs where this construct runs (DECISIONS
+        // 225/235), as at a call of one (`builtins::ns_method_inner`).
+        if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+            let root = identity.split('.').next().unwrap_or(identity);
+            if root.strip_prefix("node:").unwrap_or(root) == "vm" {
+                builtins::set_dyn_eval(self, "E14 node:vm");
+            }
+        }
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
                 let ctx = self.birth_ctx(call);
@@ -997,7 +1028,7 @@ impl Model {
                         crate::unksrc::held(kind, &why, call, f);
                     }
                 }
-                if !self.realm_held {
+                if !self.realm_held && self.realm_nameable() {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
                     if self.keysnap.is_some() {
                         self.keysnap_at(
@@ -1243,9 +1274,7 @@ impl Model {
     /// result when summarized, so known once bindings run).
     pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: Tok, dst: NodeId) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::RetObjects(call, f, dst));
+            self.defer(crate::summary::Deferred::RetObjects(call, f, dst));
             return;
         }
         let r = self.ret_for(call, f);
@@ -1518,6 +1547,8 @@ impl Model {
         }
         // A described namespace method is the ordinary member value,
         // called with its receiver. Its aliases use the very same model.
+        // (A host object's key no rule describes: `builtins::ns_method`'s
+        // last arm, `call_read_member`.)
         if !self.unit_mode {
             if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
                 if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()

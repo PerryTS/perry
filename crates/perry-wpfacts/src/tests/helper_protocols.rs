@@ -9,6 +9,7 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         {body}
@@ -61,7 +62,7 @@ fn error_message_is_to_stringed() {
 #[test]
 fn join_runs_an_elements_to_string() {
     let v = verdict(
-        "class Leak { size = 3; toString() { (globalThis as any).hostTake(this); return ''; } }
+        "class Leak { size = 3; toString() { external(this); return ''; } }
          const xs = [new Leak()]; xs.join(','); console.log(g(xs[0]));",
     );
     assert!(!proven(&v), "{v:?}");
@@ -71,7 +72,7 @@ fn join_runs_an_elements_to_string() {
 #[test]
 fn math_spread_runs_an_elements_value_of() {
     let v = verdict(
-        "class Leak { size = 3; valueOf() { (globalThis as any).hostTake(this); return 1; } }
+        "class Leak { size = 3; valueOf() { external(this); return 1; } }
          const xs: any[] = [new Leak()]; Math.max(...xs); console.log(g(xs[0]));",
     );
     assert!(!proven(&v), "{v:?}");

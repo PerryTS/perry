@@ -184,10 +184,11 @@ impl<'a> Gen<'a> {
         }
     }
 
-    pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
+    /// `key`: the key node deciding the one property (`NO_NODE`: none).
+    pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId, key: NodeId) -> NodeId {
         let vals = self.tmp("load");
         let (t, n) = self.bobj(mi, "descriptor");
-        crate::builtins::object_statics::own_descriptor(&mut self.m, o, vals, t);
+        crate::builtins::object_statics::own_descriptor(&mut self.m, o, key, vals, t);
         n
     }
 

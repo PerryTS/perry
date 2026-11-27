@@ -111,19 +111,24 @@ fn value_addr(value: f64) -> usize {
 
 fn recorded_prototype_instanceof_builtin(
     value: &crate::gc::RuntimeHandle<'_>,
-    name: &str,
+    binding: Option<&'static str>,
     constructor: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> Option<bool> {
     let addr = value_addr(value.get_nanbox_f64());
     if addr == 0 || !super::prototype_chain::has_recorded_prototype(addr) {
         return None;
     }
-    prototype_instanceof_builtin(value, name, constructor)
+    prototype_instanceof_builtin(value, binding, constructor)
 }
 
+/// OrdinaryHasInstance(C, value) by C.prototype. The dynamic entry passes C
+/// itself (`constructor`): it never reads a global binding, so an alias of a
+/// builtin answers by that builtin even after `globalThis.<Name>` was replaced.
+/// Only a static program site `x instanceof Name` (compiled to a class id)
+/// names the global `binding`; that read is the program site's.
 fn prototype_instanceof_builtin(
     value: &crate::gc::RuntimeHandle<'_>,
-    name: &str,
+    binding: Option<&'static str>,
     constructor: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> Option<bool> {
     if let Some(constructor) = constructor {
@@ -132,6 +137,7 @@ fn prototype_instanceof_builtin(
             constructor,
         ));
     }
+    let name = binding?;
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
         name.as_ptr(),

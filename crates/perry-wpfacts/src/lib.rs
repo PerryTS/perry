@@ -19,6 +19,7 @@
 pub mod bindings;
 mod booleans;
 mod born_with;
+mod k3_census;
 mod builtins;
 pub mod call_kinds;
 pub mod canonical_numbers;
@@ -63,6 +64,8 @@ pub mod records;
 mod rest_elems;
 mod rest_fields;
 mod rooted;
+mod shadow_writes;
+pub use shadow_writes::ShadowWrites;
 pub mod signatures;
 mod solve;
 mod summary;
@@ -206,13 +209,15 @@ pub struct FactsConfig {
     /// interpreted code is the ⊤ summary node; see
     /// [`ProgramFacts::interp_guard`].
     pub dynamic_code: Option<String>,
-    /// DECISIONS 235: the program holds a real eval-like source site (a
-    /// deferred eval/Function source, `node:vm`, a dynamic import of a
-    /// computed data URL): interpreted code may run from the start. Without
-    /// one, it runs only once the solve finds a call or construct that may
-    /// be the Function constructor (`builtins::interpreted_code_runs`). The
-    /// link decision (`dynamic_code`) does not feed the facts.
-    pub interpreted_sources: bool,
+    /// The program imports a computed `data:text/javascript,` URL
+    /// (`uses_data_url_dynamic_import`): the driver resolves the module
+    /// interpreted, at no site of the model, so interpreted code may run from
+    /// the start. Every other eval-like source site runs it once its body
+    /// runs (DECISIONS 225/235: a direct eval, a `node:vm` function, a call
+    /// or construct that may be the Function constructor:
+    /// `builtins::interpreted_code_runs`). The link decision
+    /// (`dynamic_code`) does not feed the facts.
+    pub data_url_import: bool,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
@@ -405,6 +410,18 @@ pub struct ProgramFacts {
     /// (`Model::array_iteration_writes`); `None`: compiled code never
     /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
     pub array_iteration_written: Option<String>,
+    /// GUARDS1: compiled code may write a typed view's metadata accessors
+    /// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array or
+    /// Buffer prototype or change such a prototype's [[Prototype]], and why
+    /// (`builtins::typed_metadata_writes`); `None`: it never does, and the
+    /// runtime's `PERRY_TYPED_NAMED_PROPS_INVALIDATED` stays clear for compiled
+    /// code. Interpreted code is [`ProgramFacts::interp_guard`]'s.
+    pub typed_metadata_written: Option<String>,
+    /// GUARDS1: compiled code may modify `%Array.prototype%` or
+    /// `%Object.prototype%` (any key, or the [[Prototype]]), and why
+    /// (`builtins::array_methods_writes`); `None`: it never does, and the
+    /// runtime's `ARRAY_METHODS_MODIFIED` bit stays clear for compiled code.
+    pub array_methods_written: Option<String>,
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
@@ -432,6 +449,10 @@ pub struct ProgramFacts {
     pub bindings: Vec<ModuleBindings>,
     /// No solved native-prototype/global write in any contributing unit.
     pub indexed_metadata_unwritten: bool,
+    /// GUARDS3: per class id, what a program write may give its instances
+    /// or its prototype (`shadow_writes`): the shadow-test proof codegen
+    /// reads. Empty when the solve aborted.
+    pub shadow_writes: std::collections::BTreeMap<u32, ShadowWrites>,
     module_digests: Vec<u64>,
 }
 
@@ -492,7 +513,7 @@ fn generate<'a>(
     hold: Hold,
     t0: std::time::Instant,
 ) -> (gen::Gen<'a>, f64, std::time::Instant) {
-    let loud = act.as_ref().is_none_or(|a| a.fixed);
+    let loud = act.as_ref().is_none_or(|a| a.fixed || a.inert);
     // Node IDs name the final observed model. Never apply its diagnostic
     // suppression selector to intermediate liveness models with other IDs.
     let birth_census = cfg.diagnostics && loud && cfg.birth_census;
@@ -557,6 +578,7 @@ fn generate<'a>(
     g.m.ns_pairs = cfg.namespace_pairs;
     g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
+    g.m.k3_held = std::env::var_os("PERRY_K3_CENSUS").map(|_| Default::default());
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
@@ -641,15 +663,16 @@ fn generate<'a>(
         && cfg.dynamic_code_reach.lexical_modules.is_empty()
         && cfg.dynamic_code_reach.sites.is_empty();
     // Interpreted code reads and writes any global (E20; the prototype-write
-    // guard does not cover it) and catches what compiled code throws. A real
-    // source site runs it from the start; otherwise only a solved call that
-    // may be the Function constructor does (DECISIONS 235). Per unit another
-    // unit's solve can be that call, so the link decision stands for it.
+    // guard does not cover it) and catches what compiled code throws. Code
+    // runs only in a body that runs (DECISIONS 225): an eval-like source
+    // site runs it once its body does (`Cons::InterpRuns`, a solved call of
+    // a `node:vm` function or of what may be the Function constructor:
+    // DECISIONS 235). A computed `import(...)` loads compiled modules (the
+    // driver resolves the specifier set) except a `data:` URL, which runs
+    // interpreted at no site: from the start. Per unit another unit's solve
+    // can be any of those, so the link decision stands for it.
     g.m.interp_linked = cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals;
-    if cfg.interpreted_sources
-        || cfg.dynamic_code_reach.globals
-        || (cfg.unit && cfg.dynamic_code.is_some())
-    {
+    if cfg.data_url_import || (cfg.unit && cfg.dynamic_code.is_some()) {
         g.m.interp_linked = true;
         builtins::interpreted_code_runs(&mut g.m);
     }
@@ -925,7 +948,16 @@ fn compute_act<'a>(
     let act = match gate {
         None => None,
         Some(Some(given)) => given.over(&sorted),
-        Some(None) => activation_pass(&sorted, cfg, t0).map(|(a, _)| a),
+        // D2 (owner 11-24, PROF C1 A): the final solve decides the set.
+        Some(None) => Some(model::Act {
+            inert: true,
+            sabotage: cfg
+                .sabotage
+                .as_deref()
+                .and_then(|s| s.strip_prefix("activation:"))
+                .map(str::to_string),
+            ..Default::default()
+        }),
     };
     let activation = act.as_ref().map(|a| a.on.len());
     let again = act.clone();
@@ -962,6 +994,51 @@ fn compute_act<'a>(
         g.m.solve();
     }
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    // D2: the set at the fixpoint is final: the walked bodies outside it
+    // were inert.
+    let mut activation = activation;
+    if g.m.act.as_ref().is_some_and(|a| a.inert && !a.fixed) {
+        let a = g.m.act.as_ref().unwrap();
+        let live: Vec<model::FnIdx> = a
+            .walked_fns
+            .iter()
+            .copied()
+            .filter(|&f| a.state.get(f as usize) != Some(&model::FN_INERT))
+            .collect();
+        let walked = live.into_iter().map(|f| g.m.act_key(f)).collect();
+        let seen = (0..g.m.funcs.len() as u32).map(|f| g.m.act_key(f)).collect();
+        // An inert body's sites get no verdict (generic code), as an
+        // unwalked body's never had one.
+        let inert = |m: &model::Model, f: model::FnIdx| m.fn_inert(f);
+        let m = &g.m;
+        g.read_sites.retain(|s| !inert(m, s.func));
+        g.store_sites.retain(|s| !inert(m, s.func));
+        let walks = std::mem::take(&mut g.inert_walks);
+        g.unwalked.extend(
+            walks
+                .into_iter()
+                .filter(|(f, _)| m.fn_inert(*f))
+                .map(|(_, w)| w),
+        );
+        let a = g.m.act.as_mut().unwrap();
+        a.walked = walked;
+        a.seen = seen;
+        a.fixed = true;
+        let inert = a.state.iter().filter(|&&s| s == model::FN_INERT).count();
+        activation = Some(format!(
+            "active={} functions={} inert={inert}",
+            a.on.len(),
+            g.m.funcs.len()
+        ));
+        if cfg.profile {
+            eprintln!(
+                "perry: wpfacts activation (final solve): {} active of {} functions, {} walked, {inert} inert",
+                a.on.len(),
+                g.m.funcs.len(),
+                a.walked.len()
+            );
+        }
+    }
     let escaped_inactive = g.m.act.is_some().then(|| g.m.escaped_inactive());
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
@@ -975,7 +1052,7 @@ fn compute_act<'a>(
     }
     if cfg.profile || cfg.explain {
         // One count per instance key kind (`Summaries::inst_key`).
-        let mut kinds = [0usize; 9];
+        let mut kinds = [0usize; 10];
         let mut fnkeyed = 0;
         let mut fnval = 0;
         for &(k, l, _, v) in g.m.sum.inst_key.keys() {
@@ -1033,8 +1110,23 @@ fn compute_act<'a>(
         }
     }
     g.m.dump_meta();
+    // Whether the analysis runs beside code it does not see
+    // (`Model::foreign_code`): every rule that keeps a whole-program premise
+    // reads it.
+    if std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "perry: wpfacts: foreign code {} (unit {} unseen module {} interpreter linked {} runs {})",
+            g.m.foreign_code() as u8,
+            g.m.unit_mode as u8,
+            g.m.unseen_module_runs as u8,
+            g.m.interp_linked as u8,
+            g.m.interp_runs as u8
+        );
+    }
     #[cfg(test)]
     tests::delivery_boundaries::record(&g.m);
+    #[cfg(test)]
+    tests::amp_flow::record(&g);
     #[cfg(test)]
     tests::computed_key_members::record(&g.m);
     #[cfg(test)]
@@ -1099,6 +1191,7 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
+    k3_census::write(&g);
     // Value records: a verdict per literal template, after
     // the templates and sites, before any representation reads them.
     g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
@@ -1319,6 +1412,17 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
+    let (typed_metadata_written, array_methods_written) = if stats.aborted {
+        (
+            Some("solve aborted".to_string()),
+            Some("solve aborted".to_string()),
+        )
+    } else {
+        (
+            builtins::typed_metadata_writes(&g.m),
+            builtins::array_methods_writes(&g.m),
+        )
+    };
     let (array_iteration_written, array_iterator_close_written) = if stats.aborted {
         (
             Some("solve aborted".to_string()),
@@ -1384,6 +1488,11 @@ fn compute_act<'a>(
             })
             .collect()
     };
+    let shadow_writes = if stats.aborted {
+        Default::default()
+    } else {
+        shadow_writes::shadow_writes(&g.m)
+    };
     let diagnostics = if cfg.diagnostics {
         vec![(view.map_or("<whole>", |v| v.key.as_str()).to_owned(), {
             let rows = diagnostics::collect(&g);
@@ -1403,7 +1512,11 @@ fn compute_act<'a>(
         g.m.act
             .as_ref()
             .map(|a| {
-                let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+                let holding = g
+                    .read_sites
+                    .iter()
+                    .filter(|s| !g.m.fn_inert(s.func))
+                    .map(|s| g.m.act_key(s.func));
                 // `on` is the activate predicate itself; a body it admits is
                 // reached even when generation walked it under no pending entry.
                 a.walked
@@ -1476,6 +1589,9 @@ fn compute_act<'a>(
         native_extern_sites,
         array_iteration_written,
         array_iterator_close_written,
+        typed_metadata_written,
+        array_methods_written,
+        shadow_writes,
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,

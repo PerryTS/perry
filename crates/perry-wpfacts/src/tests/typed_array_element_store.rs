@@ -10,8 +10,9 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
-        class ValueOf {{ size = 3; valueOf(): any {{ (globalThis as any).hostTake(this); return 1; }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
+        class ValueOf {{ size = 3; valueOf(): any {{ external(this); return 1; }} }}
         function g(a: any) {{ return a.size; }}
         const k = Math.floor(Math.random() * 2);
         {body}
@@ -37,17 +38,17 @@ macro_rules! case {
 case!(
     typed_array_element_is_a_number,
     false,
-    "const ta: any = new Float64Array(2); const o: any = new Svc(); ta[k] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(2); const o: any = new Svc(); ta[k] = o; external(ta[k]); console.log(g(o));"
 );
 case!(
     typed_array_literal_index_is_a_number,
     false,
-    "const ta: any = new Float64Array(2); const o: any = new Svc(); ta[0] = o; (globalThis as any).hostTake(ta[0]); console.log(g(o));"
+    "const ta: any = new Float64Array(2); const o: any = new Svc(); ta[0] = o; external(ta[0]); console.log(g(o));"
 );
 case!(
     array_element_is_the_value,
     true,
-    "const a: any = new Array(2); const o: any = new Svc(); a[k] = o; (globalThis as any).hostTake(a[k]); console.log(g(o));"
+    "const a: any = new Array(2); const o: any = new Svc(); a[k] = o; external(a[k]); console.log(g(o));"
 );
 case!(
     typed_array_element_store_runs_value_of,
@@ -57,10 +58,10 @@ case!(
 case!(
     typed_array_or_array_receiver_keeps_the_array_side,
     true,
-    "const b: any = [new Float64Array(2), []][k]; const o: any = new Svc(); b[k] = o; (globalThis as any).hostTake(b[k]); console.log(g(o));"
+    "const b: any = [new Float64Array(2), []][k]; const o: any = new Svc(); b[k] = o; external(b[k]); console.log(g(o));"
 );
 case!(
     typed_array_string_key_keeps_the_value,
     true,
-    "const ta: any = new Float64Array(2); const s = k > 5 ? \"x\" : \"y\"; const o: any = new Svc(); ta[s] = o; (globalThis as any).hostTake(ta[s]); console.log(g(o));"
+    "const ta: any = new Float64Array(2); const s = k > 5 ? \"x\" : \"y\"; const o: any = new Svc(); ta[s] = o; external(ta[s]); console.log(g(o));"
 );

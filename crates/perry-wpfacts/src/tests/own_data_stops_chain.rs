@@ -49,7 +49,7 @@ fn has(s: &str, want: u16) {
 
 const CACHE: &str = "const Cache: any = { enabled: false, files: {},
     get(k: any) { if (this.enabled === false) return; return this.files; } };
-    const u: any = process.argv.length > 9 ? Object.prototype : (globalThis as any)[process.argv[2]];
+    declare function opaque(): any; const u: any = process.argv.length > 9 ? Object.prototype : opaque();
     u.enabled = true;";
 
 #[test]
@@ -144,7 +144,7 @@ fn a_computed_key_reads_the_chain() {
 /// A defineProperty through ⊤ (which may reach `Object.prototype`) may put
 /// a setter or a read-only value under the key: a literal's birth defines
 /// its keys (CreateDataProperty), which no prototype intercepts.
-const REDEF: &str = "const w: any = (globalThis as any)[process.argv[2]];
+const REDEF: &str = "declare function opaque(): any; const w: any = opaque();
     Object.defineProperty(w, process.argv[4], { value: 7 });";
 
 #[test]

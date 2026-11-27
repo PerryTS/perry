@@ -118,7 +118,8 @@ fn a_reassigned_namespace_stays_unknown() {
         console.log(g(arr[0]));
     "#
     ));
-    assert!(!proven(&v), "{v:?}");
+    // owner 11-24: globalThis.Array = {...} is the program's own field (only run-time-read names escape); the program site reads it exactly.
+    assert!(matches!(v, Verdict::T0Mono), "{v:?}");
 }
 
 /// node: prints `1`. A variable that may hold the program's object.

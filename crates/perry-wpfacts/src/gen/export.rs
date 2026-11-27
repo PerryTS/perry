@@ -184,6 +184,16 @@ impl<'a> Gen<'a> {
                 }
             }
             for name in self.exported_objects_of(mi as usize) {
+                // The HIR lists both names of `export { local as name }`
+                // (`perry-hir` `lower/module_decl.rs`): the export entry
+                // above binds `name` to `local` (ES 16.2.1.6.3
+                // ResolveExport), and `name` itself need not be a binding of
+                // the module (a CJS snapshot `__cjsexp_fetch as fetch`).
+                if self.exports_of(mi as usize).iter().any(
+                    |e| matches!(e, Export::Named { exported, .. } if exported == name),
+                ) {
+                    continue;
+                }
                 let a = self.m.atom(name);
                 let en = self.export_node(mi, a);
                 let src = self.scope_value(mi, name);

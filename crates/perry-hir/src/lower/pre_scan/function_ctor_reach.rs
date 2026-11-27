@@ -41,9 +41,14 @@
 //!   bound to another module's enum
 //!   (`eval_classifier::resolve_enum_member_receivers`);
 //! - `x[k]` / `x.constructor` where `x` is a parameter or local that only
-//!   shares its name with a function declared elsewhere in the module.
+//!   shares its name with a function declared elsewhere in the module;
+//! - `new C(..).eval(..)` / `c.eval(..)` (`const c = new C(..)`) where `C`
+//!   is a sealed class of the module with a prototype method `eval` (or
+//!   `Function`): the callee is that program method, neither a direct eval
+//!   (the bare global `eval`, ECMA-262 IsDirectEval) nor a value that may be
+//!   %eval% (see [`sealed_methods`]; chess `standins/gl_rules.ts` `Cond`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use swc_common::{Globals, Mark, GLOBALS};
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitMutWith, VisitWith};
@@ -115,8 +120,13 @@ fn module_reach(ast_module: &ast::Module) -> Reach {
             return Reach::Yes;
         }
         let mut names = Vec::new();
-        for r in &scan.member_receivers {
-            if scan.enum_ids.contains(r) {
+        for (c, name) in &scan.new_receivers {
+            if !scan.class_method(c, name) {
+                return Reach::Yes;
+            }
+        }
+        for (r, name) in &scan.member_receivers {
+            if scan.enum_ids.contains(r) || scan.instance_method(r, name) {
                 continue;
             }
             if !scan.import_ids.contains(r) {
@@ -155,7 +165,24 @@ struct Scan {
     /// The module's value import bindings (named and default).
     import_ids: HashSet<ast::Id>,
     /// Receivers of `X.Function` / `X.eval` (resolved walk only).
-    member_receivers: Vec<ast::Id>,
+    member_receivers: Vec<(ast::Id, String)>,
+    /// `new C(..).Function` / `new C(..).eval` reads: (C, member name)
+    /// (resolved walk only, as the fields below).
+    new_receivers: Vec<(ast::Id, String)>,
+    /// References of each binding: its declaration, reads, writes, exports
+    /// (types aside: they do not run).
+    refs: HashMap<ast::Id, usize>,
+    /// `new C(..)` callees.
+    news: HashMap<ast::Id, usize>,
+    /// `x.m(..)` calls: (x, m).
+    method_calls: Vec<(ast::Id, String)>,
+    /// `x = new C(..)` declarators: x -> C.
+    instances: HashMap<ast::Id, ast::Id>,
+    /// The module's sealed classes ([`sealed_methods`]) and their prototype
+    /// method names.
+    sealed: HashMap<ast::Id, HashSet<String>>,
+    /// `export class C`.
+    exported: HashSet<ast::Id>,
 }
 
 impl Scan {
@@ -179,6 +206,37 @@ impl Scan {
                 .constructor_receivers
                 .iter()
                 .any(|id| self.function_names.contains(id))
+    }
+
+    /// `new C(..).name` reads the program method `C.prototype.name`: `C` is
+    /// sealed with that method and only `new C(..)` names it (no export, no
+    /// `C.prototype`, no reassignment), so nothing replaces the method.
+    fn class_method(&self, c: &ast::Id, name: &str) -> bool {
+        !self.exported.contains(c)
+            && self.refs.get(c).copied().unwrap_or(0) == 1 + self.news.get(c).copied().unwrap_or(0)
+            && self.sealed.get(c).is_some_and(|m| m.contains(name))
+    }
+
+    /// `x.name` reads the program method of the sealed class `C` when `x` is
+    /// declared `x = new C(..)` and every other reference of `x` calls one of
+    /// `C`'s methods (`x.m(..)`): the instance is never handed out, so
+    /// nothing re-parents it or gives it an own property.
+    fn instance_method(&self, x: &ast::Id, name: &str) -> bool {
+        let Some(c) = self.instances.get(x) else {
+            return false;
+        };
+        let Some(methods) = self.sealed.get(c) else {
+            return false;
+        };
+        let calls: Vec<&str> = self
+            .method_calls
+            .iter()
+            .filter(|(r, _)| r == x)
+            .map(|(_, m)| m.as_str())
+            .collect();
+        self.class_method(c, name)
+            && self.refs.get(x).copied().unwrap_or(0) == 1 + calls.len()
+            && calls.iter().all(|m| methods.contains(*m))
     }
 
     /// The bare name of a member of an enclosing enum, inside its body.
@@ -258,6 +316,9 @@ impl Visit for Scan {
             return;
         }
         if let ast::Expr::Ident(id) = expr {
+            if self.resolved {
+                *self.refs.entry(id.to_id()).or_default() += 1;
+            }
             if matches!(id.sym.as_ref(), "Function" | "eval") && !self.is_enum_member(&id.sym) {
                 self.found = true;
             }
@@ -283,12 +344,20 @@ impl Visit for Scan {
                     self.found = true;
                     return;
                 }
+                if let (true, ast::Expr::Ident(x), Some(name)) =
+                    (self.resolved, peel(&m.obj), member_prop_name(m))
+                {
+                    self.method_calls.push((x.to_id(), name.to_string()));
+                }
             }
         }
         call.visit_children_with(self);
     }
 
     fn visit_new_expr(&mut self, new_expr: &ast::NewExpr) {
+        if let (true, ast::Expr::Ident(c)) = (self.resolved, peel(&new_expr.callee)) {
+            *self.news.entry(c.to_id()).or_default() += 1;
+        }
         if is_ident(&new_expr.callee, "Function") {
             new_expr.args.visit_with(self);
             return;
@@ -298,11 +367,22 @@ impl Visit for Scan {
 
     fn visit_member_expr(&mut self, m: &ast::MemberExpr) {
         match member_prop_name(m) {
-            Some("Function" | "eval") => {
+            Some(name @ ("Function" | "eval")) => {
                 if self.resolved {
-                    if let ast::Expr::Ident(id) = peel(&m.obj) {
-                        self.member_receivers.push(id.to_id());
-                        return;
+                    match peel(&m.obj) {
+                        ast::Expr::Ident(id) => {
+                            self.member_receivers.push((id.to_id(), name.to_string()));
+                            m.obj.visit_with(self);
+                            return;
+                        }
+                        ast::Expr::New(n) => {
+                            if let ast::Expr::Ident(c) = peel(&n.callee) {
+                                self.new_receivers.push((c.to_id(), name.to_string()));
+                                m.obj.visit_with(self);
+                                return;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 self.found = true;
@@ -448,6 +528,11 @@ impl Visit for Scan {
 
     fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
         self.function_names.insert(c.ident.to_id());
+        if self.resolved {
+            if let Some(methods) = sealed_methods(&c.class) {
+                self.sealed.insert(c.ident.to_id(), methods);
+            }
+        }
         c.visit_children_with(self);
     }
 
@@ -463,9 +548,30 @@ impl Visit for Scan {
                 self.function_aliases
                     .push((binding.id.to_id(), source.to_id()));
             }
+            if let (true, ast::Expr::New(n)) = (self.resolved, peel(init)) {
+                if let ast::Expr::Ident(c) = peel(&n.callee) {
+                    self.instances.insert(binding.id.to_id(), c.to_id());
+                }
+            }
         }
         d.visit_children_with(self);
     }
+
+    fn visit_ident(&mut self, id: &ast::Ident) {
+        if self.resolved {
+            *self.refs.entry(id.to_id()).or_default() += 1;
+        }
+    }
+
+    fn visit_export_decl(&mut self, d: &ast::ExportDecl) {
+        if let ast::Decl::Class(c) = &d.decl {
+            self.exported.insert(c.ident.to_id());
+        }
+        d.visit_children_with(self);
+    }
+
+    /// Types do not run.
+    fn visit_ts_type(&mut self, _: &ast::TsType) {}
 
     fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
         if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(binding)) = &a.left {
@@ -480,6 +586,212 @@ impl Visit for Scan {
             }
         }
         a.visit_children_with(self);
+    }
+}
+
+/// A static member key: `k` or `'k'`.
+fn static_key(key: &ast::PropName) -> Option<String> {
+    match key {
+        ast::PropName::Ident(id) => Some(id.sym.to_string()),
+        ast::PropName::Str(s) => s.value.as_str().map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The prototype method names of a class whose instances stay its own until
+/// the program hands them out:
+///
+/// - no superclass: `new C` creates the object, with prototype
+///   `C.prototype` (a base constructor may return any object), and its
+///   constructor returns no value;
+/// - no computed member key, no own field named like a method (it would
+///   shadow it), no auto-accessor;
+/// - its body (constructor, methods, fields, static members) uses `this`
+///   only as `this.k` with a static `k` other than `__proto__`,
+///   `prototype`, `constructor`, calls only its own methods on it
+///   (`this.m(..)`), never assigns `this.m` for a method `m`, and never puts
+///   `this.k` in a destructuring target, nested class or `super` reference.
+///
+/// Then the code that runs on an instance before the program has it is the
+/// class body, which neither re-parents it, copies onto it, nor hands it to
+/// other code. The scan's other rules catch every read of the intrinsics by
+/// name, so a method of the class is a program function.
+fn sealed_methods(class: &ast::Class) -> Option<HashSet<String>> {
+    if class.super_class.is_some() {
+        return None;
+    }
+    let mut methods = HashSet::new();
+    let mut fields = HashSet::new();
+    for member in &class.body {
+        match member {
+            ast::ClassMember::Constructor(c) => {
+                for p in &c.params {
+                    if let ast::ParamOrTsParamProp::TsParamProp(tp) = p {
+                        let id = match &tp.param {
+                            ast::TsParamPropParam::Ident(b) => &b.id,
+                            ast::TsParamPropParam::Assign(a) => match &*a.left {
+                                ast::Pat::Ident(b) => &b.id,
+                                _ => return None,
+                            },
+                        };
+                        fields.insert(id.sym.to_string());
+                    }
+                }
+                if let Some(body) = &c.body {
+                    let mut r = ReturnsValue(false);
+                    body.visit_with(&mut r);
+                    if r.0 {
+                        return None;
+                    }
+                }
+            }
+            ast::ClassMember::Method(m) => {
+                let k = static_key(&m.key)?;
+                if !m.is_static {
+                    methods.insert(k);
+                }
+            }
+            ast::ClassMember::ClassProp(p) => {
+                let k = static_key(&p.key)?;
+                if !p.is_static {
+                    fields.insert(k);
+                }
+            }
+            ast::ClassMember::PrivateMethod(_)
+            | ast::ClassMember::PrivateProp(_)
+            | ast::ClassMember::StaticBlock(_)
+            | ast::ClassMember::TsIndexSignature(_)
+            | ast::ClassMember::Empty(_) => {}
+            _ => return None,
+        }
+    }
+    if !methods.is_disjoint(&fields) {
+        return None;
+    }
+    let mut walk = ThisUses {
+        methods: &methods,
+        ok: true,
+        stored: HashSet::new(),
+        in_target: false,
+    };
+    for member in &class.body {
+        match member {
+            ast::ClassMember::Method(m) => m.function.visit_children_with(&mut walk),
+            ast::ClassMember::PrivateMethod(m) => m.function.visit_children_with(&mut walk),
+            other => other.visit_children_with(&mut walk),
+        }
+    }
+    (walk.ok && walk.stored.is_disjoint(&methods)).then_some(methods)
+}
+
+/// A `return <value>` of the function body walked (nested functions,
+/// arrows and classes return their own).
+struct ReturnsValue(bool);
+
+impl Visit for ReturnsValue {
+    fn visit_function(&mut self, _: &ast::Function) {}
+    fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
+    fn visit_class(&mut self, _: &ast::Class) {}
+    fn visit_return_stmt(&mut self, r: &ast::ReturnStmt) {
+        if r.arg.is_some() {
+            self.0 = true;
+        }
+    }
+}
+
+/// The `this` uses of a class body ([`sealed_methods`]). Nested
+/// non-arrow functions bind their own `this`.
+struct ThisUses<'a> {
+    methods: &'a HashSet<String>,
+    ok: bool,
+    /// `this.k = v` keys.
+    stored: HashSet<String>,
+    /// Inside a destructuring or for-in/of target.
+    in_target: bool,
+}
+
+impl ThisUses<'_> {
+    /// `this.k`: the static key `k`, unless it reaches the prototype.
+    fn this_key<'m>(&mut self, m: &'m ast::MemberExpr) -> Option<&'m str> {
+        if !matches!(peel(&m.obj), ast::Expr::This(_)) {
+            return None;
+        }
+        match &m.prop {
+            ast::MemberProp::Ident(k)
+                if !matches!(k.sym.as_ref(), "__proto__" | "prototype" | "constructor") =>
+            {
+                Some(k.sym.as_ref())
+            }
+            ast::MemberProp::PrivateName(_) => Some(""),
+            _ => {
+                self.ok = false;
+                Some("")
+            }
+        }
+    }
+}
+
+impl Visit for ThisUses<'_> {
+    fn visit_function(&mut self, _: &ast::Function) {}
+    fn visit_class(&mut self, _: &ast::Class) {
+        self.ok = false;
+    }
+    fn visit_super_prop_expr(&mut self, _: &ast::SuperPropExpr) {
+        self.ok = false;
+    }
+    fn visit_expr(&mut self, e: &ast::Expr) {
+        if let ast::Expr::This(_) = e {
+            // A bare `this`: the instance is handed to other code.
+            self.ok = false;
+            return;
+        }
+        e.visit_children_with(self);
+    }
+    fn visit_member_expr(&mut self, m: &ast::MemberExpr) {
+        if self.this_key(m).is_some() {
+            if self.in_target {
+                self.ok = false;
+            }
+            return;
+        }
+        m.visit_children_with(self);
+    }
+    fn visit_call_expr(&mut self, c: &ast::CallExpr) {
+        if let ast::Callee::Expr(callee) = &c.callee {
+            if let ast::Expr::Member(m) = peel(callee) {
+                if let Some(k) = self.this_key(m) {
+                    if !self.methods.contains(k) {
+                        self.ok = false;
+                    }
+                    c.args.visit_with(self);
+                    return;
+                }
+            }
+        }
+        c.visit_children_with(self);
+    }
+    fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
+        match &a.left {
+            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) => {
+                if let Some(k) = self.this_key(m) {
+                    self.stored.insert(k.to_string());
+                }
+            }
+            ast::AssignTarget::Pat(_) => {
+                let outer = std::mem::replace(&mut self.in_target, true);
+                a.left.visit_with(self);
+                self.in_target = outer;
+                a.right.visit_with(self);
+                return;
+            }
+            _ => {}
+        }
+        a.visit_children_with(self);
+    }
+    fn visit_for_head(&mut self, h: &ast::ForHead) {
+        let outer = std::mem::replace(&mut self.in_target, matches!(h, ast::ForHead::Pat(_)));
+        h.visit_children_with(self);
+        self.in_target = outer;
     }
 }
 
@@ -638,6 +950,45 @@ mod tests {
             "enum E { A = [Function].length }",
             "enum E { Function = 1 } const g: any = globalThis; g.Function;",
             "import { E } from './e'; E.Function; declare const o: any; o.Function;",
+        ] {
+            assert_eq!(reach(source), super::Reach::Yes, "{source}");
+        }
+    }
+    /// chess `standins/gl_rules.ts`: `new Cond(..).eval(dv)` and
+    /// `cond.eval(rest)` call the program class's method: no eval, direct or
+    /// indirect, so no reach.
+    #[test]
+    fn a_sealed_program_class_method_named_eval_is_no_reach() {
+        for source in [
+            "class Cond { private toks: string[] = []; private pos = 0; private d: number; \
+             constructor(d: number) { this.d = d; } \
+             eval(s: string): number { this.toks = []; this.pos = 0; return this.value(s) + this.d; } \
+             private value(s: string): number { return s.length > 1 ? new Cond(this.d).eval(s.slice(1)) : this.pos; } } \
+             function pre(d: number) { const cond = new Cond(d); return cond.eval('a') + cond.eval('b'); }",
+            "class P { Function(): number { return 1; } } new P().Function();",
+        ] {
+            assert_eq!(reach(source), super::Reach::No, "{source}");
+        }
+        for source in [
+            // The instance handed out, re-parented, or the method read as a value.
+            "class C { eval() {} } const c = new C(); Object.setPrototypeOf(c, globalThis); c.eval('1');",
+            "class C { eval() {} } const c = new C(); const f = c.eval; f('1');",
+            "class C { eval() {} } let c = new C(); c = globalThis as any; c.eval('1');",
+            "class C { eval() {} run() { Object.setPrototypeOf(this, globalThis); } } const c = new C(); c.run(); c.eval('1');",
+            "class C { eval() {} other() { (this as any).__proto__ = globalThis; } } new C().eval('1');",
+            "class C { constructor() { Object.setPrototypeOf(this, globalThis); } eval() {} } new C().eval('1');",
+            "class C { constructor() { return globalThis; } eval() {} } new C().eval('1');",
+            "class C { eval() {} f: any = 0; run() { this.f(); } } const c = new C(); c.run(); c.eval('1');",
+            "class C { eval() {} run() { this.eval = (globalThis as any).x; } } new C().eval('1');",
+            // No such method: the chain goes on (Object.prototype, a base).
+            "class C { run() {} } new C().eval('1');",
+            "class B {} class C extends B { eval() {} } new C().eval('1');",
+            // The class handed out: its prototype may get any method.
+            "class C { eval() {} } Object.defineProperties(C.prototype, Object.getOwnPropertyDescriptors(globalThis)); new C().eval('1');",
+            "export class C { eval() {} } new C().eval('1');",
+            "class C { eval() {} } export { C }; new C().eval('1');",
+            // A receiver that is no instance at all.
+            "declare const o: any; o.eval('1');",
         ] {
             assert_eq!(reach(source), super::Reach::Yes, "{source}");
         }

@@ -622,14 +622,11 @@ fn get_object_field(obj: *const perry_runtime::object::ObjectHeader, name: &str)
     perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
 }
 
+/// The realm's original constructor `name`: a port or channel this module
+/// builds is born with it, whatever the global binding holds now (node never
+/// reads the global object to build one).
 fn get_global_constructor(name: &str) -> f64 {
-    let global = perry_runtime::object::js_get_global_this();
-    let global_obj = perry_runtime::value::js_nanbox_get_pointer(global)
-        as *const perry_runtime::object::ObjectHeader;
-    if global_obj.is_null() {
-        return js_undefined();
-    }
-    get_object_field(global_obj, name)
+    perry_runtime::object::builtin_constructor_value(name)
 }
 
 fn constructor_prototype(name: &str) -> f64 {

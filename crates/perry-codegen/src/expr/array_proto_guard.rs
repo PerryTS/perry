@@ -20,6 +20,83 @@
 use crate::block::LlBlock;
 use crate::types::{I1, I16, I8};
 
+/// GUARDS1 class 2: the program's array chain facts
+/// ([`set_program_array_chain_facts`]); bit [`INDEX_CHAIN_LOCKED`] and bit
+/// [`METHODS_UNWRITTEN`]. 0 (no facts: unit tests, facts-off builds) keeps
+/// every test.
+static ARRAY_CHAIN_FACTS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// No compiled program sets the index bit for a receiver an inline guard
+/// admits: an index add on `%Array.prototype%`/`%Object.prototype%` and a
+/// program relink of either throws under DEC 250 (perry-abi `lock::refuses`:
+/// `Index`+`Add` on an index-locked holder, every `Relink`), and a relinked
+/// array (a lazy JSON array included) carries its own
+/// `GC_ARRAY_CUSTOM_PROTO` bit, which the guards keep testing.
+const INDEX_CHAIN_LOCKED: u8 = 1;
+/// Compiled code never modifies `%Array.prototype%`/`%Object.prototype%`
+/// (wpfacts `array_methods_written`) and no interpreted code runs: the
+/// runtime's `ARRAY_METHODS_MODIFIED` bit is never set.
+const METHODS_UNWRITTEN: u8 = 2;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ARRAY_CHAIN_FACTS: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Install the program's array chain facts (driver, after the whole-program
+/// solve, before module codegen).
+pub fn set_program_array_chain_facts(index_locked: bool, methods_unwritten: bool) {
+    let bits = if index_locked { INDEX_CHAIN_LOCKED } else { 0 }
+        | if index_locked && methods_unwritten { METHODS_UNWRITTEN } else { 0 };
+    ARRAY_CHAIN_FACTS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The object-cache key of the installed facts.
+pub fn program_array_chain_facts_key() -> String {
+    chain_facts().to_string()
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_array_chain_facts<R>(bits: u8, f: impl FnOnce() -> R) -> R {
+    let was = TEST_ARRAY_CHAIN_FACTS.with(|c| c.replace(bits));
+    let out = f();
+    TEST_ARRAY_CHAIN_FACTS.with(|c| c.set(was));
+    out
+}
+
+fn chain_facts() -> u8 {
+    #[cfg(test)]
+    {
+        TEST_ARRAY_CHAIN_FACTS.with(|c| c.get())
+    }
+    #[cfg(not(test))]
+    {
+        ARRAY_CHAIN_FACTS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// The i1 "no index on the default chain" half of an element guard: the
+/// constant `true` under [`INDEX_CHAIN_LOCKED`], else the summary byte's
+/// index bit.
+pub(crate) fn emit_default_chain_index_clean(blk: &mut LlBlock) -> String {
+    if chain_facts() & INDEX_CHAIN_LOCKED != 0 {
+        return "true".to_string();
+    }
+    let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let index_bit = blk.and(I8, &invalidated, INDEX_INVALIDATED_I8);
+    blk.icmp_eq(I8, &index_bit, "0")
+}
+
+/// The i1 "the whole summary byte is clear" test (no index on the default
+/// chain AND both prototypes unmodified): the constant `true` when both
+/// facts hold, else the byte.
+pub(crate) fn emit_default_chain_pristine(blk: &mut LlBlock) -> String {
+    if chain_facts() == INDEX_CHAIN_LOCKED | METHODS_UNWRITTEN {
+        return "true".to_string();
+    }
+    let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    blk.icmp_eq(I8, &invalidated, "0")
+}
+
 /// `GC_ARRAY_CUSTOM_PROTO` (bit 6 of a `GC_TYPE_ARRAY` header's `_reserved`
 /// word). MUST match perry-runtime `gc/types.rs`.
 pub(crate) const GC_ARRAY_CUSTOM_PROTO_I16: &str = "64";
@@ -28,9 +105,7 @@ pub(crate) const GC_ARRAY_CUSTOM_PROTO_I16: &str = "64";
 /// test for a `GC_TYPE_ARRAY` receiver whose `_reserved` word is `reserved`
 /// (an `i16` already loaded by the caller's header guard).
 pub(crate) fn emit_array_default_prototype_chain(blk: &mut LlBlock, reserved: &str) -> String {
-    let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let index_bit = blk.and(I8, &invalidated, INDEX_INVALIDATED_I8);
-    let globally_clean = blk.icmp_eq(I8, &index_bit, "0");
+    let globally_clean = emit_default_chain_index_clean(blk);
     let custom_proto_bit = blk.and(I16, reserved, GC_ARRAY_CUSTOM_PROTO_I16);
     let own_proto_default = blk.icmp_eq(I16, &custom_proto_bit, "0");
     blk.and(I1, &globally_clean, &own_proto_default)
@@ -50,8 +125,7 @@ pub(crate) const INDEX_INVALIDATED_I8: &str = "1";
 /// both facts (`ARRAY_METHODS_MODIFIED` mirrors the Array byte), so the whole
 /// byte is tested: no new load, no new branch, no new bytes.
 pub(crate) fn emit_array_method_admission(blk: &mut LlBlock, reserved: &str) -> String {
-    let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let globally_clean = blk.icmp_eq(I8, &invalidated, "0");
+    let globally_clean = emit_default_chain_pristine(blk);
     let custom_proto_bit = blk.and(I16, reserved, GC_ARRAY_CUSTOM_PROTO_I16);
     let own_proto_default = blk.icmp_eq(I16, &custom_proto_bit, "0");
     blk.and(I1, &globally_clean, &own_proto_default)

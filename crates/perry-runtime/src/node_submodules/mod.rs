@@ -634,10 +634,10 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
                     | "DecompressionStream"
             ) =>
         {
-            Some(crate::object::js_get_global_this_builtin_value(
-                name.as_ptr(),
-                name.len(),
-            ))
+            // The realm's original constructor (`%ReadableStream%`), as in
+            // node: replacing `globalThis.ReadableStream` does not change
+            // `require("stream/web").ReadableStream`.
+            Some(crate::object::builtin_constructor_value(name))
         }
         "test" => TEST_SPECIAL_EXPORT.get().and_then(|f| f(name)),
         _ => None,

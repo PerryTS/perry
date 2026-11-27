@@ -349,7 +349,7 @@ fn nd_define_on_top_keeps_today() {
 fn gd_src(body: &str) -> String {
     format!(
         "class A {{ zz = 1; }}
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare function opaque(): any; const unknown: any = opaque();
         unknown.take2(globalThis);
         const u: any = unknown.get();
         const k = String(process.argv[3]);
@@ -400,9 +400,12 @@ fn gd_any_key_delete_in_handed_function_keeps_globals() {
     );
 }
 
-/// KEEP: a store through ⊤ under any key may write `Math`: ⊤ as before.
+/// A store through ⊤ under any key writes no global: P-N1 (owner
+/// 2026-11-23: a value the analysis does not model is never the global
+/// object). Control (KEEP): the same store into the global object by name
+/// may write `Math`.
 #[test]
-fn gd_any_key_store_through_top_still_writes_globals() {
+fn gd_any_key_store_through_top_writes_no_global() {
     for body in [
         "u[k] = new A();",
         "delete u[k]; u[k] = new A();",
@@ -410,9 +413,13 @@ fn gd_any_key_store_through_top_still_writes_globals() {
     ] {
         let src = gd_src(body);
         let pf = facts_mods(&[("main", &src)]);
+        assert!(gd_known(&pf), "{body}: Math is the intrinsic\n{}", pf.dump_text());
+        let named = body.replace("u[k]", "(globalThis as any)[k]");
+        let src = gd_src(&named);
+        let pf = facts_mods(&[("main", &src)]);
         assert!(
             !gd_known(&pf),
-            "{body}: Math may be written\n{}",
+            "{named}: Math may be written\n{}",
             pf.dump_text()
         );
     }

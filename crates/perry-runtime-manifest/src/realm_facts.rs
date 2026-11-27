@@ -385,7 +385,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
 /// that type (ECMA-262 6.1: String, Number, Boolean).
 pub(super) fn runtime_type(ts: &[Token<'_>]) -> Option<&'static str> {
     let n = ts.len();
-    if n < 7 || ts[0].text != "runtime" || ts[n - 3].text != "," {
+    if n < 7 || !matches!(ts[0].text, "runtime" | "target") || ts[n - 3].text != "," {
         return None;
     }
     ["string", "number", "boolean"]

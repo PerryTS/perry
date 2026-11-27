@@ -236,7 +236,7 @@ fn a_later_shrink_by_any_route_withdraws_the_read() {
         ),
         (
             "an escape to unknown code",
-            "(globalThis as any).unknown(xs);",
+            "external(xs);",
         ),
         ("a length store that grows", "xs.length = n + 5;"),
     ] {

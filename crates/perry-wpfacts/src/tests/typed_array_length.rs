@@ -12,7 +12,8 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const c = Math.random() < 0.5;
         const ta: any = new Float32Array(6);
@@ -20,7 +21,7 @@ fn verdict(body: &str) -> Verdict {
         const o: any = new Svc();
         {body}
         h[ta.length] = o;
-        (globalThis as any).hostTake(h.a);
+        external(h.a);
         console.log(g(o));
         "#
     );
@@ -68,7 +69,8 @@ case!(
 // (a2) the same under a key nothing names (unknown code returns it).
 lock_case!(
     typed_array_length_after_unknown_key_bigint_store,
-    r#"const kk: any = (globalThis as any).hostKey(); ta[kk] = (1n as any);"#
+    r#"
+        declare function external(x?: unknown): any;const kk: any = external(); ta[kk] = (1n as any);"#
 );
 // (b) the same with the view's buffer exposed (B1): another view of the
 // buffer writes elements only.
@@ -78,7 +80,8 @@ lock_case!(
 #[ignore = "C2: a B1 HARD mark escapes the view itself"]
 fn typed_array_length_with_buffer_exposed() {
     let v = verdict(
-        r#"const kk: any = (globalThis as any).hostKey(); ta[kk] = (1n as any); (globalThis as any).hostKeep(ta.buffer);"#,
+        r#"
+        declare function external(x?: unknown): any;const kk: any = external(); ta[kk] = (1n as any); external(ta.buffer);"#,
     );
     assert!(proven(&v), "{v:?}");
 }

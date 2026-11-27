@@ -107,8 +107,9 @@ pub(crate) use builtin_thunks::{
     ARRAY_CONSTRUCTOR_INFO,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
+pub use ctor_thunks::builtin_constructor_value;
 pub(crate) use ctor_thunks::{
-    builtin_constructor_value, builtin_prototype_value, is_array_prototype_method_value,
+    builtin_prototype_value, is_array_prototype_method_value,
     is_function_prototype_object_value, normalize_eval_this_body, regexp_constructor_call_thunk,
     subtle_crypto_method_value, typed_array_constructor_call_thunk, webcrypto_method_value,
 };

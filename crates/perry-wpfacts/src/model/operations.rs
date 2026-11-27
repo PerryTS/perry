@@ -235,6 +235,10 @@ impl Model {
     /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
+        // P-N1: whole program, ⊤ is never `%Object.prototype%`.
+        if t == TOP && !self.foreign_code() {
+            return;
+        }
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
             return;
         }
@@ -314,6 +318,7 @@ impl Model {
         }
         let a = self.atoms.len() as Atom;
         self.atoms.push(s.to_string());
+        self.note_atom_numeric();
         self.atom_index.insert(s.to_string(), a);
         a
     }
@@ -329,8 +334,25 @@ impl Model {
         }
         let a = self.atoms.len() as Atom;
         self.atoms.push(storage.to_string());
+        self.note_atom_numeric();
         self.private_atoms.insert(storage.to_string(), a);
         a
+    }
+
+    /// [`Model::atom_numeric`] up to the last atom.
+    fn note_atom_numeric(&mut self) {
+        while self.atom_numeric.len() < self.atoms.len() {
+            let n = crate::solve::numeric_key(&self.atoms[self.atom_numeric.len()]);
+            self.atom_numeric.push(n);
+        }
+    }
+
+    /// Is atom `a` a numeric key ([`crate::solve::numeric_key`])?
+    pub fn numeric_atom(&self, a: Atom) -> bool {
+        self.atom_numeric
+            .get(a as usize)
+            .copied()
+            .unwrap_or_else(|| crate::solve::numeric_key(&self.atoms[a as usize]))
     }
 
     /// `a` is a class private field's key (`private_atom`).
@@ -348,6 +370,63 @@ impl Model {
             l.push_str(&line());
             r.push(l);
         }
+    }
+
+    /// Code the analysis does not see may run beside the program: per unit
+    /// (the other units), an unseen module, or the linked interpreter. All
+    /// three are known before the solve. Only then may a value the analysis
+    /// does not model be a built-in prototype, a built-in constructor or the
+    /// global object (premise P-N1, owner 2026-11-23: whole program, the
+    /// program reaches an intrinsic only by its name, by a declared builtin
+    /// result or by modeled reflection).
+    pub(crate) fn foreign_code(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_linked
+    }
+
+    /// Code other than the program and the runtime may name the realm: per
+    /// unit, beside an unseen module, or once interpreted code runs. Only
+    /// then does unknown code hold the realm (`hold_realm`). Whole program
+    /// under the closed world (owner 2026-11-14) and R-GLOBAL (2026-11-18),
+    /// unknown code is the runtime, which names intrinsics only through its
+    /// declared reads: a call or `new` of an unknown value holds nothing.
+    pub(crate) fn realm_nameable(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_runs
+    }
+
+    /// An escape reason a builtin contract states: the builtin that holds
+    /// the value acts on it only as its declaration says (owner premise
+    /// Phase B, 2026-11-23), and the solve models those acts. Every other
+    /// escape hands the value to code the analysis does not model (a ⊤ or
+    /// opaque callee, an unknown setter or getter, `instanceof` with an
+    /// unknown right-hand side, a Proxy handler, code no declaration
+    /// describes, ...): what it is handed may be written under any key.
+    pub fn contract_reason(&mut self, s: &str) -> u32 {
+        let r = self.reason(s);
+        self.contract_reasons.insert(r);
+        r
+    }
+
+    /// Does an escape with `reason` hand the value to code that may write
+    /// it beyond a contract? Every escape whose reason no builtin contract
+    /// states (`contract_reason`) does, and every escape beside foreign code.
+    pub(crate) fn writes_any(&self, reason: u32) -> bool {
+        self.foreign_code() || !self.contract_reasons.contains(&reason)
+    }
+
+    /// `t` escaped to code that may write it under any key.
+    #[inline]
+    pub fn is_escaped_writer(&self, t: Tok) -> bool {
+        self.esc_writer_bits
+            .get((t >> 6) as usize)
+            .is_some_and(|w| w & (1 << (t & 63)) != 0)
+    }
+
+    /// Why `t` is held by code that may write it under any key
+    /// (`is_escaped_writer`), if it is. A value handed only by a builtin
+    /// contract has none: that code writes it only as the contract states
+    /// (Phase B, owner 2026-11-23), and the solve models those writes.
+    pub fn writer_escape_why(&self, t: Tok) -> Option<String> {
+        self.esc_writer_why.get(&t).map(|&r| self.reasons[r as usize].clone())
     }
 
     pub fn reason(&mut self, s: &str) -> u32 {
@@ -452,7 +531,84 @@ impl Model {
 
     /// `n` belongs to the body generation is walking.
     pub fn own(&mut self, n: NodeId) {
-        self.node_fn[n as usize] = self.cur_fn;
+        self.set_owner(n, self.cur_fn);
+    }
+
+    /// `n` belongs to the body of `f` (`Model::node_fn`); in inert mode a
+    /// function not yet active lists it for its activation (`Act::fn_nodes`).
+    pub fn set_owner(&mut self, n: NodeId, f: FnIdx) {
+        self.node_fn[n as usize] = f;
+        if f == NO_FN {
+            return;
+        }
+        if let Some(a) = self.act.as_mut().filter(|a| a.inert) {
+            let i = f as usize;
+            if a.state.get(i).copied() != Some(crate::model::FN_ACTIVE) {
+                if a.fn_nodes.len() <= i {
+                    a.fn_nodes.resize_with(i + 1, Vec::new);
+                }
+                a.fn_nodes[i].push(n);
+            }
+        }
+    }
+
+    /// D2: the body of `f` is inert (generated, not active).
+    #[inline]
+    pub fn fn_inert(&self, f: FnIdx) -> bool {
+        match &self.act {
+            Some(a) if a.inert => a.state.get(f as usize) == Some(&crate::model::FN_INERT),
+            _ => false,
+        }
+    }
+
+    /// D2: `n` belongs to an inert body: it delivers nothing yet.
+    #[inline]
+    pub fn inert_node(&self, n: NodeId) -> bool {
+        match &self.act {
+            Some(a) if a.inert => {
+                let f = self.node_fn[n as usize];
+                f != NO_FN && a.state.get(f as usize) == Some(&crate::model::FN_INERT)
+            }
+            _ => false,
+        }
+    }
+
+    /// D2: generation attaches a rule of an inert body to `holder`, a node
+    /// that body does not own: it is set aside (`Act::foreign`).
+    #[inline]
+    pub fn foreign_rule(&self, holder: NodeId) -> bool {
+        let f = self.cur_fn;
+        f != NO_FN
+            && !self.sum.ready
+            && self.node_fn[holder as usize] != f
+            && self.fn_inert(f)
+    }
+
+    /// D2: generation is in the inert body `f` (before the summaries are
+    /// built): its side effects wait for its activation.
+    #[inline]
+    pub fn gen_inert(&self, f: FnIdx) -> bool {
+        f != NO_FN && !self.sum.ready && self.fn_inert(f)
+    }
+
+    /// D2: the side effect `e` of generating the body of `f`: applied now,
+    /// or, in an inert body, when it activates (`Act::foreign`).
+    pub fn effect_in(&mut self, f: FnIdx, e: crate::model::Effect) {
+        if self.gen_inert(f) {
+            let a = self.act.as_mut().unwrap();
+            a.foreign
+                .entry(f)
+                .or_default()
+                .push(crate::model::Foreign::Effect(e));
+        } else {
+            self.apply_effect(e);
+        }
+    }
+
+    pub(crate) fn apply_effect(&mut self, e: crate::model::Effect) {
+        match e {
+            crate::model::Effect::Activate(g, path) => self.activate(g, path),
+        }
     }
 
     #[track_caller]
@@ -532,6 +688,9 @@ impl Model {
             }
         }
         for &(_, a, _) in &self.native_missing {
+            r.keys.insert(self.atoms[a as usize].clone());
+        }
+        for &(a, _) in self.native_parked.keys() {
             r.keys.insert(self.atoms[a as usize].clone());
         }
         r
@@ -835,8 +994,29 @@ impl Model {
         }
         let k = self.act_key(f);
         let a = self.act.as_mut().unwrap();
+        if a.inert {
+            let i = f as usize;
+            if a.state.len() <= i {
+                a.state.resize(i + 1, crate::model::FN_LIVE);
+            }
+            match a.state[i] {
+                // Its nodes and set-aside rules are re-delivered by the
+                // solve's fill step.
+                crate::model::FN_INERT => a.woken.push(f),
+                // Never inert: its nodes delivered all along.
+                crate::model::FN_LIVE => {
+                    if let Some(v) = a.fn_nodes.get_mut(i) {
+                        *v = Vec::new();
+                    }
+                }
+                _ => {}
+            }
+            a.state[i] = crate::model::FN_ACTIVE;
+        }
         if a.on.insert(k) {
-            a.queue.push(f);
+            if !a.inert {
+                a.queue.push(f);
+            }
             if let Some(pat) = why_act() {
                 let name = &self.funcs[f as usize].name;
                 if name.contains(pat.as_str()) {
@@ -849,7 +1029,9 @@ impl Model {
     /// DECISIONS 225: generation walks the body of `f` (noted once the
     /// activation set is final).
     pub fn note_walked(&mut self, f: FnIdx) {
-        if self.act.as_ref().is_some_and(|a| a.fixed) {
+        if let Some(a) = self.act.as_mut().filter(|a| a.inert) {
+            a.walked_fns.push(f);
+        } else if self.act.as_ref().is_some_and(|a| a.fixed) {
             let k = self.act_key(f);
             self.act.as_mut().unwrap().walked.insert(k);
         }
@@ -859,6 +1041,7 @@ impl Model {
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
             None => true,
+            Some(a) if a.inert => a.state.get(f as usize) != Some(&crate::model::FN_INERT),
             Some(a) => {
                 let k = self.act_key(f);
                 a.on.contains(&k) || (a.fixed && !a.seen.is_empty() && !a.seen.contains(&k))
@@ -919,6 +1102,9 @@ impl Model {
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
                 self.charge_work(1);
+                if self.past_work_bound() {
+                    return;
+                }
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -1186,6 +1372,9 @@ impl Model {
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
             self.charge_work(1);
+            if self.past_work_bound() {
+                return;
+            }
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

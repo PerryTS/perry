@@ -46,7 +46,6 @@ fn y_proven(pf: &ProgramFacts) -> bool {
 fn linked_cfg() -> FactsConfig {
     FactsConfig {
         dynamic_code: Some("E14 test: new Function(...) @ t.ts".into()),
-        interpreted_sources: true,
         ..Default::default()
     }
 }

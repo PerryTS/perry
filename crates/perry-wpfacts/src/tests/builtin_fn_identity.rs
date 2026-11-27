@@ -360,12 +360,14 @@ fn undeclared_global_function_value_stays_unproven() {
 #[test]
 fn linked_dynamic_code_keeps_global_function_value_unproven() {
     let src = timer_source(
-        "eval('globalThis.setTimeout = function (f) { f({}); }');",
+        // A literal source is compiled as program code (its store is a
+        // program store); an unknown one runs interpreted, and may replace
+        // the global function.
+        "eval(process.argv[2]);",
         "const t=setTimeout; t(cb,0);",
     );
     let cfg = FactsConfig {
         dynamic_code: Some("test linked interpreter".into()),
-        interpreted_sources: true,
         ..Default::default()
     };
     let pf = facts_with(&src, cfg);
@@ -545,7 +547,7 @@ fn restoring_the_declared_global_value_does_not_expose_its_members() {
             declare function external(x:any):void;
             const o:any={{field:1}};
             function load(){{external(o);}}
-            const unknown:any=(globalThis as any)[process.argv[2]];
+            declare function opaque(): any; const unknown:any=opaque();
             {change}
             Object.keys(load as any);
             console.log(o.field); // RETAINED-GLOBAL
@@ -659,7 +661,7 @@ fn inherited_typed_array_statics_have_one_identity_per_function() {
 }
 
 #[test]
-fn exposure_keeps_the_native_body_and_opens_its_missing_members() {
+fn exposure_keeps_the_native_body_and_opens_the_handed_functions_missing_members() {
     for exposed in ["t", "[1][process.argv[2]??'map']"] {
         verdict(
             &timer_source(
@@ -681,7 +683,12 @@ fn exposure_keeps_the_native_body_and_opens_its_missing_members() {
                 console.log(o.field); // EXPOSED-MEMBER
             "#
             );
-            verdict(&src, "// EXPOSED-MEMBER", "field", false);
+            // `t` handed to foreign code: its missing member `zap` is open
+            // (what foreign code holds it may give). Handing an array's
+            // member instead leaves `t` unhanded: `t.zap` stays absent, the
+            // call throws, `o` reaches no one (owner 2026-11-19: unknown
+            // code writes no intrinsic reached through a handed value).
+            verdict(&src, "// EXPOSED-MEMBER", "field", exposed != "t");
         }
     }
 }
@@ -786,14 +793,17 @@ fn an_extracted_native_call_method_retains_the_string_replace_result() {
 }
 
 #[test]
-fn cxid3_unknown_code_can_replace_the_json_function_before_a_length_read() {
+fn cxid3_unknown_code_replaces_no_json_function_before_a_length_read() {
     let src = r#"
 const ns = JSON;
 new Function("ns", process.argv[2])(ns);
 const value = ns.stringify(0).slice(1);
 console.log(value.length); // DYNAMIC-LENGTH
 "#;
-    verdict(src, "// DYNAMIC-LENGTH", "length", false);
+    // Owner 2026-11-19 (unknown code handed a value writes no member of an
+    // intrinsic) and 2026-11-18 R-GLOBAL step 3 (nor any member of an
+    // intrinsic namespace): `ns.stringify` stays the native.
+    verdict(src, "// DYNAMIC-LENGTH", "length", true);
 }
 
 #[test]

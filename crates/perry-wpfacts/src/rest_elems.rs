@@ -264,6 +264,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         Cons::MCall { call, .. } => fill_recv || fused_fill(m, call) || m.rest_elem_sabotage,
         Cons::Identity { .. }
         | Cons::Raise { .. }
+        | Cons::HandRaise { .. }
         | Cons::IndexHole
         | Cons::IndexHoleIn { .. }
         | Cons::IndexKept
@@ -273,9 +274,11 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }
+        | Cons::ArrayRecordEntry { .. }
         | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }

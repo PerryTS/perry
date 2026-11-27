@@ -228,7 +228,7 @@ console.warn('X.' + new C(), new A());
 #[test]
 fn escaped_instance_is_any_string() {
     let body = "const b = new B();
-(globalThis as any).sink(b);
+external(b);
 console.warn('X.' + b, new A());
 ";
     assert_ne!(ots(body), crate::Verdict::Dead);

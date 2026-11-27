@@ -84,7 +84,7 @@ fn keep_skinfa3_holder_from_unknown_code() {
     let src = prog(
         "",
         "function copy(src: any) { for (const name in src.m) { dst[name] = src.m[name]; } }",
-        "copy(unknown);",
+        "copy(new Function(process.argv[4])());",
     );
     assert!(kept_escapes(&whole_cfg(&src)));
 }

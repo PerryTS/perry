@@ -117,9 +117,10 @@ console.log(o.keys({{ a: 1 }}).length);
 #[test]
 fn an_unknown_receiver_hands_the_value_on() {
     let pf = facts(&format!(
-        r#"{M}
+        r#"
+        declare function external(x?: unknown): any;{M}
 const k2 = String(Math.random());
-const b: any = (globalThis as any)[process.argv[2]]();
+const b: any = external();
 const m = new M();
 b[k2] = m;
 console.log(m.run());

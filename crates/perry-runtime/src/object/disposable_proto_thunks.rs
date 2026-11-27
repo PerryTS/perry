@@ -223,7 +223,7 @@ pub(super) fn install_disposable_proto_methods(
             // corrupts a data slot (see the Map arm in `collection_proto_thunks`).
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ds_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
+                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true, effects = { returns(prim(bool)) })] export crate::object::disposable_proto_thunks::ds_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
             );
             ipm(
                 proto_obj,
@@ -261,7 +261,7 @@ pub(super) fn install_disposable_proto_methods(
         "AsyncDisposableStack" => {
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ads_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
+                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true, effects = { returns(prim(bool)) })] export crate::object::disposable_proto_thunks::ads_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
             );
             ipm(
                 proto_obj,

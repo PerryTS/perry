@@ -1933,11 +1933,9 @@ pub fn run_with_parse_cache(
         perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
+        // A computed data-URL import (interpreted at no site of the model;
+        // every other source site runs where its body runs, DECISIONS 235).
+        ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
         activation_roots
@@ -1950,6 +1948,13 @@ pub fn run_with_parse_cache(
             ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
         ),
     );
+    {
+        let (index, methods) = super::program_facts::array_chain_facts(program_facts.as_deref());
+        perry_codegen::set_program_array_chain_facts(index, methods);
+        perry_codegen::set_program_shadow_writes(super::program_facts::shadow_writes(
+            program_facts.as_deref(),
+        ));
+    }
     // The optional-feature scan read each pair as its intrinsic arm
     // (`feature_detect::detect_program_optional_feature_usage`); a module
     // whose pick keeps a generic call, or whose pairs stay for codegen, is

@@ -109,15 +109,22 @@ fn gl2_g1_devtools_shape() {
 /// stream_web classes) keep the sink: the stored value reaches the native.
 #[test]
 fn gl2_g1_native_read_names_keep_sink() {
-    for store in [
-        "g[\"URL\"] = class U { constructor(s: any) { console.log(s); } };",
-        "g[\"TextEncoder\"] = class T {};",
-        "g[\"Blob\"] = class B {};",
-        "g[\"ReadableStream\"] = class R {};",
+    // // owner 11-24: only names perry-runtime reads at run time (derived; today: onmessage) make a global store escape; URL is not one of them.
+    assert!(
+        !held(&program(
+            "g[\"URL\"] = class U { constructor(s: any) { console.log(s); } };"
+        )),
+        "URL: the runtime does not read it, realm not held"
+    );
+    for (name, store) in [
+        ("TextEncoder", "g[\"TextEncoder\"] = class T {};"),
+        ("Blob", "g[\"Blob\"] = class B {};"),
+        ("ReadableStream", "g[\"ReadableStream\"] = class R {};"),
     ] {
+        // owner 11-24: only names perry-runtime reads at run time make a global store escape; since 72ce74b350/ec0f0972b3/06245f1d0e the runtime uses the birth <NAME> (here {name}), so a program store under <NAME> stays the program's.
         assert!(
-            held(&program(store)),
-            "{store}: a native reads it by name: sink, realm held"
+            !held(&program(store)),
+            "{store}: the runtime uses the birth constructor, realm not held"
         );
     }
 }
@@ -131,11 +138,24 @@ fn gl2_keep() {
         "(Array.prototype as any).zz = (x: any) => x;",
         "(Object.prototype as any).zz = (x: any) => x;",
         "g[process.argv[2] === \"a\" ? Symbol.iterator as any : \"k\"] = (x: any) => x;",
-        "g[\"Promise\"] = class P { constructor(f: any) { f(() => 0, () => 0); } };",
-        "g[\"Error\"] = class E { constructor(m: any) { console.log(m); } };",
     ] {
-        assert!(held(&program(store)), "{store}: still a sink, realm held");
+        // owner 11-24: E20 carve-out dropped; the stored value escapes to the runtime per its contract, the realm is not held.
+        assert!(!held(&program(store)), "{store}: the value escapes, the realm is not held");
     }
+    // owner 11-24: only names perry-runtime reads at run time make a global store escape; since 72ce74b350/ec0f0972b3/06245f1d0e the runtime uses the birth Error, so a program store under Error stays the program's.
+    assert!(
+        !held(&program(
+            "g[\"Error\"] = class E { constructor(m: any) { console.log(m); } };"
+        )),
+        "Error: the runtime uses the birth Error, realm not held"
+    );
+    // // owner 11-24: only names perry-runtime reads at run time (derived; today: onmessage) make a global store escape; Promise is not one of them.
+    assert!(
+        !held(&program(
+            "g[\"Promise\"] = class P { constructor(f: any) { f(() => 0, () => 0); } };"
+        )),
+        "Promise: not read at run time, realm not held"
+    );
     for store in [
         "g[\"undefined\"] = 1;",
         "g[\"globalThis\"] = { a: 1 };",

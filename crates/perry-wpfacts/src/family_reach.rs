@@ -751,7 +751,13 @@ fn observe_tokens(m: &Model, v: &mut Verdicts) {
             _ => {}
         }
     }
-    for tm in &m.tmpls {
+    for (i, tm) in m.tmpls.iter().enumerate() {
+        // A birth in a body the program never runs is no birth: generation
+        // made the template, the solve never activated its maker (that body
+        // is live by its text, L3).
+        if m.tmpl_fn.get(&(i as crate::model::TmplId)).is_some_and(|&f| m.fn_inert(f)) {
+            continue;
+        }
         if let TmplKind::BObj { what, .. } = tm.kind {
             let holder = bobj_holder(what);
             let set = ix

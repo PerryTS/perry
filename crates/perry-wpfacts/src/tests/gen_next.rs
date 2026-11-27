@@ -20,6 +20,7 @@ fn facts_of(src: &str) -> ProgramFacts {
 fn facts_and_sources(src: &str) -> (ProgramFacts, Vec<u32>) {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         class Alt {{ other = 1; size = 4; }}
         class Called {{ value: any; constructor(v: any) {{ this.value = v; }} }}
@@ -270,14 +271,17 @@ fn gen_next_fact_u4_own_symbol_iterator() {
     excluded(&format!("const it: any = gen(); it[Symbol.iterator] = function () {{ return {{ next: {USER_NEXT} }}; }}; for (const s of it) {{ console.log(g(s)); break; }}"));
 }
 
+/// The guarded for-of walks the ordinary Array by index; its iterator arm
+/// runs only when `arrayRecordNeedsIterator(t)` holds (rule RP2), so the
+/// record there is over the generator alone: a generator source.
 #[test]
 fn gen_next_fact_u5_generator_or_array() {
-    excluded("const src: any = process.argv.length > 5 ? gen() : [new Alt()]; for (const s of src) { console.log(g(s)); break; }");
+    holds("const src: any = process.argv.length > 5 ? gen() : [new Alt()]; for (const s of src) { console.log(g(s)); break; }");
 }
 
 #[test]
 fn gen_next_fact_u6_escaped_generator_object() {
-    excluded("const it: any = gen(); (globalThis as any).hook(it); for (const s of it) { console.log(g(s)); break; }");
+    excluded("const it: any = gen(); external(it); for (const s of it) { console.log(g(s)); break; }");
 }
 
 /// `for await` makes no for-of record: no site the fact could name.
@@ -351,6 +355,7 @@ fn step_payloads(src: &str) -> Vec<bool> {
     let ast = perry_parser::parse_typescript(
         &format!(
             r#"
+        declare function external(x?: unknown): any;
             class Svc {{ size = 3; }}
             class Alt {{ other = 1; size = 4; }}
             class Called {{ value: any; constructor(v: any) {{ this.value = v; }} }}
