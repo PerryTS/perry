@@ -15,9 +15,10 @@ fn settled(promise: f64, state: i32) -> f64 {
     crate::promise::js_promise_result(promise)
 }
 
-fn error_code(value: f64) -> Option<&'static str> {
-    crate::node_submodules::error_code_for_error(
+fn error_code(value: f64) -> Option<String> {
+    crate::node_submodules::error_own_string(
         JSValue::from_bits(value.to_bits()).as_pointer::<crate::error::ErrorHeader>(),
+        "code",
     )
 }
 
@@ -123,7 +124,7 @@ fn runtime_data_import_loaders_and_rejections() {
             js_module_dynamic_import_fallback(specifier.get_nanbox_f64(), options.get_nanbox_f64());
         let error = scope.root_nanbox_f64(settled(promise, 2));
         assert_eq!(
-            error_code(error.get_nanbox_f64()),
+            error_code(error.get_nanbox_f64()).as_deref(),
             Some("ERR_MODULE_NOT_FOUND")
         );
     }
@@ -160,7 +161,10 @@ fn runtime_data_import_loaders_and_rejections() {
     let promise =
         js_module_dynamic_import_fallback(specifier.get_nanbox_f64(), options.get_nanbox_f64());
     let error = scope.root_nanbox_f64(settled(promise, 2));
-    assert_eq!(error_code(error.get_nanbox_f64()), Some("ENOENT"));
+    assert_eq!(
+        error_code(error.get_nanbox_f64()).as_deref(),
+        Some("ENOENT")
+    );
     std::fs::remove_dir(directory).unwrap();
 }
 

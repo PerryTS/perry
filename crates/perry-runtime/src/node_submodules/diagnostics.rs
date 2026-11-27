@@ -457,7 +457,9 @@ pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool 
 pub(crate) struct ErrorDiagnostics {
     code: Option<&'static str>,
     syscall: Option<&'static str>,
-    errno: Option<i32>,
+    /// A number, or `undefined` for an error Node gives an `errno` key it
+    /// cannot fill (c-ares).
+    errno: Option<f64>,
     path: Option<String>,
     dest: Option<String>,
     hostname: Option<String>,
@@ -465,18 +467,11 @@ pub(crate) struct ErrorDiagnostics {
 
 thread_local! {
     /// Diagnostics staged by the freshly allocated message until `alloc_error`
-    /// can attach them to the Error that owns them. Registration historically
-    /// precedes construction at the runtime/stdlib call sites; `alloc_error`
-    /// drains this entry before doing any GC-capable allocation, so a message
-    /// relocation can never strand a pending record.
+    /// writes them onto the Error that owns them. Registration precedes
+    /// construction at the runtime/stdlib call sites; `alloc_error` drains this
+    /// entry before doing any GC-capable allocation, so a message relocation
+    /// can never strand a pending record.
     static PENDING_ERROR_DIAGNOSTICS: RefCell<HashMap<usize, ErrorDiagnostics>> =
-        RefCell::new(HashMap::new());
-
-    /// The live Node diagnostic record, keyed by ErrorHeader address. Errors
-    /// have one existing move/finalize hook, so all six fields now rekey and die
-    /// together with their owner instead of following six message addresses
-    /// that the Error hook never receives.
-    pub(crate) static ERROR_DIAGNOSTICS: RefCell<HashMap<usize, ErrorDiagnostics>> =
         RefCell::new(HashMap::new());
 }
 
@@ -503,20 +498,49 @@ pub(crate) fn take_pending_error_diagnostics(
     PENDING_ERROR_DIAGNOSTICS.with(|m| m.borrow_mut().remove(&(message_ptr as usize)))
 }
 
-/// Attach a staged diagnostic record to the newly allocated Error.
-pub(crate) fn install_error_diagnostics(
-    error_ptr: *const crate::error::ErrorHeader,
+/// Write a staged diagnostic record onto its Error as ordinary own properties,
+/// in the order Node's `uvException` installs them. An `ERR_*` code marks the
+/// Error as one of Node's internal errors.
+///
+/// # Safety
+/// `error` roots a live `ErrorHeader`.
+pub(crate) unsafe fn install_error_diagnostics(
+    error: &crate::gc::RuntimeHandle<'_>,
     diagnostics: Option<ErrorDiagnostics>,
 ) {
     let Some(diagnostics) = diagnostics else {
         return;
     };
-    if error_ptr.is_null() {
-        return;
+    let put = |key: &str, value: f64| {
+        error.with_mut_ptr(|error: *mut u8| set_error_user_prop(error as usize, key, value));
+    };
+    let put_str = |key: &str, text: &str| {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = scope.root_nanbox_f64(crate::value::js_nanbox_string(text as i64));
+        put(key, value.get_nanbox_f64());
+    };
+    if let Some(errno) = diagnostics.errno {
+        put("errno", errno);
     }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow_mut().insert(error_ptr as usize, diagnostics);
-    });
+    if let Some(code) = diagnostics.code {
+        put_str("code", code);
+        if code.starts_with("ERR_") {
+            error.with_mut_ptr(|error| crate::error::error_mark_node_internal(error));
+        }
+    }
+    if let Some(syscall) = diagnostics.syscall {
+        put_str("syscall", syscall);
+    }
+    for (key, value) in [
+        ("path", &diagnostics.path),
+        ("dest", &diagnostics.dest),
+        ("hostname", &diagnostics.hostname),
+    ] {
+        if let Some(value) = value {
+            put_str(key, value);
+        }
+    }
 }
 
 pub(crate) fn register_error_code(message_ptr: *const StringHeader, code: &'static str) {
@@ -527,77 +551,55 @@ pub(crate) fn register_error_code(message_ptr: *const StringHeader, code: &'stat
 ///
 /// Registration must immediately precede construction of the Error that owns
 /// `message_ptr`. `alloc_error` drains this construction-stage record before
-/// its first GC point and installs it under the resulting ErrorHeader address.
+/// its first GC point and writes it onto the resulting Error.
 pub fn register_error_code_pub(message_ptr: *const StringHeader, code: &'static str) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.code = Some(code));
 }
 
-/// Returns the explicit `ERR_*` code registered for an Error, if any. Called
-/// from the `.code` property getter and uncaught-error reporter.
-pub fn error_code_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<&'static str> {
-    if error_ptr.is_null() {
+/// The Error's own `code` when it is one of Node's internal errors: the code
+/// Node prints in an `Error [CODE]: message` header.
+pub fn error_code_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
+    // SAFETY: a non-null `error_ptr` names a live ErrorHeader.
+    if error_ptr.is_null() || !unsafe { crate::error::error_is_node_internal(error_ptr) } {
         return None;
     }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.code)
+    error_own_string(error_ptr, "code")
+}
+
+/// The Error's own string-valued property `key`.
+pub fn error_own_string(error_ptr: *const crate::error::ErrorHeader, key: &str) -> Option<String> {
+    crate::string::with_string_value_bytes(error_user_prop(error_ptr as usize, key)?, |bytes| {
+        String::from_utf8_lossy(bytes).into_owned()
     })
 }
 
 /// Stage a Node-style `syscall` string for the Error constructed from this
-/// message. Read back from the `.syscall` getter in `field_get_set`.
+/// message.
 pub fn register_error_syscall(message_ptr: *const StringHeader, syscall: &'static str) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| {
         diagnostics.syscall = Some(syscall)
     });
 }
 
-pub fn error_syscall_for_error(
-    error_ptr: *const crate::error::ErrorHeader,
-) -> Option<&'static str> {
-    if error_ptr.is_null() {
-        return None;
-    }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.syscall)
-    })
-}
-
 /// Stage a Node-style negative libuv errno for the Error constructed from this
-/// message. Read back from the `.errno` getter in `field_get_set`.
+/// message.
 pub fn register_error_errno(message_ptr: *const StringHeader, errno: i32) {
-    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.errno = Some(errno));
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.errno = Some(errno as f64)
+    });
 }
 
-pub fn error_errno_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<i32> {
-    if error_ptr.is_null() {
-        return None;
-    }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.errno)
-    })
+/// Stage an `errno` key whose value is `undefined`, as on Node's c-ares errors.
+pub fn register_error_errno_undefined(message_ptr: *const StringHeader) {
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.errno = Some(f64::from_bits(JSValue::undefined().bits()))
+    });
 }
 
 /// Stage a Node-style `path` string for the Error constructed from this
-/// message. The value is owned (paths are runtime data, not static).
+/// message.
 pub fn register_error_path(message_ptr: *const StringHeader, path: String) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.path = Some(path));
-}
-
-pub fn error_path_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
-    if error_ptr.is_null() {
-        return None;
-    }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.path.clone())
-    })
 }
 
 /// Stage a Node-style `hostname` string for the Error constructed from this
@@ -609,47 +611,11 @@ pub fn register_error_hostname(message_ptr: *const StringHeader, hostname: Strin
     });
 }
 
-pub fn error_hostname_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
-    if error_ptr.is_null() {
-        return None;
-    }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.hostname.clone())
-    })
-}
-
 /// Stage a Node-style `dest` string for the Error constructed from this
 /// message. Node sets `dest` on two-path fs errors (rename/copyFile/link/
 /// symlink) alongside `path`.
 pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.dest = Some(dest));
-}
-
-pub fn error_dest_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
-    if error_ptr.is_null() {
-        return None;
-    }
-    ERROR_DIAGNOSTICS.with(|m| {
-        m.borrow()
-            .get(&(error_ptr as usize))
-            .and_then(|diagnostics| diagnostics.dest.clone())
-    })
-}
-
-/// A user-assigned own property value on an `Error` object. String values are
-/// stored as an owned `String` (GC-safe — reconstructed into a fresh
-/// `StringHeader` on read, exactly like diagnostic `path` values); everything
-/// else is stored as raw NaN-box bits. Immediates (number/bool/null/undefined)
-/// carry no live heap reference so this is fully safe for the common cases
-/// (`err.code = "X"`, `err.errno = -2`). Heap-object-valued props are stored
-/// by bits as a best-effort and may not survive a GC move of the referent;
-/// errors rarely carry object-valued own properties.
-#[derive(Clone)]
-pub enum ErrUserProp {
-    Str(String),
-    Bits(u64),
 }
 
 mod user_props;
