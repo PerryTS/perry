@@ -1146,7 +1146,7 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
     }
     let n = m.node_l("arr-iterated");
     m.arr_iterated.insert(t, n);
-    let elems = m.field_any(t);
+    let elems = m.array_like_elems(t);
     m.edge(elems, n);
     if m.is_arr(t) {
         let h = m.hole(t);
@@ -1239,10 +1239,16 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// reads (`num_fields` into the any-field, the plain-key chain read), the
 /// receiver node and what the method does to it. Returns the receiver node.
 fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
-    let own = m.num_fields(t);
-    let elems = m.field_any(t);
-    m.edge(own, elems);
-    m.plain_key(t, ChainAct::Load(elems, m.thrown));
+    if m.elems_in_any(t) {
+        let own = m.num_fields(t);
+        let elems = m.field_any(t);
+        m.edge(own, elems);
+        m.plain_key(t, ChainAct::Load(elems, m.thrown));
+    } else {
+        // Rule W10-IDX: the index reads go to their own node, never the
+        // any-key field a named read of `t` reads (`array_like_elems`).
+        m.array_like_elems(t);
+    }
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1395,7 +1401,22 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         m.arr_len_permuted(t);
     }
     let c = m.calls[call as usize].clone();
-    let elems = m.field_any(t);
+    // Rule W10-IDX: what the method reads at the receiver's indices
+    // (`elems`) and what it writes there (`put`): one node, the any-key
+    // field, for an Array (`elems_in_any`); on any other receiver the
+    // index reads and the program's [[Set]] under an index key, so no
+    // write reaches a name that is no index.
+    let elems = m.array_like_elems(t);
+    let put = m.array_like_put(t);
+    if put != elems
+        && matches!(
+            name,
+            Some("copyWithin" | "reverse" | "sort" | "splice" | "shift" | "unshift")
+        )
+    {
+        // The method moves values between indices (Set(O, to, Get(O, from))).
+        m.edge(elems, put);
+    }
     // Every method here reads or writes the receiver's indices through its
     // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
     // program's accessors under those keys run.
@@ -1469,11 +1490,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // computed key could name.
         Some("unshift") => {
             for &a in &c.args {
-                m.edge(a, elems);
+                m.edge(a, put);
             }
             let key = m.elem_key();
             for &s in &c.spread {
-                m.cons(s, Cons::Load { key, dst: elems });
+                m.cons(s, Cons::Load { key, dst: put });
             }
             ret_prim(m, call, prim::NUM);
         }
@@ -1491,7 +1512,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `constructor`.
         Some("splice") => {
             for &a in c.args_from(2).iter() {
-                m.edge(a, elems);
+                m.edge(a, put);
             }
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);

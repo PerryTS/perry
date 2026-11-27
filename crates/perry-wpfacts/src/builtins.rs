@@ -51,7 +51,7 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_any_field, global_any_names, global_any_new, global_def_field, global_field,
-    global_user_key, global_user_method, global_value_written, is_builtin_module,
+    global_num_field, global_user_key, global_user_method, global_value_written, is_builtin_module,
     native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
     native_parent_ctor_named, native_parent_keys, native_parent_of, native_parent_summarized,
     native_parent_value, native_proto, native_writers_why, native_written, native_written_by,

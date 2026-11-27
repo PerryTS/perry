@@ -759,8 +759,10 @@ impl Model {
         // never names `__proto__`; a key whose known strings do keeps the
         // path below.
         // A Number key (`num_only`: an element or digits key) names an
-        // index property of the global object (ToString, 7.1.19): a String
-        // key no global binding read names, the same field.
+        // index property of the global object (ToString, 7.1.19): a
+        // canonical numeric String, which no global binding read names
+        // unless its name is one (rule W10-IDX: its own field,
+        // `global_num_field`, never the any-String field).
         if let Key::Any(shape) = key {
             if (shape != 0 || num_only)
                 && !theirs
@@ -769,9 +771,13 @@ impl Model {
                 && builtins::global_object(self, t)
                 && !self.key_names_known_str(key, "__proto__")
             {
-                let ga = builtins::global_any_field(self, shape);
+                let (ga, replay) = if num_only {
+                    (builtins::global_num_field(self), self.elem_key())
+                } else {
+                    (builtins::global_any_field(self, shape), key)
+                };
                 self.edge(src, ga);
-                self.global_any_stores.push((t, key, src, site));
+                self.global_any_stores.push((t, replay, src, site));
                 return;
             }
         }
