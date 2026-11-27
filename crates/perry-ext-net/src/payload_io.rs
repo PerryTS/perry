@@ -238,8 +238,9 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 // A listener may reopen either object during the first emit.
                 let wrapper_record = scope.root_nanbox(prepare_socket_closed(owner.get(), &closed));
                 let parent_record = scope.root_nanbox(prepare_socket_closed(original.get(), event));
-                queue_socket_closed(owner.get(), wrapper_record.get());
-                queue_socket_closed(original.get(), parent_record.get());
+                // Node's TLSSocket emits its 'close' from the parent's.
+                emit_socket_closed(original.get(), parent_record.get());
+                emit_socket_closed(owner.get(), wrapper_record.get());
             } else {
                 socket_closed(owner.get(), event);
             }
@@ -744,9 +745,11 @@ pub(crate) fn socket_closed(owner: f64, event: &tl::NetCompletion) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let record = scope.root_nanbox(prepare_socket_closed(owner.get(), event));
-    // Native acknowledgement may arrive before the logical destroy jobs run.
-    // Share their FIFO so cancellation and error precede close/provider retirement.
-    queue_socket_closed(owner.get(), record.get());
+    // The runtime delivers a closed socket's Closed in the close-callbacks
+    // phase, after the ticks that cancel its callbacks and emit its error:
+    // 'close' is emitted inside it, as Node emits it inside the handle's
+    // close callback.
+    emit_socket_closed(owner.get(), record.get());
 }
 
 fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {

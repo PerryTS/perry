@@ -14,6 +14,20 @@ extern "C" {
         args_ptr: *const f64,
         args_len: usize,
     ) -> f64;
+    fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64);
+}
+
+/// Set `key` on the JS object `owner` as an own data property.
+unsafe fn set_own(owner: f64, key: &str, value: f64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let value = scope.root_nanbox(value);
+    let key = scope.root_addr(alloc_string(key).as_raw() as i64);
+    js_object_set_field_by_name(
+        JsValue::from_bits(owner.get().to_bits()).as_pointer(),
+        key.get() as *const StringHeader,
+        value.get(),
+    );
 }
 
 /// Forward a body chunk to a `.pipe(dest)` destination: `dest.write(chunk)`.
@@ -657,6 +671,7 @@ pub(crate) unsafe fn handle_transport_error_event(
     code: &str,
     syscall: &str,
     errno: i64,
+    peer: Option<(&str, u16)>,
 ) {
     let (already_done, incoming) =
         with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
@@ -669,12 +684,25 @@ pub(crate) unsafe fn handle_transport_error_event(
         return;
     }
     client_abort::cleanup_request_signal(request_handle);
-    let err = perry_ffi::system_error_value(message, code, syscall, errno);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let err = scope.root_nanbox(f64::from_bits(
+        perry_ffi::system_error_value(message, code, syscall, errno).bits(),
+    ));
+    // Node names the peer a failed lookup or connect was attempting.
+    if let Some((host, port)) = peer {
+        let host = f64::from_bits(JsValue::from_string_ptr(alloc_string(host).as_raw()).bits());
+        if syscall == "getaddrinfo" {
+            set_own(err.get(), "hostname", host);
+        } else {
+            set_own(err.get(), "address", host);
+            set_own(err.get(), "port", f64::from(port));
+        }
+    }
     if incoming != 0 {
-        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(err.bits()));
+        handle_incoming_transport_abort(request_handle, incoming, err.get());
         return;
     }
-    fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
+    fire_request_error_listeners(request_handle, err.get());
     finish_agent_request(request_handle, false);
     fire_request_close_once(request_handle);
 }

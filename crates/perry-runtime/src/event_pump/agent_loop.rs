@@ -577,6 +577,99 @@ pub(crate) fn component_turn_and_take(
     Ok(take(operations, closing))
 }
 
+/// One nonblocking turn that hands back the net `Closed` completions `select`
+/// picks, without dispatching anything. Every other completion stays in
+/// STAGED, in its original order, for the next dispatch; the turn's JS-timer
+/// expiry is retired at once, as a dispatch would.
+///
+/// A `Closed` releases its cell's refs, so it is dispatched after every earlier
+/// completion that `link_of` names the same cell for. The earlier ones that
+/// `retires_with` it (the closing socket's retired operations) come back with
+/// it, in order; behind any other completion of its cell it stays staged.
+pub(crate) fn take_closed_completions(
+    select: impl Fn(&turnloop::Completion) -> bool,
+    link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
+    retires_with: impl Fn(&turnloop::Completion, &turnloop::Completion) -> bool,
+) -> Vec<turnloop::Completion> {
+    if STATE.with(Cell::get) != LoopState::Owner {
+        return Vec::new();
+    }
+    AGENT_LOOP.with(|slot| {
+        // Re-entry from inside a dispatch pass: that pass owns the turn.
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return;
+        };
+        let Some(agent) = slot.as_mut() else {
+            return;
+        };
+        if let Ok(info) = agent.driver.turn(Timeout::Now, &mut agent.completions) {
+            agent.record(&info);
+        }
+    });
+    let expiries: Vec<_> = STAGED.with(|staged| {
+        staged
+            .borrow_mut()
+            .extract_if(.., |c| c.token == TIMER_TOKEN)
+            .collect()
+    });
+    for expiry in expiries {
+        if matches!(expiry.result, turnloop::OpResult::Timer) {
+            note_timer_expiry();
+        }
+    }
+    let net_cell = |c: &turnloop::Completion| {
+        let net = !is_component_io(c)
+            && !crate::turnloop_proc::owns(c.token)
+            && !crate::turnloop_pool::owns(c.token)
+            && !crate::turnloop_post::owns(c.token);
+        if net {
+            link_of(c)
+        } else {
+            None
+        }
+    };
+    STAGED
+        .with(|staged| take_with_retired(&mut staged.borrow_mut(), net_cell, select, retires_with))
+}
+
+/// Take out of `staged` each item `select` picks, with the earlier items of
+/// its cell, when every one of them `retires_with` it; everything else keeps
+/// its order, and the taken items keep theirs. See [`take_closed_completions`].
+pub(super) fn take_with_retired<T>(
+    staged: &mut Vec<T>,
+    cell_of: impl Fn(&T) -> Option<usize>,
+    select: impl Fn(&T) -> bool,
+    retires_with: impl Fn(&T, &T) -> bool,
+) -> Vec<T> {
+    let mut take = vec![false; staged.len()];
+    let mut earlier: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+    for (index, item) in staged.iter().enumerate() {
+        let Some(cell) = cell_of(item) else {
+            continue;
+        };
+        let before = earlier.entry(cell).or_default();
+        if select(item) && before.iter().all(|&i| retires_with(&staged[i], item)) {
+            for i in before.drain(..) {
+                take[i] = true;
+            }
+            take[index] = true;
+        } else {
+            before.push(index);
+        }
+    }
+    let mut taken = Vec::new();
+    let mut kept = Vec::with_capacity(staged.len());
+    for (item, take) in staged.drain(..).zip(take) {
+        if take {
+            taken.push(item);
+        } else {
+            kept.push(item);
+        }
+    }
+    *staged = kept;
+    taken
+}
+
 /// Whether this thread may take the precise park path. One TLS read once the
 /// slot is claimed; the claim itself is taken once, on the first ask.
 #[inline]
@@ -834,6 +927,27 @@ pub(super) fn turn_for_test(budget: std::time::Duration) {
     dispatch_staged();
 }
 
+/// Stage `completion` as a turn would.
+#[cfg(test)]
+pub(crate) fn stage_for_test(completion: turnloop::Completion) {
+    STAGED.with(|staged| staged.borrow_mut().push(completion));
+}
+
+/// How many staged completions `link_of` names `cell` for.
+#[cfg(test)]
+pub(crate) fn staged_for_test(
+    cell: usize,
+    link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
+) -> usize {
+    STAGED.with(|staged| {
+        staged
+            .borrow()
+            .iter()
+            .filter(|c| link_of(c) == Some(cell))
+            .count()
+    })
+}
+
 /// Drop this thread's loop and any staged completions, so the next test starts
 /// from a clean slate even though it runs on the same process.
 #[cfg(test)]
@@ -848,16 +962,18 @@ pub(super) fn reset_for_test() {
 }
 
 /// Whether the loop has referenced handles, operations or queued results —
-/// `Loop::alive()`, O(1). Used by the host-driven bounded-turn entry point.
+/// `Loop::alive()` — or staged completions still to dispatch. Used by the
+/// host-driven bounded-turn entry point.
 pub(super) fn has_outstanding_work() -> bool {
     if STATE.with(Cell::get) != LoopState::Owner {
         return false;
     }
-    AGENT_LOOP.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .is_some_and(|agent| agent.driver.alive())
-    })
+    staged_for_dispatch()
+        || AGENT_LOOP.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|agent| agent.driver.alive())
+        })
 }
 
 /// Whether this thread can own its agent's loop at all.
@@ -899,6 +1015,11 @@ pub(super) fn park_until(deadline: Instant) -> Park {
 }
 
 fn park_turn(deadline: Instant) -> Park {
+    if staged_for_dispatch() {
+        // A close-phase turn left completions for the poll phase: deliver
+        // them instead of blocking ahead of them.
+        return Park::Notified;
+    }
     AGENT_LOOP.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(agent) = slot.as_mut() else {
@@ -1029,7 +1150,9 @@ pub(super) fn loop_deadline() -> Option<Instant> {
 
 /// DESIGN §9 `fast()`: a nonblocking turn, only when turnloop has outstanding
 /// work. P0 submits no operation, so `alive()` is false and this makes no OS
-/// call on the hot promise path.
+/// call on the hot promise path. Staged completions are dispatched either way:
+/// a close-phase turn can stage the last ones of a loop that is no longer
+/// alive.
 #[inline]
 pub(super) fn fast_turn() {
     if STATE.with(Cell::get) != LoopState::Owner {
@@ -1051,9 +1174,19 @@ pub(super) fn fast_turn() {
         }
         true
     });
-    if turned {
+    if turned || staged_for_dispatch() {
         dispatch_staged();
     }
+}
+
+/// Whether STAGED holds completions the next [`dispatch_staged`] delivers.
+/// Component completions wait there for their guest instead.
+fn staged_for_dispatch() -> bool {
+    STAGED.with(|staged| {
+        staged
+            .try_borrow()
+            .is_ok_and(|staged| staged.iter().any(|c| !is_component_io(c)))
+    })
 }
 
 /// One nonblocking turn plus its dispatch, *without* the `alive()` gate.

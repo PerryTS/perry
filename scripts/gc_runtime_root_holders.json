@@ -3715,10 +3715,6 @@
     },
     {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "ERROR_DIAGNOSTICS"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
       "name": "NEXT_DIAG_ID"
     },
     {

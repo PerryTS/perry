@@ -24,12 +24,20 @@ pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
     // error, dies with it, and cannot be inherited by a later tenant of a
     // recycled address. Insertion order comes free from the bag object's
     // `keys_array`.
+    // Allocating the key or the bag can move the error and the value.
     unsafe {
-        let Some(bag) = crate::object::cell_expando_ensure(error_ptr) else {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let owner = scope.root_raw_mut_ptr(error_ptr as *mut u8);
+        let value = scope.root_nanbox_f64(value);
+        let key = scope.root_string_ptr(js_string_from_bytes(key.as_ptr(), key.len() as u32));
+        let Some(bag) =
+            owner.with_mut_ptr(|owner: *mut u8| crate::object::cell_expando_ensure(owner as usize))
+        else {
             return;
         };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::js_object_set_field_by_name(bag, key_ptr, value);
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(bag, key, value.get_nanbox_f64())
+        });
     }
 }
 
@@ -40,9 +48,12 @@ pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
     if error_ptr == 0 {
         return None;
     }
+    // Allocating the key can move the bag.
     unsafe {
-        let bag = crate::object::cell_expando_get(error_ptr)?;
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let bag = scope.root_raw_mut_ptr(crate::object::cell_expando_get(error_ptr)?);
+        let (key_ptr, bag) = bag
+            .across_mut::<ObjectHeader, _>(|| js_string_from_bytes(key.as_ptr(), key.len() as u32));
         // Distinguish "absent" from "present and undefined": a bare get would
         // return `undefined` for both, and the caller uses `None` to mean the
         // error has no such own property at all.

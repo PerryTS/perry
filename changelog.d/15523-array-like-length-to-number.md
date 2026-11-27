@@ -1,0 +1,1 @@
+Reading an array-like's `length` (`Array.from`, `concat` of a spreadable Proxy, the `Array.prototype` generics, `fill` and `reverse`) throws `TypeError` for a BigInt or Symbol `length`, as `ToNumber` requires, instead of converting `1n` to `1`.

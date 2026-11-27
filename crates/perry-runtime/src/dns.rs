@@ -763,6 +763,7 @@ fn dns_query_error_value(
     hostname: &str,
 ) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_errno_undefined(msg);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, syscall);
     crate::node_submodules::register_error_hostname(msg, hostname.to_string());

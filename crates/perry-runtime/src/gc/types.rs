@@ -537,12 +537,6 @@ pub(crate) enum GcMoveHookKind {
     OwnedAsyncSnapshot,
     MapForeachStack,
     SetForeachStack,
-    /// Rekey the Node diagnostic record keyed by the ErrorHeader address after
-    /// a move. Errors are movable; without this a moved error loses its
-    /// `err.code`/`err.syscall`/`err.errno`/path fields. User-assigned props
-    /// live on the Error's traced `ObjectMeta` edge and need no side-table
-    /// rekeying.
-    ErrorSideTables,
     /// Rekey a lazy JSON array's tape registration. `json_tape_store` keys a
     /// tape by its owner's address, which is precisely what kept
     /// `GC_TYPE_LAZY_ARRAY` immovable and old-gen until this existed.
@@ -580,9 +574,6 @@ pub(crate) enum GcFinalizeHookKind {
     /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
     /// released when the cell is swept. POD variants drop to a no-op.
     TemporalCleanup,
-    /// Drop a swept error's address-keyed Node diagnostic record so a fresh
-    /// error allocated at the recycled address doesn't inherit its fields.
-    ErrorSideTables,
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.
     LazyArrayTape,
@@ -744,9 +735,9 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::ErrorSideTables,
+        GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::ErrorSideTables,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_MAP,
@@ -1461,11 +1452,6 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::OwnedAsyncSnapshot => unsafe {
             crate::async_context::snapshot_holder_moved_for_gc(old_user, new_user);
         },
-        GcMoveHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics_gc::error_side_tables_owner_moved(
-                old_user, new_user,
-            );
-        }
         GcMoveHookKind::LazyArrayTape => {
             crate::json_tape_store::owner_moved(old_user, new_user);
         }
@@ -1475,9 +1461,6 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
 #[cfg(test)]
 pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usize) {
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
-        GcMoveHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
-        }
         GcMoveHookKind::LazyArrayTape => {
             // The tape is released by `GcFinalizeHookKind::LazyArrayTape` and,
             // for a header that dies in a copying minor's from-space, by
@@ -1532,10 +1515,6 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
                 user_ptr as *mut crate::temporal::TemporalCell,
             );
         }
-        GcFinalizeHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr as usize);
-        }
-
         GcFinalizeHookKind::LazyArrayTape => {
             crate::json_tape_store::release(user_ptr as usize);
         }

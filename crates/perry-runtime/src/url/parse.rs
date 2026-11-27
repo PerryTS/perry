@@ -605,7 +605,7 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
 pub(crate) fn throw_invalid_url(input: &str) -> ! {
     let msg = format!("Invalid URL: {}", input);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_URL");
+    crate::node_submodules::register_native_layer_error_code(msg_ptr, "ERR_INVALID_URL");
     crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
 }
 

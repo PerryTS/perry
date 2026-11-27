@@ -340,7 +340,7 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8) -> bool {
         return true;
     }
     match info.move_hook_kind {
-        GcMoveHookKind::ErrorSideTables | GcMoveHookKind::LazyArrayTape => true,
+        GcMoveHookKind::LazyArrayTape => true,
         // The owned-holder kinds carry a finalize hook, answered above.
         GcMoveHookKind::None
         | GcMoveHookKind::MapForeachStack
