@@ -36,7 +36,7 @@ pub extern "C" fn js_url_new(url_str: *mut crate::StringHeader) -> *mut ObjectHe
     let input = arg_text(url_str);
     match href::parse(&input, None) {
         Some(parsed) => href::new_url_object(&parsed),
-        None => throw_invalid_url(&input),
+        None => throw_invalid_url(&input, None),
     }
 }
 
@@ -50,7 +50,7 @@ pub extern "C" fn js_url_new_with_base(
     let base = arg_text(base_str);
     match href::parse(&input, Some(&base)) {
         Some(parsed) => href::new_url_object(&parsed),
-        None => throw_invalid_url(&input),
+        None => throw_invalid_url(&input, Some(&base)),
     }
 }
 
@@ -162,7 +162,7 @@ pub extern "C" fn js_url_set_href(url: *mut ObjectHeader, value: f64) {
     }
     let value = coerce_url_setter_value(value);
     if href::set(url, Setter::Href(&value)).is_err() {
-        throw_invalid_url(&value);
+        throw_invalid_url(&value, None);
     }
 }
 

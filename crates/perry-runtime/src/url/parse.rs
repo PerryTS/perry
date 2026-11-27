@@ -1,9 +1,6 @@
 //! The URL object's slot indices, the `Invalid URL` error, and the
 //! hand-rolled parser URLPattern matches with.
 
-use super::*;
-
-
 /// WHATWG "special scheme": has a host, and its parser treats `\` as a path
 /// separator (`foo:`, `mailto:`, `data:` paths keep it).
 pub(crate) fn is_special_url_scheme(protocol: &str) -> bool {
@@ -413,14 +410,17 @@ pub(crate) const URL_SEARCH_PARAMS: u32 = 9;
 pub(crate) const URL_USERNAME: u32 = 10;
 pub(crate) const URL_PASSWORD: u32 = 11;
 
-/// Build and throw a `TypeError` matching Node's WHATWG-URL parser's
-/// "Invalid URL" exception. Used by `new URL(...)` when the input doesn't
-/// look like a parseable absolute URL.
-pub(crate) fn throw_invalid_url(input: &str) -> ! {
-    let msg = format!("Invalid URL: {}", input);
-    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    crate::node_submodules::register_native_layer_error_code(msg_ptr, "ERR_INVALID_URL");
-    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
+/// Throw Node's WHATWG-URL parse failure: `TypeError("Invalid URL")` with own
+/// `code` = `ERR_INVALID_URL`, `input`, and `base` when one was given.
+pub(crate) fn throw_invalid_url(input: &str, base: Option<&str>) -> ! {
+    let mut props = vec![("code", "ERR_INVALID_URL"), ("input", input)];
+    if let Some(base) = base {
+        props.push(("base", base));
+    }
+    crate::exception::throw_core(crate::error::CoreError::type_error_with_own_strings(
+        b"Invalid URL",
+        &props,
+    ));
 }
 
 /// Validate that `s` looks like a parseable absolute URL — has a scheme
