@@ -229,7 +229,7 @@ fn specialized_stdlib_call(expr: &Expr) -> Option<(&'static str, &'static str)> 
         Expr::FsRmRecursive(_) => ("fs", "rm"),
         // path — pure-string transforms, lower security-signal but
         // included so `perry audit --sbom` shows the full surface.
-        Expr::PathJoin(_, _) | Expr::PathResolveJoin(_, _) | Expr::PathWin32Join(_, _) => {
+        Expr::PathJoin(_) | Expr::PathResolveJoin(_, _) | Expr::PathWin32Join(_) => {
             ("path", "join")
         }
         Expr::PathDirname(_) => ("path", "dirname"),

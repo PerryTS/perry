@@ -581,10 +581,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(v, out);
             }
         }
-        Expr::MathPow(a, b)
-        | Expr::PathJoin(a, b)
-        | Expr::PathRelative(a, b)
-        | Expr::PathWin32Join(a, b) => {
+        Expr::MathPow(a, b) | Expr::PathRelative(a, b) => {
             walk(a, out);
             walk(b, out);
         }
@@ -592,7 +589,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(a, out);
             walk(b, out);
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for v in args {
                 walk(v, out);
             }

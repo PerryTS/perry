@@ -1346,7 +1346,38 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
                 None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
             }
         }
-        Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
+        Expr::PathJoin(parts) => {
+            let mut joined: Option<Vec<String>> = None;
+            for part in parts {
+                let rights = match resolve_import_path_with_context(
+                    part,
+                    consts,
+                    param_literals,
+                    local_literals,
+                    visiting,
+                ) {
+                    Resolution::Set(rights) => rights,
+                    unresolved => return unresolved,
+                };
+                joined = Some(match joined {
+                    None => rights,
+                    Some(lefts) => {
+                        let mut out = Vec::new();
+                        for left in &lefts {
+                            for right in &rights {
+                                let joined = static_path_join(left, right);
+                                if !out.contains(&joined) {
+                                    out.push(joined);
+                                }
+                            }
+                        }
+                        out
+                    }
+                });
+            }
+            Resolution::Set(joined.unwrap_or_default())
+        }
+        Expr::PathResolveJoin(left, right) => {
             let left = resolve_import_path_with_context(
                 left,
                 consts,

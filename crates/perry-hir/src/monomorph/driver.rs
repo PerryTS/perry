@@ -568,10 +568,7 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(path, ctx, module, idx);
             collect_instantiations_in_expr(content, ctx, module, idx);
         }
-        Expr::PathJoin(a, b)
-        | Expr::PathMatchesGlob(a, b)
-        | Expr::PathResolveJoin(a, b)
-        | Expr::PathWin32Join(a, b) => {
+        Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) => {
             collect_instantiations_in_expr(a, ctx, module, idx);
             collect_instantiations_in_expr(b, ctx, module, idx);
         }
@@ -583,7 +580,7 @@ fn collect_instantiations_in_expr(
         | Expr::PathToNamespacedPath(p) => {
             collect_instantiations_in_expr(p, ctx, module, idx);
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for e in args {
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }

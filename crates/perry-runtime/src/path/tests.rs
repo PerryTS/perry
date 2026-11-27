@@ -390,13 +390,22 @@ mod posix_pinned_tests {
         string_to_js(text)
     }
 
+    fn join(win32: bool, a: *mut StringHeader, b: *mut StringHeader) -> *mut StringHeader {
+        let args = [crate::value::js_nanbox_string(a as i64), crate::value::js_nanbox_string(b as i64)];
+        if win32 {
+            super::super::join::win32_join_values(&args)
+        } else {
+            super::super::join::posix_join_values(&args)
+        }
+    }
+
     fn read(ptr: *mut StringHeader) -> String {
         unsafe { string_from_header(ptr) }.expect("result is a string")
     }
 
     #[test]
     fn posix_family_is_host_independent() {
-        assert_eq!(read(js_path_posix_join(s("a"), s("b"))), "a/b");
+        assert_eq!(read(join(false, s("a"), s("b"))), "a/b");
         assert_eq!(read(js_path_posix_normalize(s("a/b/../c"))), "a/c");
         assert_eq!(read(js_path_posix_dirname(s("/a/b"))), "/a");
         assert_eq!(read(js_path_posix_basename(s("/a/b.txt"))), "b.txt");
@@ -433,6 +442,15 @@ mod platform_default_tests {
         string_to_js(text)
     }
 
+    fn join(win32: bool, a: *mut StringHeader, b: *mut StringHeader) -> *mut StringHeader {
+        let args = [crate::value::js_nanbox_string(a as i64), crate::value::js_nanbox_string(b as i64)];
+        if win32 {
+            super::super::join::win32_join_values(&args)
+        } else {
+            super::super::join::posix_join_values(&args)
+        }
+    }
+
     fn read(ptr: *mut StringHeader) -> String {
         unsafe { string_from_header(ptr) }.expect("result is a string")
     }
@@ -451,8 +469,8 @@ mod platform_default_tests {
         assert_eq!(read(js_path_sep_get()), "\\");
         assert_eq!(read(js_path_delimiter_get()), ";");
 
-        assert_eq!(read(js_path_join(s("a"), s("b"))), "a\\b");
-        assert_eq!(read(js_path_join(s("C:\\a"), s("..\\b"))), "C:\\b");
+        assert_eq!(read(join(true, s("a"), s("b"))), "a\\b");
+        assert_eq!(read(join(true, s("C:\\a"), s("..\\b"))), "C:\\b");
         assert_eq!(read(js_path_normalize(s("C:/a/b/../c"))), "C:\\a\\c");
         assert_eq!(read(js_path_dirname(s("C:\\a\\b"))), "C:\\a");
         assert_eq!(read(js_path_basename(s("C:\\a\\b.txt"))), "b.txt");
@@ -491,7 +509,7 @@ mod platform_default_tests {
         assert_eq!(read(js_path_sep_get()), "/");
         assert_eq!(read(js_path_delimiter_get()), ":");
 
-        assert_eq!(read(js_path_join(s("a"), s("b"))), "a/b");
+        assert_eq!(read(join(false, s("a"), s("b"))), "a/b");
         assert_eq!(read(js_path_normalize(s("a/b/../c"))), "a/c");
         assert_eq!(read(js_path_dirname(s("/a/b"))), "/a");
         assert_eq!(read(js_path_basename(s("/a/b.txt"))), "b.txt");
