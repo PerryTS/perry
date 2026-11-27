@@ -98,6 +98,12 @@ pub unsafe extern "C" fn js_net_set_default_auto_select_family(val_f64: f64) -> 
     f64::from_bits(JsValue::UNDEFINED.0)
 }
 
+pub(crate) fn auto_select_family_attempt_timeout_default() -> u32 {
+    AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .max(10) as u32
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_net_get_default_auto_select_family_attempt_timeout() -> f64 {
     let v = AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS.load(std::sync::atomic::Ordering::Relaxed);

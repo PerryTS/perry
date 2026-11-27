@@ -973,9 +973,7 @@ fn writes_between_connect_attempts_reach_the_attempt_that_succeeds() {
                 subsystem: SUBSYSTEM,
                 nodelay: true,
                 remaining: [dead, live].into_iter().collect(),
-                retrying: false,
-                last_error: None,
-                op: None,
+                ..ConnectPlan::default()
             },
         )
     });

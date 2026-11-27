@@ -1581,8 +1581,12 @@ unsafe fn await_maybe_promise(value: f64) -> SettledValue {
         return SettledValue::Fulfilled(value);
     }
 
+    // The microtask drain runs JS: a collection inside it may move the
+    // promise, so the frame roots it and re-reads it after every drain.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = scope.root_raw_mut_ptr(promise);
     for _ in 0..100_000 {
-        if js_promise_state(promise) != 0 {
+        if js_promise_state(held.get_raw_mut_ptr()) != 0 {
             break;
         }
         if js_promise_run_microtasks() == 0 {
@@ -1590,6 +1594,7 @@ unsafe fn await_maybe_promise(value: f64) -> SettledValue {
         }
     }
 
+    let promise = held.get_raw_mut_ptr::<Promise>();
     match js_promise_state(promise) {
         1 => SettledValue::Fulfilled(js_promise_value(promise)),
         2 => SettledValue::Rejected(js_promise_reason(promise).to_bits()),

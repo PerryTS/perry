@@ -874,7 +874,8 @@ impl From<PerrySocketAddr> for SocketAddr {
     }
 }
 
-/// Link form of a TCP connect to `count` caller-resolved addresses.
+/// Link form of a TCP connect to `count` caller-resolved addresses; a
+/// nonzero `attempt_timeout_ms` races them as Node's `autoSelectFamily` does.
 ///
 /// # Safety
 /// As [`js_perry_net_link_tcp_listen`]; `addrs` names `count` readable records.
@@ -885,6 +886,7 @@ pub unsafe extern "C" fn js_perry_net_link_tcp_connect_addrs(
     addrs: *const PerrySocketAddr,
     count: usize,
     nodelay: i32,
+    attempt_timeout_ms: u32,
     err: *mut PerryNetError,
 ) -> i32 {
     let addrs = if count == 0 {
@@ -894,8 +896,18 @@ pub unsafe extern "C" fn js_perry_net_link_tcp_connect_addrs(
         unsafe { std::slice::from_raw_parts(addrs, count) }
     };
     let addrs = addrs.iter().map(|&addr| addr.into()).collect();
+    let attempt_timeout = (attempt_timeout_ms != 0)
+        .then(|| std::time::Duration::from_millis(u64::from(attempt_timeout_ms)));
     finish(
-        unsafe { transport::tcp_connect_addrs(core.cast(), link_arg(link), addrs, nodelay != 0) },
+        unsafe {
+            transport::tcp_connect_addrs(
+                core.cast(),
+                link_arg(link),
+                addrs,
+                nodelay != 0,
+                attempt_timeout,
+            )
+        },
         err,
     )
 }

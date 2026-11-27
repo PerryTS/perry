@@ -40,7 +40,7 @@ function testAttributeParser() {
     'define void @f() #9 {'), /duplicate.*#9/);
 }
 
-const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 assert.equal(process.versions.node, fs.readFileSync(path.join(root, '.node-version'), 'utf8').trim().replace(/^v/, ''));
 testAttributeParser();
 if (process.argv.includes('--self-test')) {

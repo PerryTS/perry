@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { prepareRequireRuntime } from '../../../scripts/test-require-runtime.mjs';
 
-const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 prepareRequireRuntime(root);
 const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-async-own-bind-'));

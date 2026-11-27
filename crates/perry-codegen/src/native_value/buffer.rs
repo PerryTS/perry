@@ -245,6 +245,11 @@ pub(crate) struct BufferViewSlot {
     /// moves either way (GC marks `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER`
     /// non-movable).
     pub storage_inline_proven: bool,
+    /// `storage_inline_proven` was cleared only because a statement may hand
+    /// the receiver to code that reads its `.buffer` (`distrust_view`); no
+    /// exposure was lowered on it since. The elements most likely still sit
+    /// inline, which only a guarded access may bet on (`ta_param_f64_read.rs`).
+    pub inline_until_exposed: bool,
     /// The receiver's length cannot change while this view is live: a sealed
     /// fresh construction (see `storage_inline_proven`) or a `TaPtr` param,
     /// whose call sites pass only sealed bindings. Only then may a length read
