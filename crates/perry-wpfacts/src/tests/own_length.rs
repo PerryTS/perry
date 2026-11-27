@@ -60,8 +60,9 @@ fn an_escaped_array_keeps_its_own_length() {
     for units in [false, true] {
         let v = lengths(
             r#"
+            declare function opaque(): any;
             function main() {
-                const ext: any = (globalThis as any)[process.argv[2]];
+                const ext: any = opaque();
                 const a = [1, 2];
                 ext(a);
                 console.log(a.length);
@@ -127,7 +128,7 @@ fn an_array_made_through_a_written_constructor_is_no_array() {
                 let v = lengths(
                     &format!(
                         r#"
-                    const ext: any = (globalThis as any)[process.argv[3]];
+                    declare function opaque(): any; const ext: any = opaque();
                     function C(this: any) {{ return {{ length: "x" }}; }}
                     (C as any)[Symbol.species] = C;
                     const a = [1, 2];

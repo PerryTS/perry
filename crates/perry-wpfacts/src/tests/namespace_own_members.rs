@@ -11,6 +11,7 @@ use super::*;
 fn read(read: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         class R {{ y = 1; }}
         const M: any = Math;
         const o: any = {{ m(a: any) {{ return a.y; }} }};
@@ -55,12 +56,16 @@ fn a_static_the_realm_does_not_install_reads_undefined() {
     assert_eq!(escape(&pf), None, "{}", pf.dump_text());
 }
 
-/// Control: a value of the host stored onto the constructor's chain.
+/// A store that adds a key to `Object.prototype` is refused at run time
+/// (DEC 250 (i): the add lock, `perry_abi::LockHolder::add_locked`, a
+/// TypeError "built-in objects are read-only in a compiled program"), and
+/// the lookup reads the same lock (`members::locked_read`): `sumPrecise`
+/// stays absent on the chain, so `M.sumPrecise` is still undefined.
 #[test]
-fn a_value_on_its_chain_is_read() {
+fn a_key_added_to_its_chain_is_refused() {
     let pf = read(
         "M.sumPrecise",
-        "(Object.prototype as any).sumPrecise = external();",
+        "try { (Object.prototype as any).sumPrecise = external(); } catch (e) {}",
     );
-    assert!(escape(&pf).is_some(), "{}", pf.dump_text());
+    assert_eq!(escape(&pf), None, "{}", pf.dump_text());
 }

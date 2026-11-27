@@ -162,8 +162,10 @@ fn an_implicit_protocol_on_an_object_keeps_the_fact_open() {
 
 #[test]
 fn an_unknown_value_keeps_the_fact_open() {
-    // node: prints `undefined`.
-    let why = open_reason("const h = (process as any).noSuchMember;\nconsole.log(typeof h);\n");
+    // The result of a body-less `declare function`: an unknown value. (A
+    // member of `process` the realm does not declare reads undefined under
+    // REALMVAL, cliff 285e2f45a5.)
+    let why = open_reason("declare function hostValue(): any;\nconst h = hostValue();\nconsole.log(typeof h);\n");
     assert!(why.starts_with("O1:L1:"), "{why}");
 }
 

@@ -92,9 +92,11 @@ fn native_member_buffer_free() {
 }
 
 #[test]
-fn native_member_buffer_held_not_claimed() {
+fn native_member_buffer_held_is_claimed() {
     let (_, held) = both(BUFFER_TOSTRING, "toString", true);
-    assert!(!claimed(&held, "NativeMember"), "{held:?}");
+    // K8 (owner 2026-11-23): a call of unknown code holds no realm in whole-program
+    // mode, and P-N1 / 11-19: unknown code writes no intrinsic member.
+    assert!(claimed(&held, "NativeMember"), "{held:?}");
 }
 
 #[test]

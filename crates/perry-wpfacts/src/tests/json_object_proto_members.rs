@@ -28,7 +28,7 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 
 fn src(tail: &str) -> String {
     format!(
-        "const unknown: any = (globalThis as any)[process.argv[2]];
+        "declare function opaque(): any; const unknown: any = opaque();
          const kept = {{ keptmark: 1 }};
          const cb = () => kept;
          const j: any = JSON.parse(process.argv[3]);

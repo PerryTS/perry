@@ -17,7 +17,7 @@ fn facts_of(key: &str, src: &str) -> ProgramFacts {
         export {{}};
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
-        const f: any = (globalThis as any)[process.argv[2] ?? "Object"];
+        declare function opaque(): any; const f: any = opaque();
         const u: any = f(process.argv[3]);
         u[{key}] = (q: any) => q;
         {src}
@@ -130,14 +130,14 @@ fn a_replaced_iterator_prototype_is_not_final() {
     assert!(!proven(&v), "{r:?} {v:?}");
 }
 
-/// Control: `Array.prototype` takes named adds, so a store of `next` into
-/// an unknown value may add one there; the program's own `a.next()` (not
-/// the iteration protocol's) runs it.
+/// Control: `Array.prototype` takes named adds; the program's own
+/// `a.next()` (not the iteration protocol's) runs the `next` the program
+/// stores there by name. (P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype: the store into `u` adds none.)
 #[test]
 fn a_program_call_of_next_on_an_array_is_not_final() {
     let (r, v) = receivers(
         NEXT,
-        "const a: any = [new Svc()]; console.log(g(a.next()));",
+        "(Array.prototype as any).next = f(process.argv[5]); const a: any = [new Svc()]; console.log(g(a.next()));",
     );
     assert!(!proven(&v), "{r:?} {v:?}");
 }
@@ -167,13 +167,14 @@ fn for_of_over_an_array_in_a_function_called_twice_is_final() {
 }
 
 /// A program call of `next` on an array in a method instance is no protocol
-/// call: a `next` the program writes onto `Array.prototype` (through the
-/// unknown value) runs, with the array as `this`.
+/// call: a `next` the program writes onto `Array.prototype` (by name;
+/// P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype) runs, with the array as `this`.
 #[test]
 fn a_program_next_on_an_array_in_a_method_instance_is_not_final() {
     let (r, v) = receivers(
         NEXT,
-        "class Box { items: any = [new Svc()]; each() { console.log(g(this.items.next())); } }
+        "(Array.prototype as any).next = f(process.argv[5]);
+         class Box { items: any = [new Svc()]; each() { console.log(g(this.items.next())); } }
          new Box().each();",
     );
     assert!(!proven(&v), "{r:?} {v:?}");
