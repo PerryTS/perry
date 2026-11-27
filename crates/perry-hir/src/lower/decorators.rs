@@ -445,23 +445,50 @@ fn decorator_callee_expr(ctx: &LoweringContext, name: &str) -> Expr {
     }
 }
 
-/// Static imports take effect before the importing module's body, even when
-/// the declaration follows a read of the global Reflect object.
-pub(crate) fn install_reflect_metadata_shim(module: &mut Module, byte_offset: u32) {
+const REFLECT_METADATA_INSTALL: &str = "js_reflect_install_metadata";
+
+fn is_reflect_metadata_install(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Expr(Expr::Call { callee, .. })
+        if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == REFLECT_METADATA_INSTALL))
+}
+
+/// True when `module` imports `reflect-metadata` (or the program pass already
+/// gave it the install).
+pub fn installs_reflect_metadata(module: &Module) -> bool {
+    module.init.iter().any(is_reflect_metadata_install)
+}
+
+/// The package patches the realm's Reflect, which a dependency can read while
+/// it loads, before the importing module's body. Every module of a program
+/// that imports it therefore starts with the install; the runtime makes the
+/// repeats no-ops. Classes already lowered keep `decl_stmt` on their statement.
+pub fn prepend_reflect_metadata_install(module: &mut Module) {
+    if installs_reflect_metadata(module) {
+        return;
+    }
     module.init.insert(
         0,
         Stmt::Expr(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_reflect_install_metadata".into(),
+                name: REFLECT_METADATA_INSTALL.into(),
                 param_types: vec![Type::Any],
                 return_type: Type::Any,
             }),
             args: vec![builtin_metadata_constructor("Reflect")],
             type_args: Vec::new(),
-            byte_offset,
+            byte_offset: 0,
         }),
     );
+    for class in &mut module.classes {
+        if let Some(stmt) = class.decl_stmt.as_mut() {
+            *stmt += 1;
+        }
+    }
+}
+
+pub(crate) fn install_reflect_metadata_shim(module: &mut Module) {
+    prepend_reflect_metadata_install(module);
     use std::sync::atomic::{AtomicBool, Ordering};
     static EMITTED: AtomicBool = AtomicBool::new(false);
     if EMITTED.swap(true, Ordering::Relaxed) {

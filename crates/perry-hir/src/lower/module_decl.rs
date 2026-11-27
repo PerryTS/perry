@@ -112,7 +112,7 @@ pub(crate) fn lower_module_decl(
                 if import_decl.type_only || import_is_runtime_erased(import_decl, false) {
                     return Ok(());
                 }
-                install_reflect_metadata_shim(module, import_decl.span.lo.0);
+                install_reflect_metadata_shim(module);
                 // Wrapped CommonJS barrels still reference the synthesized
                 // import local even when require()'s result is discarded.
                 for spec in &import_decl.specifiers {

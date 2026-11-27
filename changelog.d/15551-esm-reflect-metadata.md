@@ -1,1 +1,1 @@
-An ESM side-effect import of `reflect-metadata` now installs the supported callable methods on `Reflect`, so code can use them with compiler-emitted decorator metadata.
+Importing `reflect-metadata` now installs the supported callable methods on `Reflect` before the first module of the program evaluates, so dependencies that check for them while loading find them, and code can use them with compiler-emitted decorator metadata.

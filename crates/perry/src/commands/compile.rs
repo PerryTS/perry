@@ -23,6 +23,7 @@ mod bundle_ios;
 mod bundle_macos;
 mod compile_env;
 mod defines;
+mod lowered_program;
 mod module_aliases;
 mod module_prefixes;
 pub(crate) mod sync_program;

@@ -25,12 +25,10 @@ pub extern "C" fn js_reflect_install_metadata(reflect: f64) -> f64 {
             ) -> f64 {
                 metadata::$implementation($($arg),+)
             }
-            let keys = unsafe { object::object_keys(receiver) };
-            if unsafe { object::keys_find_property_slot_by_bytes(keys, keys.count(), $name.as_bytes()) }.is_none() {
-                super::install_static::install_proto_method(
-                    receiver, $name, crate::fn_info!(thunk, $arity; with_declared($arity)), $arity,
-                );
-            }
+            // Like the package, the first install replaces existing properties.
+            super::install_static::install_proto_method(
+                receiver, $name, crate::fn_info!(thunk, $arity; with_declared($arity)), $arity,
+            );
         }};
     }
     method!(
@@ -120,5 +118,22 @@ mod tests {
         assert_eq!(object::js_object_delete_field(first, key), 1);
         import(first);
         assert_eq!(read(first), crate::value::TAG_UNDEFINED);
+    }
+
+    #[test]
+    fn first_import_replaces_existing_properties() {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let reflect = super::super::json_reflect_namespaces::create_reflect_namespace();
+        let key = crate::string::intern_ascii_literal(b"getMetadata");
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        object::js_object_set_field_by_name(reflect, key, undefined);
+
+        js_reflect_install_metadata(crate::value::js_nanbox_pointer(reflect as i64));
+        let method = object::js_object_get_field_by_name(reflect, key);
+        assert!(
+            method.is_pointer()
+                && crate::closure::is_closure_ptr(method.as_pointer::<u8>() as usize)
+        );
     }
 }
