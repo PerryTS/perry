@@ -999,6 +999,8 @@ impl Model {
                         self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
+                    } else if builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_key(t, key);
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -1019,6 +1021,9 @@ impl Model {
                     // runs it there (`FnContract::param_defines`).
                     if kind == Hard::E5DefineProperty && self.is_marker(t) {
                         self.note_marker_define(t, None, false);
+                    }
+                    if kind == Hard::E7Delete {
+                        self.e7_global_diag(t, reason);
                     }
                     self.mark_hard(t, kind, reason);
                 }
@@ -2504,6 +2509,32 @@ impl Model {
                                 reason,
                             },
                         ),
+                    }
+                }
+            }
+            Cons::DeleteKeyed {
+                o,
+                reason,
+                enum_subject,
+            } => self.delete_keyed(n, o, reason, enum_subject),
+            Cons::DeleteEnum { reason } => {
+                for &t in toks {
+                    if t != TOP && builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_enum(t, reason);
+                    } else {
+                        self.e7_global_diag(t, reason);
+                        self.mark_hard(t, Hard::E7Delete, reason);
+                    }
+                }
+            }
+            Cons::DeleteEnumWhen { t, key, reason } => {
+                if !toks.is_empty() || prim != 0 {
+                    match key {
+                        Some(a) => self.delete_global_key(t, a),
+                        None => {
+                            self.e7_global_diag(t, reason);
+                            self.mark_hard(t, Hard::E7Delete, reason);
+                        }
                     }
                 }
             }

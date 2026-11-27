@@ -2556,6 +2556,20 @@ pub(crate) fn enum_free_fn(identity: &str) -> bool {
 /// `process`, the global object, `require`, a module's exports: their
 /// members are enumerable), not the Error constructors (V8's own
 /// `Error.stackTraceLimit` is enumerable).
+/// ENUM-DEL: the keys the realm installs on the global object enumerable
+/// (`enum` rows of `realm_declared_keys.tsv`, generated from the runtime's
+/// realm declaration: `fetch`, `setTimeout`, `global`, ...). Every other
+/// global the realm installs is non-enumerable ({[[Enumerable]]: false},
+/// ECMA-262 17), so a for-in over the global object never yields it.
+pub(crate) fn global_enumerable_keys() -> impl Iterator<Item = &'static str> {
+    realm_declared::DECLARED.lines().filter_map(|line| {
+        let mut row = line.split('\t');
+        (row.next()? == "enum" && row.next()? == "%Global%")
+            .then(|| row.next())
+            .flatten()
+    })
+}
+
 pub(crate) fn enum_free_ns(ns: BuiltinNs) -> bool {
     use BuiltinNs::*;
     matches!(

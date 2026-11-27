@@ -5079,12 +5079,18 @@ fn window_own(m: &Model, w: &SettledWin) -> bool {
 }
 
 /// The globals a settled window read (`gen::settled`) are the realm's own
-/// data properties: no ⊤ global, no program write of a global, and no
-/// program value under any of the names.
+/// data properties: no ⊤ global, no program write of a global, no named
+/// delete of one of the names (DEL-KEY, `Model::delete_global_key`), and
+/// no program value under any of the names.
 fn window_globals_own(m: &Model, gs: &[Atom]) -> bool {
     gs.is_empty()
         || (!m.global_in_top
             && !m.global_written_own
+            && !m.native_writes.iter().any(|(&(t, k), w)| {
+                w.absent
+                    && k.is_some_and(|k| gs.contains(&k))
+                    && crate::builtins::global_object(m, t)
+            })
             && gs.iter().all(|g| {
                 m.global_fields
                     .iter()
