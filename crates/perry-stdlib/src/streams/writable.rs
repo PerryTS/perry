@@ -169,7 +169,11 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
         }
     };
     if start_close {
+        // The close runs the sink's close() (JS): root the promise across it.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = scope.root_raw_mut_ptr(promise);
         finish_writable_close(id);
+        return held.get_raw_mut_ptr();
     }
     promise
 }
@@ -221,16 +225,28 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
         js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
         return promise;
     }
-    let action = if cb != 0 {
-        match try_call_stream_action(cb, reason) {
-            Ok(result) => stream_action_promise(result),
-            Err(error) => {
-                js_promise_reject(promise, f64::from_bits(error));
-                None
-            }
-        }
+    // The sink's abort() is JS: root what the frame still settles after it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_promise = scope.root_raw_mut_ptr(promise);
+    let held_closed = scope.root_raw_mut_ptr(closed_p);
+    let held_close_request = scope.root_raw_mut_ptr(close_request);
+    let held_reason = scope.root_nanbox_f64(reason);
+    let called = if cb != 0 {
+        Some(try_call_stream_action(cb, reason))
     } else {
         None
+    };
+    let promise = held_promise.get_raw_mut_ptr::<Promise>();
+    let closed_p = held_closed.get_raw_mut_ptr::<Promise>();
+    let close_request = held_close_request.get_raw_mut_ptr::<Promise>();
+    let reason = held_reason.get_nanbox_f64();
+    let action = match called {
+        Some(Ok(result)) => stream_action_promise(result),
+        Some(Err(error)) => {
+            js_promise_reject(promise, f64::from_bits(error));
+            None
+        }
+        None => None,
     };
     // [[AbortSteps]]: the abort algorithm ran, ClearAlgorithms. On a
     // TransformStream's writable side this is the sink abort algorithm
@@ -478,7 +494,11 @@ unsafe fn finish_writable_close(stream_id: usize) {
         finish_writable_close_success(stream_id, close_promise);
         return;
     }
+    // The sink's close() is JS: root the close request promise across it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_close = scope.root_raw_mut_ptr(close_promise);
     let result = try_call_writable_close(cb);
+    let close_promise = held_close.get_raw_mut_ptr::<Promise>();
     writable_clear_algorithms(stream_id);
     let result = match result {
         Ok(result) => result,
@@ -559,7 +579,13 @@ pub(super) unsafe fn run_writable_write(
         finish_writable_write_success(stream_id, writer_id, promise);
         return;
     }
-    let result = match try_call_writable_write(cb, chunk) {
+    // The sink's write() is JS: a collection at one of its safepoints may move
+    // the write request promise, so the frame roots it across the call.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_promise = scope.root_raw_mut_ptr(promise);
+    let called = try_call_writable_write(cb, chunk);
+    let promise = held_promise.get_raw_mut_ptr::<Promise>();
+    let result = match called {
         Ok(result) => result,
         Err(reason) => {
             finish_writable_write_error(stream_id, promise, f64::from_bits(reason));
@@ -582,14 +608,17 @@ pub(super) unsafe fn writable_stream_write(
     if transform_of_writable(WsRef(stream_id)).is_some() {
         return transform_write(stream_id, chunk);
     }
-    let promise = js_promise_new();
     // The strategy's size(chunk) is user JS — run it before taking the
-    // registry lock (it may re-enter the streams FFI).
+    // registry lock (it may re-enter the streams FFI). A collection inside it
+    // may move the chunk: the frame roots it across the call, and the write
+    // request promise is born after it.
     let size_cb = ws_rec(WsRef(stream_id))
         .as_deref()
         .map(|s| s.strategy_size_cb)
         .unwrap_or(0);
-    let chunk_size = if size_cb != 0 {
+    let (chunk, chunk_size) = if size_cb != 0 {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held_chunk = scope.root_nanbox_f64(chunk);
         let size = JSValue::from_bits(
             js_closure_call1(
                 size_cb as *const ClosureHeader,
@@ -603,10 +632,11 @@ pub(super) unsafe fn writable_stream_write(
             let message = invalid_size_message(size);
             throw_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
         }
-        size
+        (held_chunk.get_nanbox_f64(), size)
     } else {
-        1.0
+        (chunk, 1.0)
     };
+    let promise = js_promise_new();
     let mut start_write = None;
     let needs_pending_ready;
     {
