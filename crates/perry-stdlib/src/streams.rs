@@ -377,7 +377,6 @@ pub use from_source::{
     js_readable_stream_from_iterable, js_readable_stream_from_response,
 };
 pub(crate) use readable::alloc_readable_from_bytes;
-pub(super) use readable::{acquire_reader, AcquireError};
 pub use readable::{
     js_readable_stream_cancel, js_readable_stream_deferred_byte_source,
     js_readable_stream_get_reader, js_readable_stream_get_reader_with_options,
@@ -856,6 +855,36 @@ fn alloc_writable_with_strategy(
         ),
     );
     id
+}
+
+/// Why AcquireReadableStreamReader / AcquireWritableStreamDefaultWriter
+/// failed: the stream already has a reader/writer, or the id names no stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AcquireError {
+    Locked,
+    Missing,
+}
+
+/// AcquireReadableStreamDefaultReader / AcquireReadableStreamBYOBReader:
+/// mint a reader record locked to `r` (getReader() and pipeTo share it).
+pub(super) unsafe fn acquire_reader(r: RsRef, byob: bool) -> Result<ReaderRef, AcquireError> {
+    let Some(mut rec) = rs_rec(r) else {
+        return Err(AcquireError::Missing);
+    };
+    let s = &mut *rec;
+    if s.reader_handle.is_some() {
+        return Err(AcquireError::Locked);
+    }
+    let reader = ReaderRef(next_stream_id());
+    let closed_p = internal_promise();
+    if s.state == ReadableState::Closed {
+        js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
+    } else if s.state == ReadableState::Errored {
+        js_promise_reject(closed_p, f64::from_bits(s.error_value));
+    }
+    s.reader_handle = Some(reader.0);
+    insert_reader(reader, ReaderData::new(r.0, closed_p, byob));
+    Ok(reader)
 }
 
 pub(crate) use self::subclass::{

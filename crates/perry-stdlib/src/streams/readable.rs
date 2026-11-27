@@ -1,15 +1,14 @@
 //! `ReadableStream` construction, `getReader()`, reader acquisition, `locked` and `cancel()`.
 
 use super::{
-    alloc_readable, alloc_readable_with_strategy, alloc_readable_with_type,
+    acquire_reader, alloc_readable, alloc_readable_with_strategy, alloc_readable_with_type,
     alloc_uint8array_from_bytes, close_pending, closure_from_bits, ensure_gc_registered,
-    insert_reader, internal_promise, invoke_start, js_promise_new, js_promise_reject,
-    js_promise_resolve, js_stream_unwrap_handle, js_writable_stream_abort_inner, maybe_pull,
-    native, next_stream_id, read_high_water_mark, read_queuing_strategy_size, reject_type_error,
-    rs_rec, settle_stream_action_promise, stream_action_promise, stream_id, stream_object_closure,
-    stream_object_field, stream_value, tee, throw_type_error, transform_writable_for_readable,
-    try_call_stream_action, with_rs, JSValue, Promise, ReadableState, ReaderData, ReaderRef, RsRef,
-    TAG_FALSE, TAG_TRUE, TAG_UNDEFINED,
+    invoke_start, js_promise_new, js_promise_reject, js_stream_unwrap_handle,
+    js_writable_stream_abort_inner, maybe_pull, native, read_high_water_mark,
+    read_queuing_strategy_size, reject_type_error, rs_rec, settle_stream_action_promise,
+    stream_action_promise, stream_id, stream_object_closure, stream_object_field, stream_value,
+    tee, throw_type_error, transform_writable_for_readable, try_call_stream_action, with_rs,
+    AcquireError, JSValue, Promise, ReadableState, RsRef, TAG_FALSE, TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// `new ReadableStream({ start, pull, cancel })` — `start_cb` / `pull_cb`
@@ -191,36 +190,6 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
         Err(AcquireError::Locked) => throw_type_error("ReadableStream is locked"),
         Err(AcquireError::Missing) => f64::from_bits(TAG_UNDEFINED),
     }
-}
-
-/// Why AcquireReadableStreamReader / AcquireWritableStreamDefaultWriter
-/// failed: the stream already has a reader/writer, or the id names no stream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AcquireError {
-    Locked,
-    Missing,
-}
-
-/// AcquireReadableStreamDefaultReader / AcquireReadableStreamBYOBReader:
-/// mint a reader record locked to `r` (getReader() and pipeTo share it).
-pub(crate) unsafe fn acquire_reader(r: RsRef, byob: bool) -> Result<ReaderRef, AcquireError> {
-    let Some(mut rec) = rs_rec(r) else {
-        return Err(AcquireError::Missing);
-    };
-    let s = &mut *rec;
-    if s.reader_handle.is_some() {
-        return Err(AcquireError::Locked);
-    }
-    let reader = ReaderRef(next_stream_id());
-    let closed_p = internal_promise();
-    if s.state == ReadableState::Closed {
-        js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
-    } else if s.state == ReadableState::Errored {
-        js_promise_reject(closed_p, f64::from_bits(s.error_value));
-    }
-    s.reader_handle = Some(reader.0);
-    insert_reader(reader, ReaderData::new(r.0, closed_p, byob));
-    Ok(reader)
 }
 
 pub(super) unsafe fn option_string_equals(options: f64, name: &[u8], expected: &[u8]) -> bool {
