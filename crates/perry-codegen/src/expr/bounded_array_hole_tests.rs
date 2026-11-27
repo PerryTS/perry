@@ -214,3 +214,25 @@ fn without_the_quiet_facts_the_read_takes_no_bounded_tier() {
         "premise: `bs[i]` takes the generic read with its full fallback\n{ir}"
     );
 }
+
+#[test]
+fn a_key_past_the_store_takes_the_generic_read() {
+    // #15608: the loop bounds the key by the length, which a holey Array's
+    // store may not reach: the header block tests the key against the
+    // capacity (payload `+4`) before the fast arm loads the slot.
+    let ir = module_ir(true);
+    let header = block(&ir, "bidx.header.");
+    let lazy = block(&ir, "bidx.lazy.");
+    assert!(
+        header.contains("getelementptr i8, ptr") && header.contains("i64 4"),
+        "the header block loads the capacity\n{header}"
+    );
+    assert!(
+        header.contains("icmp uge i32"),
+        "key against capacity\n{header}"
+    );
+    assert!(
+        header.contains(&format!("label %{}", label_of(lazy))),
+        "a key past the store takes the generic read\n{header}"
+    );
+}
