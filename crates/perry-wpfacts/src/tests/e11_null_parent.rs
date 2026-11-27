@@ -7,9 +7,6 @@
 //! Nothing reaches unknown code; the instance made through the other values
 //! (the realm's `Error`) is the only instance. Red on base: the null escaped
 //! the instance (c09 HttpError / DOMException, "E11 dynamic class parent").
-//! The c09 DOMException form (`extends globalThis.Error`) is not here: in the
-//! default configuration that read yields the `Error` namespace token, not
-//! the declared constructor, and is unproven without any null (E11B).
 use super::*;
 
 fn site(pf: &ProgramFacts, src: &str) -> (bool, String) {
@@ -21,7 +18,12 @@ fn site(pf: &ProgramFacts, src: &str) -> (bool, String) {
     assert!(!s.is_empty(), "no x site");
     (
         s.iter().all(|s| !matches!(s.verdict, Verdict::No(_))),
-        format!("{:?}", s.iter().map(|s| (&s.receivers, &s.verdict)).collect::<Vec<_>>()),
+        format!(
+            "{:?}",
+            s.iter()
+                .map(|s| (&s.receivers, &s.verdict))
+                .collect::<Vec<_>>()
+        ),
     )
 }
 
@@ -40,6 +42,15 @@ fn program(before: &str, parent: &str) -> String {
 #[test]
 fn e11_null_global_error_makes_no_instance() {
     let src = program("(globalThis as any).Error = null;", "Error");
+    let (ok, v) = site(&facts(&src), &src);
+    assert!(ok, "{v}");
+}
+
+/// Expected RED on base: the c09 form (`extends globalThis.Error`, pkg/web
+/// DOMException / SelectorError).
+#[test]
+fn e11_null_global_member_error_makes_no_instance() {
+    let src = program("(globalThis as any).Error = null;", "globalThis.Error");
     let (ok, v) = site(&facts(&src), &src);
     assert!(ok, "{v}");
 }
