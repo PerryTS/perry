@@ -190,7 +190,8 @@ pub use self::from_concat::{
     js_array_from_value,
 };
 pub(crate) use self::from_concat::{
-    array_like_length, define_constructed_index, finish_constructed_length,
+    array_like_length, array_like_length_f64, boxed_primitive_source, define_constructed_index,
+    finish_constructed_length,
 };
 pub use self::generic::array_proto_mutator;
 pub use self::generic::{
