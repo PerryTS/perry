@@ -1,0 +1,1 @@
+A `for await` over a `net.Socket`, including a child process's stdout or stderr on Unix, completes when the iterator is first pulled after the socket already ended, instead of waiting forever for an `end` event that has fired.
