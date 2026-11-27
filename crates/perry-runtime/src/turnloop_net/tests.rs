@@ -605,7 +605,9 @@ fn an_id_sockets_closed_waits_for_the_close_phase_newest_first() {
     assert_eq!(closed, [conn, client]);
     assert!(!super::close_queued());
     super::close(server).expect("close listener");
-    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_CLOSED && e.id == server)));
+    assert!(pump_until(|e| e
+        .iter()
+        .any(|e| e.kind == NET_CLOSED && e.id == server)));
 }
 
 #[test]
