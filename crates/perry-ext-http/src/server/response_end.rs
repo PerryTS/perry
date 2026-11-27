@@ -384,7 +384,8 @@ impl<'a> EndTail<'a> {
         if callback == 0 {
             return;
         }
-        let func = f64::from_bits(JsValue::from_object_ptr(callback as *mut RawClosureHeader).bits());
+        let func =
+            f64::from_bits(JsValue::from_object_ptr(callback as *mut RawClosureHeader).bits());
         unsafe { perry_ffi::call_value(func, perry_ffi::JsThis::UNDEFINED, &[error]) };
     }
 
