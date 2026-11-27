@@ -255,6 +255,16 @@ impl Backlog {
 
 /// Everything Perry knows about one turnloop-backed socket or listener.
 ///
+/// Why a stream's read is not running, short of its delivered EOF (`ended`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadHalt {
+    Running,
+    /// The binding stopped the read: its buffer reached the high-water mark.
+    Stopped,
+    /// The peer's EOF was read; its delivery may still be parked.
+    Eof,
+}
+
 /// Deliberately holds no JS value and no GC pointer (see the module note): a
 /// binding keeps its own JS-side record keyed by the same id.
 struct Entry {
@@ -282,6 +292,7 @@ struct Entry {
     closing: bool,
     /// The peer's EOF was delivered: nothing is read any more.
     ended: bool,
+    read_halt: ReadHalt,
     referenced: bool,
     #[cfg(windows)]
     pipe_drain: Option<OpId>,
@@ -308,6 +319,7 @@ impl Entry {
             connecting: false,
             closing: false,
             ended: false,
+            read_halt: ReadHalt::Running,
             referenced: true,
             #[cfg(windows)]
             pipe_drain: None,
