@@ -169,7 +169,7 @@ fn elems(m: &Model, t: u32) -> Vec<u32> {
 }
 
 #[test]
-fn decls_filter_result_is_one_object_across_key_runs() {
+fn decls_filter_result_is_one_object_per_closure_context() {
     let m = solved(&STYLE.replace("__TAIL__", TAIL0));
     for (t, k) in m.toks.iter().enumerate() {
         let nm = m.tok_name(t as u32);
@@ -238,10 +238,14 @@ fn decls_filter_result_is_one_object_across_key_runs() {
             "every key's tuple reaches the filter result {t}: {tuples:?}"
         );
     }
-    // SINKBIRTH: one token, the template run's.
+    // Rule SITEW: a literal-IIFE result is born per closure context, so the
+    // filter result is one array per styleDeclaration closure context (3 in
+    // this test). e.style and f.style are different objects with different
+    // decls; key runs within one context fold to one token. One array across
+    // ALL contexts would encode the old imprecision (decls shared/pinned).
     assert_eq!(
         ts.len(),
-        1,
-        "the filter result is one object across the key runs: {ts:?}"
+        3,
+        "one filter result per styleDeclaration closure context: {ts:?}"
     );
 }
