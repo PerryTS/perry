@@ -17,7 +17,18 @@
 //!   under a String or Symbol key no name lists; a Number key names a
 //!   numeric String, never `@@iterator`, ECMA-262 7.1.19) and its chain is
 //!   the one it was born with,
-//! - and `array_iteration_writes()` is `(None, None)`.
+//! - and no write onto `%Array.prototype%`, `%ArrayIteratorPrototype%`, a
+//!   prototype on their chains (they collapse into `ObjectProto`) or ⊤ may
+//!   change the `@@iterator` it inherits or the iterator's `next` / `return`
+//!   (`Model::array_proto_iteration_writes`).
+//!
+//! A write that may make another Array's `@@iterator` other than the
+//! intrinsic one (`Model::array_member_write`, a computed-key store on an
+//! Array, an Array subclass's member) sets the runtime's
+//! `ITERATION_MEMBER_WRITABLE`; `array_record_enter` then asks each Array
+//! for its own and inherited `@@iterator` (`array_iterator_property`), which
+//! for this token is the intrinsic one by the conditions above: the array
+//! arm still takes it.
 //!
 //! Once one of them fails, `settle_record_entry` passes the token
 //! (monotone: a released token stays released).
@@ -68,7 +79,7 @@ impl Model {
                     .iter()
                     .all(|&p| matches!(self.toks[p as usize], TokKind::ObjectProto))
         });
-        born_chain && self.array_iteration_writes() == (None, None)
+        born_chain && self.array_proto_iteration_writes() == (None, None)
     }
 
     /// Once the worklist is empty: pass every held token that no longer

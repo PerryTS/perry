@@ -163,16 +163,14 @@ impl Model {
         }
     }
 
-    /// #13645: the program facts array iteration rests on, each `None` when
-    /// compiled code never breaks it. `.0`: an array's `@@iterator` may not
-    /// be the builtin (a write under `Symbol.iterator`, `__proto__` or any
-    /// key on a builtin prototype or ⊤, [`Model::array_member_write`], or an
-    /// Array subclass that defines a computed or `@@iterator` member).
-    /// `.1`: `%ArrayIteratorPrototype%` or a prototype on its chain may gain
-    /// or change `next` or `return` (a write under one of them or under any
-    /// key, or a prototype change, on a builtin prototype (they collapse
-    /// into `ObjectProto`) or ⊤).
-    pub fn array_iteration_writes(&self) -> (Option<String>, Option<String>) {
+    /// The writes onto the builtin prototypes or ⊤ among
+    /// [`Model::array_iteration_writes`] (reason ids): `.0` one that may
+    /// change `%Array.prototype%[@@iterator]` (under `Symbol.iterator`,
+    /// `__proto__` or any key), `.1` one that may change `next` or `return`
+    /// on `%ArrayIteratorPrototype%`'s chain. Of all writes, only these
+    /// reach the `@@iterator` an Array born with `%Array.prototype%`
+    /// inherits (rule RP2, `Model::record_entry_holds`).
+    pub(crate) fn array_proto_iteration_writes(&self) -> (Option<u32>, Option<u32>) {
         let objproto = self.tok_index.get(&TokKind::ObjectProto).copied();
         let mut member: Option<u32> = None;
         let mut close: Option<u32> = None;
@@ -194,6 +192,20 @@ impl Model {
                 first(&mut member, r);
             }
         }
+        (member, close)
+    }
+
+    /// #13645: the program facts array iteration rests on, each `None` when
+    /// compiled code never breaks it. `.0`: an array's `@@iterator` may not
+    /// be the builtin (a write under `Symbol.iterator`, `__proto__` or any
+    /// key on a builtin prototype or ⊤, [`Model::array_member_write`], or an
+    /// Array subclass that defines a computed or `@@iterator` member).
+    /// `.1`: `%ArrayIteratorPrototype%` or a prototype on its chain may gain
+    /// or change `next` or `return` (a write under one of them or under any
+    /// key, or a prototype change, on a builtin prototype (they collapse
+    /// into `ObjectProto`) or ⊤).
+    pub fn array_iteration_writes(&self) -> (Option<String>, Option<String>) {
+        let (member, close) = self.array_proto_iteration_writes();
         let keyed = self
             .array_keyed_stores
             .iter()
