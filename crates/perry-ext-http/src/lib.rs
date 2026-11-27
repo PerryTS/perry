@@ -446,6 +446,10 @@ pub struct ClientRequestHandle {
     socket_snapshot: Option<perry_ffi::turnloop_net::HandleSnapshot>,
     abort_signal_bits: u64,
     abort_listener_bits: u64,
+    /// A copy of the request's resolution options (`lookup`, `family`,
+    /// `hints`, `autoSelectFamily*`), which a fresh dial passes to
+    /// `Socket#connect`.
+    connect_options_bits: u64,
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
     tls: tls_client::TlsOptions,
@@ -686,6 +690,7 @@ fn make_request_handle(
         socket_snapshot: None,
         abort_signal_bits: 0,
         abort_listener_bits: 0,
+        connect_options_bits: 0,
         tls: tls_client::TlsOptions::default(),
         preflight_error: None,
         incoming_handle: 0,
@@ -808,6 +813,18 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
 /// and store them on the freshly-built request handle. A no-op for
 /// string-URL requests / plain http (parse yields the default).
 /// Record `options.agent === false` on the request (#11452).
+unsafe fn note_connect_options(handle: Handle, opts_f64: f64) {
+    if is_string_value(opts_f64) || !JsValue::from_bits(opts_f64.to_bits()).is_pointer() {
+        return;
+    }
+    // Node copies the request options; a later change to the caller's object
+    // must not reach this request's dial.
+    let snapshot = perry_ext_net::native_transport::resolution_options(opts_f64);
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+        request.connect_options_bits = snapshot.to_bits();
+    });
+}
+
 unsafe fn note_agent_false(handle: Handle, opts_f64: f64) {
     if is_string_value(opts_f64) || !agent::agent_is_false(opts_f64) {
         return;
@@ -1117,6 +1134,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg.get());
+    note_connect_options(handle, arg.get());
     note_agent_false(handle, arg.get()); // #11452
     attach_tls_options(handle, arg.get()); // #4906
     continue_client::defer_arm(handle); // #5080 (next-tick head flush)
@@ -1188,6 +1206,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg.get());
+    note_connect_options(handle, arg.get());
     note_agent_false(handle, arg.get()); // #11452
     attach_tls_options(handle, arg.get()); // #4906
                                            // GET auto-`end()`s, kicking off the request.
@@ -1257,6 +1276,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
         request_create_connection,
     );
     client_abort::attach_request_signal(handle, options.get());
+    note_connect_options(handle, options.get());
     attach_tls_options(handle, options.get()); // #4906 — TLS options ride on the options bag
     note_agent_false(handle, options.get()); // #11452
     if force_get {
