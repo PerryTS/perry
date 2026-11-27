@@ -1,32 +1,26 @@
-// #9442: `process.exit()` must terminate WITHOUT completing async fs work that
-// has not run yet — Node's exit does not drain the libuv work queue, so five
+// #9442: `process.exit()` ends the program without running the callbacks or
+// promise reactions of async fs work still in flight, but the requests already
+// queued are performed: Node's exit drains libuv's threadpool, so five
 // fire-and-forget `fs.promises.appendFile` calls followed by `process.exit(0)`
-// in the same tick land ZERO records on disk.
-//
-// Perry landed five. The root cause is not that perry's exit path drains a
-// queue (it does not — `js_process_exit` runs the exit sequence and calls
-// `libc::_exit`): it is that perry's *async* fs write entry points did the
-// write SYNCHRONOUSLY inside the call and returned an already-settled promise
-// (or invoked the callback immediately). There was no in-flight work left to
-// abandon, so `process.exit()` "worked" for the wrong reason and committed
-// state the program had deliberately walked away from.
+// in the same tick land all five records.
+// Perry parks an async write on the next loop turn, and `process.exit()`
+// performs the parked operations without settling them.
 //
 // Every role writes only to its own file and prints nothing; the PARENT reports
 // what survived, so the transcript is independent of child stdout ordering.
 //
-// The two controls are what keep the fix from over-abandoning:
-//   * `awaited-control`   — a write that genuinely completed before the exit
-//                           MUST still be on disk.
+// The controls pin what the exit must not change:
+//   * `timer-exit`        — a pending timer never runs: exit performs queued
+//                           fs requests, not loop work.
+//   * `awaited-control`   — a write that completed before the exit is on disk.
 //   * `natural-control`   — a program that ends by draining its event loop
-//                           (no `process.exit()` at all) MUST still land every
-//                           record. This is also the arm that pins #9441: the
-//                           idle-exit fix makes the pump notice emptiness
-//                           sooner and must not cut the drain short.
+//                           (no `process.exit()` at all) lands every record.
+//                           This is also the arm that pins #9441: the idle-exit
+//                           fix makes the pump notice emptiness sooner and must
+//                           not cut the drain short.
 //
-// `exit-listener` answers the question the issue asks about the neighbouring
-// known divergence: the `exit` event and the abandoned work do NOT share a
-// root. The listener fires on an explicit exit (#9403) and its own synchronous
-// write lands, while the pending async writes are still dropped.
+// `exit-listener`: the listener fires on an explicit exit (#9403) and its own
+// synchronous write lands, beside the queued async writes.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -61,8 +55,8 @@ if (role === "promise-exit") {
   void fs.promises.writeFile(target, "written\n");
   process.exit(0);
 } else if (role === "timer-exit") {
-  // A pending timer is abandoned by `process.exit()` in both engines; this arm
-  // exists so a fix that starts draining the loop at exit reports here.
+  // A pending timer is abandoned by `process.exit()`; this arm reports an exit
+  // that drains the loop instead of only the queued fs requests.
   setTimeout(() => {
     fs.appendFileSync(target, "timer\n");
   }, 0);
@@ -83,8 +77,8 @@ if (role === "promise-exit") {
   // record must land, exactly as in Node.
   fireAndForgetPromises(5);
 } else if (role === "exit-listener") {
-  // The `exit` event fires on an explicit exit and its synchronous work lands;
-  // the pending async writes are still abandoned.
+  // The `exit` event fires on an explicit exit and its synchronous work lands
+  // beside the queued async writes.
   process.on("exit", () => {
     fs.appendFileSync(target, "exit-listener\n");
   });
