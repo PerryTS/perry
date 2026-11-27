@@ -357,6 +357,63 @@ pub(super) fn namespace_call_needs_esm_binding(ctx: &LoweringContext, callee: &a
     is_node_core(module) && module != "module" && builtin_sync_reachable(ctx)
 }
 
+/// NXCALL3: is `callee` a member of a node-core namespace (`path.join`,
+/// `path.posix.join`, `fsp.readFile`, `require("fs").statSync`) that the
+/// program may replace (`patched_builtins::node_member_patched`: a store,
+/// delete, `Object.assign` target or escape anywhere in the program)? The
+/// native arms would bind the built-in and ignore the replacement, so the call
+/// reads the member and calls what it holds.
+pub(super) fn node_namespace_call_patched(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = unwrap_ts_wrappers(callee) else {
+        return false;
+    };
+    let Some(name) = super::static_call_prop_name(&member.prop) else {
+        return false;
+    };
+    let Some((module, mut path)) = node_namespace_value(ctx, &member.obj) else {
+        return false;
+    };
+    path.push(name.to_string());
+    let path: Vec<&str> = path.iter().map(String::as_str).collect();
+    crate::patched_builtins::node_member_patched(&module, &path)
+}
+
+/// The module and member path of a namespace value the native arms treat as a
+/// node-core namespace (or a member of one).
+fn node_namespace_value(ctx: &LoweringContext, e: &ast::Expr) -> Option<(String, Vec<String>)> {
+    match unwrap_ts_wrappers(e) {
+        ast::Expr::Ident(ident) => node_namespace_by_name(ctx, ident.sym.as_ref()),
+        ast::Expr::Member(m) => {
+            let name = super::static_call_prop_name(&m.prop)?;
+            let (module, mut path) = node_namespace_value(ctx, &m.obj)?;
+            path.push(name.to_string());
+            Some((module, path))
+        }
+        other => require_literal_native_module(ctx, other).map(|m| (m, Vec::new())),
+    }
+}
+
+fn node_namespace_by_name(ctx: &LoweringContext, name: &str) -> Option<(String, Vec<String>)> {
+    if let Some((module, export)) = ctx.lookup_native_module(name) {
+        let path = match export {
+            None | Some("default") => Vec::new(),
+            Some(e) => vec![e.to_string()],
+        };
+        return Some((module.to_string(), path));
+    }
+    if let Some((root, sub)) = ctx.lookup_subns_path_alias(name) {
+        let sub = sub.to_string();
+        let (module, mut path) = node_namespace_by_name(ctx, root)?;
+        path.push(sub);
+        return Some((module, path));
+    }
+    if let Some(module) = ctx.lookup_builtin_module_alias(name) {
+        return Some((module.to_string(), Vec::new()));
+    }
+    (name == "process" && !ctx.shadows_unqualified_global("process"))
+        .then(|| ("process".to_string(), Vec::new()))
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,

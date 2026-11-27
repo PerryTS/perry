@@ -1077,6 +1077,17 @@ pub fn run_with_parse_cache(
     // graph edge. Admit them before settling the lowering census as well.
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
+    // NXCALL3: in an open CommonJS program the wrapper's loader hands
+    // node-core namespaces to computed requires (its `__perry_cjs_open()`
+    // arms). Those escapes count, and the modules re-lower if they grew the
+    // program-wide set.
+    if !super::cjs_link::program_is_closed(&ctx.native_modules)
+        && perry_hir::promote_open_node_escapes(&mut ctx.patched_builtins)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
+
     rerun_collect_with_class_field_types(
         &args,
         &mut ctx,
