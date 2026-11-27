@@ -655,16 +655,11 @@ pub(crate) fn validate(name: &str, value: f64) {
         let len = v.short_string_to_buf(&mut buf).unwrap_or(0);
         header_value_bytes_valid(&buf[..len])
     } else if v.is_string() {
-        // SAFETY: a STRING_TAG value carries a live `StringHeader`, whose
-        // bytes follow it; nothing allocates while they are read.
-        unsafe {
-            let header = v.as_string_ptr() as *const StringHeader;
-            let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
-            header_value_bytes_valid(std::slice::from_raw_parts(
-                data,
-                (*header).byte_len as usize,
-            ))
-        }
+        // SAFETY: a STRING_TAG value carries a live `StringHeader`; nothing
+        // allocates while its bytes are read.
+        let handle =
+            unsafe { perry_ffi::JsString::from_raw(v.as_string_ptr() as *mut StringHeader) };
+        perry_ffi::read_bytes(handle).is_some_and(header_value_bytes_valid)
     } else {
         header_value_bytes_valid(string(value).as_bytes())
     };
