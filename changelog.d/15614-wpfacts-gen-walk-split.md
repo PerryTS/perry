@@ -1,0 +1,1 @@
+Constraint generation's walker `crates/perry-wpfacts/src/gen/walk.rs` is split into `gen/walk/layout.rs`, `gen/walk/body.rs`, `gen/walk/class.rs` and `gen/walk/stmt.rs` by responsibility (template birth layouts and the class chain, function bodies and parameters, classes and store sites, statements), with no behavior change.
