@@ -166,11 +166,9 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
     }
 }
 
-/// A session's `'close'`. Its `close(cb)` callbacks are Node's
-/// `once('close', cb)`: listeners in registration order, removed before they
-/// run. It runs from its
-/// transport's close: a server session's socket `'close'`, a client session's
-/// `NET_CLOSED`, both in the close-callbacks phase.
+/// A session's `'close'`, from its transport's close: a server session's
+/// socket `'close'`, a client session's `NET_CLOSED`, both in the
+/// close-callbacks phase.
 pub(crate) fn emit_session_close(session_handle: i64) {
     if session_handle == 0 {
         return;
@@ -186,11 +184,7 @@ pub(super) fn emit_close_listeners(session_handle: i64) {
         Some(session) if !session.close_emitted => {
             session.close_emitted = true;
             session.mark_destroyed();
-            let once = std::mem::take(&mut session.close_callbacks);
-            let listeners = session.listeners.entry("close".into()).or_default();
-            let snapshot = listeners.clone();
-            listeners.retain(|listener| !once.contains(listener));
-            snapshot
+            session.take_close_listeners()
         }
         _ => return,
     };
