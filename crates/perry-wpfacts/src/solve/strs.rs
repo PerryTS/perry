@@ -193,12 +193,25 @@ impl Model {
     // See `str_set`: the `STRS_K` comparison is always false while the cap is off.
     #[allow(clippy::absurd_extreme_comparisons)]
     /// The result carries `STRS_RUN` when either side does.
+    ///
+    /// P-PROTOKEY: an unknown String (`STRS_TOP`) is narrower than the
+    /// any-String entry of a reflective key (`reflective_key_strs`): both
+    /// may be every String, but by the premise only the reflective one
+    /// names a class constructor's `prototype` (`class_any_read`). So the
+    /// join of the two is the set holding that entry.
     pub(crate) fn strs_join(&mut self, a: StrSet, b: StrSet) -> StrSet {
-        if a == b || b == STRS_NONE || a == STRS_TOP {
+        if a == b || b == STRS_NONE {
             return a;
         }
-        if a == STRS_NONE || b == STRS_TOP {
+        if a == STRS_NONE {
             return b;
+        }
+        if a == STRS_TOP || b == STRS_TOP {
+            let other = if a == STRS_TOP { b } else { a };
+            return match self.strs_reflective(other) {
+                true => other,
+                false => STRS_TOP,
+            };
         }
         let run = (a | b) & STRS_RUN;
         if a & !STRS_RUN == b & !STRS_RUN {
@@ -235,7 +248,11 @@ impl Model {
             };
             v.push(next);
             if v.len() > STRS_K {
-                return STRS_TOP;
+                // Past the bound: any String, a reflective key's entry kept.
+                return match self.strs_reflective(a) || self.strs_reflective(b) {
+                    true => self.reflective_key_strs(),
+                    false => STRS_TOP,
+                };
             }
         }
         let s = self.str_set(&v);
@@ -364,12 +381,15 @@ impl Model {
     /// May the key node `n` hold a reflective own key
     /// (`reflective_key_strs`)?
     pub(crate) fn key_may_be_reflective(&mut self, n: NodeId) -> bool {
-        let s = self.nodes[n as usize].strs;
-        if s & !STRS_RUN < STRS_SET0 {
-            return false;
-        }
-        let a = self.prefix_atom("");
-        self.str_atoms(s).contains(&a)
+        self.strs_reflective(self.nodes[n as usize].strs)
+    }
+
+    /// Does the set `s` hold the any-String entry (the prefix entry of "",
+    /// `reflective_key_strs`)?
+    pub(crate) fn strs_reflective(&self, s: StrSet) -> bool {
+        self.str_atoms(s)
+            .iter()
+            .any(|&a| self.atoms[a as usize] == PREFIX_MARK)
     }
 
     /// Is `t` the object `Object.getOwnPropertyDescriptors` made (one

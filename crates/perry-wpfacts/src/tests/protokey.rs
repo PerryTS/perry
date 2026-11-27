@@ -93,3 +93,29 @@ fn protokey_instance_constructor_chain_skips_prototype() {
         "const a: any = new A(); const k = String(Date.now()); h.f = (a.constructor[k]).zqm;"
     ));
 }
+
+/// (f) RED on b7e6dbdd1d: a reflective key joined with an unknown String
+/// is still a reflective key (an unknown String is the narrower of the
+/// two: `strs_join`), so it reads `prototype`, in either order.
+#[test]
+fn protokey_reflective_key_joined_with_unknown_reads_prototype() {
+    assert!(holds_prototype(
+        "const keys = [...Object.getOwnPropertyNames(any_a), String(Date.now())];
+        for (const k of keys) h.f = (any_a[k]).zqm;"
+    ));
+    assert!(holds_prototype(
+        "const keys = [String(Date.now()), ...Object.getOwnPropertyNames(any_a)];
+        for (const k of keys) h.f = (any_a[k]).zqm;"
+    ));
+}
+
+/// (g) A for-of key of `Object.getOwnPropertyNames` is no String
+/// constant: a store under it may write every own key (`const_str_key`),
+/// so `h.f` takes what the loop stores.
+#[test]
+fn protokey_reflective_loop_key_store_writes_every_key() {
+    let (kind, dump) = holder_kind(
+        "for (const k of Object.getOwnPropertyNames(any_a)) (h as any)[k] = () => 1;",
+    );
+    assert!(kind.contains("fn"), "h.f may hold the closure: {kind}\n{dump}");
+}

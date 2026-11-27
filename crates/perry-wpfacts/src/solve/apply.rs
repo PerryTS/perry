@@ -2597,12 +2597,12 @@ impl Model {
                 // for-in run over the keys `for_in_keys` lists,
                 // `for_in_named_run`) is one of them: a named store per
                 // constant, made as constants arrive. A key that turns any
-                // String later takes the rule below.
-                let (kp, ks) = (self.nodes[n as usize].prim, self.nodes[n as usize].strs);
-                if !self.key_nodes.contains_key(&n)
-                    && kp == prim::STR
-                    && ks >= crate::model::STRS_SET0
-                {
+                // String later takes the rule below, and so does one holding
+                // a solver spelling (`const_str_key`): the any-String entry
+                // of a reflective key (`reflective_key_strs`) names every
+                // key, not the one its spelling is.
+                let ks = self.nodes[n as usize].strs;
+                if !self.key_nodes.contains_key(&n) && self.const_str_key(n) {
                     for i in 0..self.str_atoms(ks).len() {
                         let a = self.str_atoms(ks)[i];
                         if self.keyed_named.insert((n, src, a)) {

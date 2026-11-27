@@ -316,7 +316,14 @@ impl Model {
         if kn.strs & !crate::model::STRS_RUN < crate::model::STRS_SET0 {
             return None;
         }
-        Some(self.str_atoms(kn.strs).to_vec())
+        // A solver spelling (a prefix, suffix, infix or exclusion entry,
+        // the any-String entry of a reflective key among them) is no
+        // constant: it names the keys of its shape, not itself.
+        let atoms = self.str_atoms(kn.strs);
+        if atoms.iter().any(|&a| self.atom_is_mark(a)) {
+            return None;
+        }
+        Some(atoms.to_vec())
     }
 
     /// E5 exact key set (`Cons::DefineAnyKey` whose key is one of finitely
