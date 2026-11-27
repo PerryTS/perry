@@ -1022,9 +1022,6 @@ impl Model {
                     if kind == Hard::E5DefineProperty && self.is_marker(t) {
                         self.note_marker_define(t, None, false);
                     }
-                    if kind == Hard::E7Delete {
-                        self.e7_global_diag(t, reason);
-                    }
                     self.mark_hard(t, kind, reason);
                 }
             }
@@ -2542,7 +2539,6 @@ impl Model {
                     if t != TOP && builtins::global_object(self, t) && !self.unit_mode {
                         self.delete_global_enum(t, reason);
                     } else {
-                        self.e7_global_diag(t, reason);
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
                 }
@@ -2552,7 +2548,6 @@ impl Model {
                     match key {
                         Some(a) => self.delete_global_key(t, a),
                         None => {
-                            self.e7_global_diag(t, reason);
                             self.mark_hard(t, Hard::E7Delete, reason);
                         }
                     }
