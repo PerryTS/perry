@@ -937,7 +937,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     install_webassembly_proto_getter(
         table_ctor,
         "length",
-        crate::fn_info!(#[realm("WebAssembly.Table.prototype.length.<get>")] export crate::object::global_this::global_this_webassembly::webassembly_table_length_getter_thunk, 0; with_name("get length"), with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("WebAssembly.Table.prototype.length.<get>", effects = { returns(prim(num)) })] export crate::object::global_this::global_this_webassembly::webassembly_table_length_getter_thunk, 0; with_name("get length"), with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
     );
     install_webassembly_proto_fn(
         table_ctor,
@@ -1160,7 +1160,6 @@ fn webassembly_constructor_proto(ctor: *mut crate::closure::ClosureHeader) -> *m
 /// when the namespace or constructor is gone.
 pub(crate) fn wrapper_prototype(ctor_name: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let global = scope.root_nanbox_f64(js_get_global_this());
     let read = |holder: &crate::gc::RuntimeHandle<'_>, key: &[u8]| -> f64 {
         let key = scope.root_string_ptr(named_key(key));
         let holder = crate::value::JSValue::from_bits(holder.get_nanbox_f64().to_bits());
@@ -1172,7 +1171,9 @@ pub(crate) fn wrapper_prototype(ctor_name: &[u8]) -> f64 {
             js_object_get_field_by_name_f64(holder, key)
         })
     };
-    let namespace = scope.root_nanbox_f64(read(&global, b"WebAssembly"));
+    // %WebAssembly% (the realm's original namespace), never the writable
+    // global binding: node's `WebAssembly.X.prototype` here is the birth one.
+    let namespace = scope.root_nanbox_f64(crate::array::realm_namespace_value("WebAssembly"));
     let ctor = scope.root_nanbox_f64(read(&namespace, ctor_name));
     let ctor = crate::value::JSValue::from_bits(ctor.get_nanbox_f64().to_bits());
     if !ctor.is_pointer() {

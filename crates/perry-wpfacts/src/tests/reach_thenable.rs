@@ -63,6 +63,11 @@ const HOLES: &[(&str, &str)] = &[
         "what a thenable resolves flows on",
         "new Promise((res: any) => res({ then(r: any) { r(hit); } })).then((f: any) => f());",
     ),
+    (
+        // CWN 11-24: only r's adoption calls the inner then (27.2.1.3.2 / 27.2.2.2); without the rule it is not reached (the old pass reached it via a shared AnonShape constructor).
+        "a handler's thenable whose then resolves a thenable",
+        "Promise.resolve(1).then(() => ({ then(r: any) { r({ then(r2: any) { hit(); r2(3); } }); } }));",
+    ),
 ];
 
 /// What already reached the thenable's `then`: an adoption
@@ -79,13 +84,6 @@ const COVERED: &[(&str, &str)] = &[
     (
         "a handler's result",
         "Promise.resolve(1).then(() => ({ then(r: any) { hit(); r(1); } }));",
-    ),
-    (
-        // The handler's result is adopted, and the derived promise's
-        // settled value is awaited (`Gen::promise_of`), so the inner `then`
-        // was called too.
-        "a handler's thenable whose then resolves a thenable",
-        "Promise.resolve(1).then(() => ({ then(r: any) { r({ then(r2: any) { hit(); r2(3); } }); } }));",
     ),
 ];
 

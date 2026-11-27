@@ -19,45 +19,89 @@ pub(super) const STREAM_CLOSE_EMITTED_KEY: Slot = Slot::CloseEmitted;
 const READABLE_KIND: usize = 0;
 const WRITABLE_KIND: usize = 1;
 
-/// `ReadableState` fields, in Node's prototype order where it has them.
-const READABLE_FIELDS: &[&str] = &[
-    "objectMode",
-    "pipesCount",
-    "flowing",
-    "ended",
-    "endEmitted",
-    "readableListening",
-    "resumeScheduled",
-    "errorEmitted",
-    "emitClose",
-    "autoDestroy",
-    "destroyed",
-    "closed",
-    "closeEmitted",
-    "dataEmitted",
-    "errored",
-    "encoding",
-    "readingMore",
+/// `ReadableState.prototype` accessors, in Node's prototype order where it
+/// has them. An accessor's closure captures its ordinal.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum ReadableField {
+    ObjectMode,
+    PipesCount,
+    Flowing,
+    Ended,
+    EndEmitted,
+    ReadableListening,
+    ResumeScheduled,
+    ErrorEmitted,
+    EmitClose,
+    AutoDestroy,
+    Destroyed,
+    Closed,
+    CloseEmitted,
+    DataEmitted,
+    Errored,
+    Encoding,
+    ReadingMore,
+}
+
+const READABLE_FIELDS: &[(&str, ReadableField)] = &[
+    ("objectMode", ReadableField::ObjectMode),
+    ("pipesCount", ReadableField::PipesCount),
+    ("flowing", ReadableField::Flowing),
+    ("ended", ReadableField::Ended),
+    ("endEmitted", ReadableField::EndEmitted),
+    ("readableListening", ReadableField::ReadableListening),
+    ("resumeScheduled", ReadableField::ResumeScheduled),
+    ("errorEmitted", ReadableField::ErrorEmitted),
+    ("emitClose", ReadableField::EmitClose),
+    ("autoDestroy", ReadableField::AutoDestroy),
+    ("destroyed", ReadableField::Destroyed),
+    ("closed", ReadableField::Closed),
+    ("closeEmitted", ReadableField::CloseEmitted),
+    ("dataEmitted", ReadableField::DataEmitted),
+    ("errored", ReadableField::Errored),
+    ("encoding", ReadableField::Encoding),
+    ("readingMore", ReadableField::ReadingMore),
 ];
 
-/// `WritableState` fields.
-const WRITABLE_FIELDS: &[&str] = &[
-    "objectMode",
-    "finalCalled",
-    "needDrain",
-    "ending",
-    "ended",
-    "finished",
-    "destroyed",
-    "decodeStrings",
-    "errorEmitted",
-    "emitClose",
-    "autoDestroy",
-    "closed",
-    "closeEmitted",
-    "errored",
-    "defaultEncoding",
-    "writable",
+/// `WritableState.prototype` accessors.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum WritableField {
+    ObjectMode,
+    FinalCalled,
+    NeedDrain,
+    Ending,
+    Ended,
+    Finished,
+    Destroyed,
+    DecodeStrings,
+    ErrorEmitted,
+    EmitClose,
+    AutoDestroy,
+    Closed,
+    CloseEmitted,
+    Errored,
+    DefaultEncoding,
+    Writable,
+}
+
+const WRITABLE_FIELDS: &[(&str, WritableField)] = &[
+    ("objectMode", WritableField::ObjectMode),
+    ("finalCalled", WritableField::FinalCalled),
+    ("needDrain", WritableField::NeedDrain),
+    ("ending", WritableField::Ending),
+    ("ended", WritableField::Ended),
+    ("finished", WritableField::Finished),
+    ("destroyed", WritableField::Destroyed),
+    ("decodeStrings", WritableField::DecodeStrings),
+    ("errorEmitted", WritableField::ErrorEmitted),
+    ("emitClose", WritableField::EmitClose),
+    ("autoDestroy", WritableField::AutoDestroy),
+    ("closed", WritableField::Closed),
+    ("closeEmitted", WritableField::CloseEmitted),
+    ("errored", WritableField::Errored),
+    ("defaultEncoding", WritableField::DefaultEncoding),
+    ("writable", WritableField::Writable),
 ];
 
 crate::perry_thread_local! {
@@ -194,29 +238,27 @@ fn common_field(stream: f64, field: &str) -> f64 {
     }
 }
 
-fn field_name(id: usize) -> Option<(usize, &'static str)> {
-    let kind = id / 64;
-    let fields = match kind {
-        READABLE_KIND => READABLE_FIELDS,
-        WRITABLE_KIND => WRITABLE_FIELDS,
-        _ => return None,
-    };
-    fields.get(id % 64).map(|name| (kind, *name))
+fn field_name(kind: usize, ordinal: usize) -> Option<&'static str> {
+    if kind == READABLE_KIND {
+        READABLE_FIELDS.get(ordinal).map(|(name, _)| *name)
+    } else {
+        WRITABLE_FIELDS.get(ordinal).map(|(name, _)| *name)
+    }
 }
 
-fn captured_field(closure: *const ClosureHeader) -> Option<(usize, &'static str)> {
+fn captured_field(closure: *const ClosureHeader, kind: usize) -> Option<&'static str> {
     if closure.is_null() {
         return None;
     }
-    let id = js_closure_get_capture_f64(closure, 0);
-    if !(0.0..128.0).contains(&id) {
+    let ordinal = js_closure_get_capture_f64(closure, 0);
+    if !(0.0..64.0).contains(&ordinal) {
         return None;
     }
-    field_name(id as usize)
+    field_name(kind, ordinal as usize)
 }
 
-extern "C" fn stream_state_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
-    let Some((kind, field)) = captured_field(closure) else {
+fn state_get(kind: usize, closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let Some(field) = captured_field(closure, kind) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
     let Some(stream) = view_owner(this) else {
@@ -231,15 +273,22 @@ extern "C" fn stream_state_get(closure: *const ClosureHeader, this: crate::closu
     }
 }
 
-extern "C" fn stream_state_set(
+extern "C" fn readable_state_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    state_get(READABLE_KIND, closure, this)
+}
+
+extern "C" fn writable_state_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    state_get(WRITABLE_KIND, closure, this)
+}
+
+/// Only `ReadableState.dataEmitted` (the disturbed flag) and `readingMore` write;
+/// every other state setter accepts and drops the value.
+extern "C" fn readable_state_set(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let Some((_, field)) = captured_field(closure) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    if field == "dataEmitted" {
+    if captured_field(closure, READABLE_KIND) == Some("dataEmitted") {
         if let Some(stream) = view_owner(this) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let stream = scope.root_nanbox_f64(stream);
@@ -250,12 +299,20 @@ extern "C" fn stream_state_set(
         }
     }
     // node's setter: the kReadingMore bit takes the value's truthiness.
-    if field == "readingMore" {
+    if captured_field(closure, READABLE_KIND) == Some("readingMore") {
         if let Some(stream) = view_owner(this) {
             let on = crate::value::js_is_truthy(value) != 0;
             set_hidden_value(stream, Slot::ReadableReadingMore, bool_bits(on));
         }
     }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn writable_state_set(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -266,17 +323,16 @@ fn state_proto(kind: usize) -> f64 {
         return f64::from_bits(cached);
     }
     ensure_state_proto_scanner();
-    let fields = if kind == READABLE_KIND {
-        READABLE_FIELDS
+    let proto_obj = if kind == READABLE_KIND {
+        unsafe { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::READABLE_STATE_PROTO::desc()); realm { "%ReadableStatePrototype%", members = { objectMode = accessor(get = "%ReadableStatePrototype%.objectMode.<get>", set = "%ReadableStatePrototype%.objectMode.<set>"); pipesCount = accessor(get = "%ReadableStatePrototype%.pipesCount.<get>", set = "%ReadableStatePrototype%.pipesCount.<set>"); flowing = accessor(get = "%ReadableStatePrototype%.flowing.<get>", set = "%ReadableStatePrototype%.flowing.<set>"); ended = accessor(get = "%ReadableStatePrototype%.ended.<get>", set = "%ReadableStatePrototype%.ended.<set>"); endEmitted = accessor(get = "%ReadableStatePrototype%.endEmitted.<get>", set = "%ReadableStatePrototype%.endEmitted.<set>"); readableListening = accessor(get = "%ReadableStatePrototype%.readableListening.<get>", set = "%ReadableStatePrototype%.readableListening.<set>"); resumeScheduled = accessor(get = "%ReadableStatePrototype%.resumeScheduled.<get>", set = "%ReadableStatePrototype%.resumeScheduled.<set>"); errorEmitted = accessor(get = "%ReadableStatePrototype%.errorEmitted.<get>", set = "%ReadableStatePrototype%.errorEmitted.<set>"); emitClose = accessor(get = "%ReadableStatePrototype%.emitClose.<get>", set = "%ReadableStatePrototype%.emitClose.<set>"); autoDestroy = accessor(get = "%ReadableStatePrototype%.autoDestroy.<get>", set = "%ReadableStatePrototype%.autoDestroy.<set>"); destroyed = accessor(get = "%ReadableStatePrototype%.destroyed.<get>", set = "%ReadableStatePrototype%.destroyed.<set>"); closed = accessor(get = "%ReadableStatePrototype%.closed.<get>", set = "%ReadableStatePrototype%.closed.<set>"); closeEmitted = accessor(get = "%ReadableStatePrototype%.closeEmitted.<get>", set = "%ReadableStatePrototype%.closeEmitted.<set>"); dataEmitted = accessor(get = "%ReadableStatePrototype%.dataEmitted.<get>", set = "%ReadableStatePrototype%.dataEmitted.<set>"); errored = accessor(get = "%ReadableStatePrototype%.errored.<get>", set = "%ReadableStatePrototype%.errored.<set>"); encoding = accessor(get = "%ReadableStatePrototype%.encoding.<get>", set = "%ReadableStatePrototype%.encoding.<set>"); readingMore = accessor(get = "%ReadableStatePrototype%.readingMore.<get>", set = "%ReadableStatePrototype%.readingMore.<set>"); }; } } }
     } else {
-        WRITABLE_FIELDS
+        unsafe { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc()); realm { "%WritableStatePrototype%", members = { objectMode = accessor(get = "%WritableStatePrototype%.objectMode.<get>", set = "%WritableStatePrototype%.objectMode.<set>"); finalCalled = accessor(get = "%WritableStatePrototype%.finalCalled.<get>", set = "%WritableStatePrototype%.finalCalled.<set>"); needDrain = accessor(get = "%WritableStatePrototype%.needDrain.<get>", set = "%WritableStatePrototype%.needDrain.<set>"); ending = accessor(get = "%WritableStatePrototype%.ending.<get>", set = "%WritableStatePrototype%.ending.<set>"); ended = accessor(get = "%WritableStatePrototype%.ended.<get>", set = "%WritableStatePrototype%.ended.<set>"); finished = accessor(get = "%WritableStatePrototype%.finished.<get>", set = "%WritableStatePrototype%.finished.<set>"); destroyed = accessor(get = "%WritableStatePrototype%.destroyed.<get>", set = "%WritableStatePrototype%.destroyed.<set>"); decodeStrings = accessor(get = "%WritableStatePrototype%.decodeStrings.<get>", set = "%WritableStatePrototype%.decodeStrings.<set>"); errorEmitted = accessor(get = "%WritableStatePrototype%.errorEmitted.<get>", set = "%WritableStatePrototype%.errorEmitted.<set>"); emitClose = accessor(get = "%WritableStatePrototype%.emitClose.<get>", set = "%WritableStatePrototype%.emitClose.<set>"); autoDestroy = accessor(get = "%WritableStatePrototype%.autoDestroy.<get>", set = "%WritableStatePrototype%.autoDestroy.<set>"); closed = accessor(get = "%WritableStatePrototype%.closed.<get>", set = "%WritableStatePrototype%.closed.<set>"); closeEmitted = accessor(get = "%WritableStatePrototype%.closeEmitted.<get>", set = "%WritableStatePrototype%.closeEmitted.<set>"); errored = accessor(get = "%WritableStatePrototype%.errored.<get>", set = "%WritableStatePrototype%.errored.<set>"); defaultEncoding = accessor(get = "%WritableStatePrototype%.defaultEncoding.<get>", set = "%WritableStatePrototype%.defaultEncoding.<set>"); writable = accessor(get = "%WritableStatePrototype%.writable.<get>", set = "%WritableStatePrototype%.writable.<set>"); }; } } }
     };
-    let proto_desc = if kind == READABLE_KIND {
-        crate::object::runtime_layouts::READABLE_STATE_PROTO::desc()
+    let fields: Vec<(&str, u8)> = if kind == READABLE_KIND {
+        READABLE_FIELDS.iter().map(|(n, f)| (*n, *f as u8)).collect()
     } else {
-        crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc()
+        WRITABLE_FIELDS.iter().map(|(n, f)| (*n, *f as u8)).collect()
     };
-    let proto_obj = unsafe { crate::object::layout_desc::perry_alloc_layout(proto_desc) };
     let proto_bits = crate::value::js_nanbox_pointer(proto_obj as i64).to_bits();
     // Publish before the accessor installs allocate: from here on the cache
     // slot is the root, and every use below re-reads it.
@@ -285,18 +341,23 @@ fn state_proto(kind: usize) -> f64 {
         let bits = STATE_PROTOS.with(|protos| protos.borrow()[kind]);
         (bits & crate::value::POINTER_MASK) as *mut ObjectHeader
     };
-    for (index, name) in fields.iter().enumerate() {
+    for (name, ordinal) in fields.iter().copied() {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let id = (kind * 64 + index) as f64;
-        let getter = scope.root_raw_mut_ptr(js_closure_alloc(
-            crate::fn_info!(stream_state_get, 0; with_declared(0)),
-            1,
-        ));
+        let id = ordinal as f64;
+        let (get_info, set_info) = if kind == READABLE_KIND {
+            (
+                crate::fn_info!(#[realm(realm_decl! { "%ReadableStatePrototype%.objectMode.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.pipesCount.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(num)) }; "%ReadableStatePrototype%.flowing.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(islot(islot(this, stream), ReadableFlowing) | prim(bool | null)) }; "%ReadableStatePrototype%.ended.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.endEmitted.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.readableListening.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.resumeScheduled.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.errorEmitted.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.emitClose.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.autoDestroy.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.destroyed.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.closed.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.closeEmitted.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.dataEmitted.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(bool)) }; "%ReadableStatePrototype%.errored.<get>", provider = closure, capture = enum_property(ReadableField); "%ReadableStatePrototype%.encoding.<get>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(str | null)) }; })] export crate::node_stream::state_view::readable_state_get, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "%ReadableStatePrototype%.objectMode.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.pipesCount.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.flowing.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.ended.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.endEmitted.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.readableListening.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.resumeScheduled.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.errorEmitted.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.emitClose.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.autoDestroy.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.destroyed.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.closed.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.closeEmitted.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.dataEmitted.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.errored.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; "%ReadableStatePrototype%.encoding.<set>", provider = closure, capture = enum_property(ReadableField), effects = { returns(prim(undefined)) }; })] export crate::node_stream::state_view::readable_state_set, 1; with_declared(1)),
+            )
+        } else {
+            (
+                crate::fn_info!(#[realm(realm_decl! { "%WritableStatePrototype%.objectMode.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.finalCalled.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.needDrain.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.ending.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.ended.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.finished.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.destroyed.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.decodeStrings.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.errorEmitted.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.emitClose.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.autoDestroy.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.closed.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.closeEmitted.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool)) }; "%WritableStatePrototype%.errored.<get>", provider = closure, capture = enum_property(WritableField); "%WritableStatePrototype%.defaultEncoding.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(str)) }; "%WritableStatePrototype%.writable.<get>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(bool | undefined)) }; })] export crate::node_stream::state_view::writable_state_get, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "%WritableStatePrototype%.objectMode.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.finalCalled.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.needDrain.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.ending.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.ended.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.finished.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.destroyed.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.decodeStrings.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.errorEmitted.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.emitClose.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.autoDestroy.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.closed.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.closeEmitted.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.errored.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.defaultEncoding.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; "%WritableStatePrototype%.writable.<set>", provider = closure, capture = enum_property(WritableField), effects = { returns(prim(undefined)) }; })] export crate::node_stream::state_view::writable_state_set, 1; with_declared(1)),
+            )
+        };
+        let getter = scope.root_raw_mut_ptr(js_closure_alloc(get_info, 1));
         getter.with_mut_ptr(|g| js_closure_set_capture_f64(g, 0, id));
-        let setter = scope.root_raw_mut_ptr(js_closure_alloc(
-            crate::fn_info!(stream_state_set, 1; with_declared(1)),
-            1,
-        ));
+        let setter = scope.root_raw_mut_ptr(js_closure_alloc(set_info, 1));
         setter.with_mut_ptr(|s| js_closure_set_capture_f64(s, 0, id));
         let get_bits = getter.with_mut_ptr(|g: *mut ClosureHeader| {
             crate::value::js_nanbox_pointer(g as i64).to_bits()
@@ -513,12 +574,12 @@ mod layout_tests {
             (
                 READABLE_KIND,
                 crate::object::runtime_layouts::READABLE_STATE_PROTO::desc(),
-                READABLE_FIELDS,
+                READABLE_FIELDS.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
             ),
             (
                 WRITABLE_KIND,
                 crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc(),
-                WRITABLE_FIELDS,
+                WRITABLE_FIELDS.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
             ),
         ] {
             let proto = scope.root_nanbox_f64(state_proto(kind));

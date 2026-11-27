@@ -14,7 +14,8 @@ use super::*;
 fn escapes(body: &str) -> bool {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const k: any = process.argv[2];
         const o: any = new Svc();
@@ -92,13 +93,13 @@ case!(
 case!(
     control_host_receiver_stays_unknown,
     true,
-    "const ta: any = (globalThis as any).hostGive(); const r: any = ta[k]; r(o);"
+    "const ta: any = external(); const r: any = ta[k]; r(o);"
 );
 // Control: a value unknown code wrote onto the chain is read.
 case!(
     control_written_chain_is_read,
     true,
-    "(Object.prototype as any).zz = (globalThis as any).hostGive(); const ta: any = new Float32Array(4); const r: any = ta[k]; r(o);"
+    "(Object.prototype as any).zz = external(); const ta: any = new Float32Array(4); const r: any = ta[k]; r(o);"
 );
 // `@@toStringTag` (23.2.3.38): the typed array's name, a String.
 case!(

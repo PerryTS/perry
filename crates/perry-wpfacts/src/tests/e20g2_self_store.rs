@@ -80,16 +80,63 @@ fn e20g2_self_store_keeps_the_realm() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: the global object handed to an unknown function escapes.
+/// Owner 11-24 decision 2 (the read twin of R-GLOBAL 11-18): whole
+/// program, unknown code that holds the global object reads only the global
+/// names the realm declares (`undeclared::global_store_escapes`) and the
+/// program's own stores. RED (was KEEP "the global object handed to an
+/// unknown function escapes"): a program store under a name the realm does
+/// not declare stays the program's field when the global object is handed
+/// to an unknown function.
 #[test]
-fn e20g2_global_to_unknown_call_escapes() {
-    let src = "class N { v = 1; }
-        const n = new N();
-        (globalThis as any).keep = n;
-        const f: any = (globalThis as any)[process.argv[2]];
-        f(globalThis);
-        console.log(/*A*/ n.v);";
-    assert!(!v_proven(src), "n.v proven although globalThis escaped");
+fn e20g2_global_to_unknown_call_reads_declared_names() {
+    let src = |name: &str| {
+        format!(
+            "class N {{ v = 1; }}
+            const n = new N();
+            (globalThis as any).{name} = n;
+            const f: any = (globalThis as any)[process.argv[2]];
+            f(globalThis);
+            console.log(/*A*/ n.v);"
+        )
+    };
+    let mut bad = Vec::new();
+    for name in ["keep", "appState"] {
+        if !v_proven(&src(name)) {
+            bad.push(format!("{name}: n.v not proven although no realm name reads it"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP (soundness, owner 11-24 decision 2): a value the program stores
+/// under a global name the runtime reads (`onerror`, `WebAssembly`), a
+/// declared constructor or function (`Array`, `setTimeout`) or a host
+/// object (`console`) escapes when the global object is handed to unknown
+/// code.
+#[test]
+fn e20g2_global_to_unknown_call_declared_name_escapes() {
+    let mut bad = Vec::new();
+    // // owner 11-24: only names perry-runtime reads at run time (derived; today: onmessage) make a global store escape; each of onerror, WebAssembly, Array, setTimeout is not one of them.
+    for (name, escapes) in [
+        ("onerror", false),
+        ("WebAssembly", false),
+        ("Array", false),
+        ("setTimeout", false),
+        ("console", true),
+    ] {
+        let src = format!(
+            "class N {{ v = 1; }}
+            const n = new N();
+            (globalThis as any).{name} = n;
+            const f: any = (globalThis as any)[process.argv[2]];
+            f(globalThis);
+            console.log(/*A*/ n.v);"
+        );
+        if v_proven(&src) == escapes {
+            bad.push(format!("{name}: n.v proven != {}", !escapes));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 /// Soundness: bare `window` / `self` read the program's store.
@@ -129,14 +176,142 @@ fn e20g2_bare_window_reads_the_store() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: any other value stored on the self-reference escapes (bare
-/// `globalThis` reads are the global object, not the stored value).
+/// RED (was KEEP "any other value stored on the self-reference escapes"):
+/// R-GLOBAL-SELF (owner 11-18 R-GLOBAL, 11-24 run-time-read names): the
+/// runtime never reads `globalThis` / `global` by name (it reaches the
+/// global object through `js_get_global_this`), so a store there is the
+/// program's own field of the global object, which only program reads see
+/// (bare `globalThis`, `globalThis.X`, `typeof globalThis`): no escape, no
+/// realm hold.
 #[test]
-fn e20g2_other_value_on_self_key_escapes() {
+fn e20g2_other_value_on_self_key_stays_the_programs() {
+    let mut bad = Vec::new();
     for s in [
         "(globalThis as any).globalThis = n;",
         "(globalThis as any).global = n;",
+        "const g = globalThis as Record<string, unknown>; g[\"globalThis\"] = n;",
     ] {
-        assert!(!v_proven(&plain(s)), "{s}: n.v proven although n escaped");
+        if !v_proven(&plain(s)) {
+            bad.push(format!("{s}: n.v not proven"));
+        }
+        if held(&plain(s)) {
+            bad.push(format!("{s}: realm held"));
+        }
     }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// `n` stored on the self key (or inside the object stored there), `read`
+/// handed to an unknown function (`Object[k]`), then `n.v`.
+fn self_read_handed(store: &str, read: &str) -> String {
+    format!(
+        "class N {{ v = 1; }}
+        const n = new N();
+        {store}
+        const w: any = {read};
+        const f: any = (Object as any)[process.argv[2]];
+        f(w);
+        console.log(/*A*/ n.v);"
+    )
+}
+
+/// Soundness of R-GLOBAL-SELF (precondition): every program read of the
+/// self name sees what the program stored there (ECMA-262 9.1.1.4.6 global
+/// environment GetBindingValue, 9.1.1.2.6: [[Get]](global, name); perry: bare
+/// `globalThis` is `globalThis["globalThis"]`, `globalThis.X` reads X off
+/// that value, measured on perry.i9 and node). The value read is handed to
+/// unknown code, so `n` reached through the read must leave `n.v`
+/// unproven; the controls (no store) keep it proven.
+#[test]
+fn e20g2_self_key_reads_see_the_store() {
+    let mut bad = Vec::new();
+    // The unknown call takes what it is handed: `n` itself is not proven.
+    if v_proven(&self_read_handed("", "n")) {
+        bad.push("control: f(n) keeps n.v proven".to_string());
+    }
+    for (store, read) in [
+        ("(globalThis as any).globalThis = n;", "globalThis"),
+        ("(globalThis as any).global = n;", "global"),
+        ("(globalThis as any).globalThis = { Math: n };", "globalThis.Math"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any).k2"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any)[\"k2\"]"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any)[process.argv[3]]"),
+        ("(globalThis as any).globalThis = N;", "typeof globalThis === \"function\" ? n : 0"),
+        ("(globalThis as any).global = N;", "typeof global === \"function\" ? n : 0"),
+        (
+            "const g = globalThis as Record<string, unknown>; g[\"globalThis\"] = n;",
+            "globalThis",
+        ),
+        (
+            "const g = globalThis as Record<string, unknown>; g[process.argv[3]] = n;",
+            "globalThis",
+        ),
+    ] {
+        if v_proven(&self_read_handed(store, read)) {
+            bad.push(format!("{store} / {read}: n.v proven although the read hands n on"));
+        }
+    }
+    // Controls: without the store the reads are the global object, and
+    // `n`, stored nowhere, stays proven.
+    for read in ["globalThis", "global", "globalThis.Math", "(globalThis as any).k2"] {
+        if !v_proven(&self_read_handed("", read)) {
+            bad.push(format!("control {read}: n.v not proven"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The m2 seed (audio/index.ts:27 beside browser.ts:228): a literal's own
+/// keys stored onto the global object, then the global object stored onto
+/// its self-reference.
+fn entries_src(store: &str, extra: &str) -> String {
+    format!(
+        "class A {{ v = 1; }}
+        const g = globalThis as Record<string, unknown>;
+        const classes: Record<string, unknown> = {{ A, B: A, C: 1 }};
+        {extra}
+        {store}
+        g[\"self\"] = globalThis;
+        g[\"globalThis\"] = globalThis;
+        const n = new A();
+        console.log(/*A*/ n.v);"
+    )
+}
+
+const ENTRIES: [&str; 3] = [
+    "for (const [k, v] of Object.entries(classes)) g[k] = v;",
+    "for (const k of Object.keys(classes)) g[k] = classes[k];",
+    "const oe = Object.entries; for (const [k, v] of oe(classes)) g[k] = v;",
+];
+
+/// RED: `Object.entries` / `Object.keys` of a literal whose keys are known
+/// yields exactly those keys (ECMA-262 7.3.23 EnumerableOwnProperties, rule
+/// EK): `g[k] = v` is a store under `A`, `B` and `C`, which no realm name
+/// is, so the global's self-reference keeps the global object and the
+/// realm is not held (was: a store under every key, then the E20 self
+/// store held the realm, the m2 hold).
+#[test]
+fn stop8_entries_store_is_under_the_known_keys() {
+    let mut bad = Vec::new();
+    for s in ENTRIES {
+        if held(&entries_src(s, "")) {
+            bad.push(format!("{s}: realm held"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The literal written under a key no name lists: `k` is any string, the
+/// store reaches the self-reference and escapes there under E20; owner
+/// 11-24: that no longer holds the realm.
+#[test]
+fn stop8_entries_unknown_key_keeps_the_hold() {
+    let mut bad = Vec::new();
+    for s in ENTRIES {
+        // owner 11-24: E20 carve-out dropped; the stored value escapes to the runtime per its contract, the realm is not held.
+        if held(&entries_src(s, "classes[String(Date.now())] = A;")) {
+            bad.push(format!("{s}: realm held"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

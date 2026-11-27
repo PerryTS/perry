@@ -73,8 +73,6 @@ pub(super) fn select_with_word(
     admitted: &str,
 ) -> (String, Vec<usize>) {
     let cid = ctx.block().trunc(I64, word, I32);
-    let receiver_ok = crate::proto_constants::emit_receiver_unshadowed(ctx, word);
-    let admitted = ctx.block().and(crate::types::I1, admitted, &receiver_ok);
     let class_of = |ctx: &FnCtx<'_>, id: u32| {
         ctx.class_ids
             .iter()
@@ -100,7 +98,23 @@ pub(super) fn select_with_word(
     // One holder proof for all cases: the receiver's own prototype by its
     // runtime class id and the chain suffix every case shares, once, here;
     // an arm proves only the classes between its own and that suffix.
-    let shared = crate::proto_constants::shared_holder_proof(ctx, &cid, &case_classes, property);
+    // GUARDS3: no write the solver saw gives a cased class's instance or a
+    // prototype of its chain the name, or relinks one: no shadow test.
+    let proven = !case_classes.is_empty()
+        && case_classes.iter().all(|(id, class)| {
+            crate::proto_constants::class_unshadowed(ctx, *id, class, property)
+        });
+    let receiver_ok = if proven {
+        "true".to_string()
+    } else {
+        crate::proto_constants::emit_receiver_unshadowed(ctx, word)
+    };
+    let admitted = ctx.block().and(crate::types::I1, admitted, &receiver_ok);
+    let shared = if proven {
+        None
+    } else {
+        crate::proto_constants::shared_holder_proof(ctx, &cid, &case_classes, property)
+    };
     let (admitted, proofs): (String, Vec<Option<Vec<u32>>>) = match shared {
         Some((ok, extras)) => (ctx.block().and(crate::types::I1, &admitted, &ok), extras),
         // No shared proof (no shadow test, or ILP32): each arm proves its

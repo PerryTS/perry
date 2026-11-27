@@ -156,6 +156,9 @@ impl<'a> Gen<'a> {
                 return;
             }
         }
+        // RTREAD14: the runtime's calls of the globals it reads by name,
+        // after the program's own calls (their ids stay the program's).
+        self.runtime_global_handlers();
     }
 
     /// RPG1b: module `mi`'s static evaluation dependencies (`Model::eval_deps`).
@@ -423,7 +426,8 @@ impl<'a> Gen<'a> {
                     .and_then(|r| self.path_index.get(r).copied());
                 if let Some(t) = t.filter(|t| self.dynamic_only.contains(t)) {
                     let f = self.init_fn_of[&t];
-                    self.m.activate(f, "import");
+                    self.m
+                        .effect_in(init_fn, crate::model::Effect::Activate(f, "import"));
                 }
             }
             let sources: Vec<u32> = self.modules[mi as usize]
@@ -442,7 +446,8 @@ impl<'a> Gen<'a> {
                 .collect();
             for t in sources {
                 let f = self.init_fn_of[&t];
-                self.m.activate(f, "import");
+                self.m
+                    .effect_in(init_fn, crate::model::Effect::Activate(f, "import"));
             }
         }
         self.m.note_walked(init_fn);
@@ -491,7 +496,8 @@ impl<'a> Gen<'a> {
         // that explicit FuncId edge only after the owning init is activated.
         if let Some(id) = self.modules[mi as usize].1.async_init_function {
             if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
-                self.m.activate(f, "module-init");
+                self.m
+                    .effect_in(init_fn, crate::model::Effect::Activate(f, "module-init"));
             }
         }
         for f in self.functions_of(mi as usize) {
@@ -540,6 +546,24 @@ impl<'a> Gen<'a> {
             for k in crate::builtins::native_parent_keys(&np) {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
+            }
+        }
+        if let Some(layout) = self
+            .m
+            .realm_parent
+            .get(&tm)
+            .and_then(|id| crate::builtins::construct_layout(id))
+        {
+            // `super(...)` runs the realm parent's declared construct on the
+            // instance (`run_super_construct`): the fields its `fresh` result
+            // defines are the instance's first own keys, present from then on
+            // when every result defines them.
+            for k in layout.keys {
+                let a = self.m.atom(k);
+                push_unique(&mut keys, a);
+                if layout.definite.contains(&k) {
+                    push_unique(&mut definite, a);
+                }
             }
         }
         let TmplKind::Class {
@@ -785,12 +809,25 @@ impl<'a> Gen<'a> {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             let t = &self.m.tmpls[c as usize];
-            if t.parent_value.is_some() && t.parent.is_none() {
+            if t.parent_value.is_some()
+                && t.parent.is_none()
+                && !self.m.realm_parent.contains_key(&c)
+            {
                 return true;
             }
             cur = t.parent;
         }
         false
+    }
+
+    /// `tm` is linked to a realm parent (`Model::realm_parent`) whose declared
+    /// construct hands the instance to other code before `tm`'s own keys
+    /// are defined.
+    fn realm_parent_leaks(&self, tm: TmplId) -> bool {
+        self.m
+            .realm_parent
+            .get(&tm)
+            .is_some_and(|id| crate::builtins::construct_layout(id).is_none_or(|l| l.leaks))
     }
 
     /// Some class on `tm`'s chain takes its parent from a value (§17.2).
@@ -1040,7 +1077,10 @@ impl<'a> Gen<'a> {
             }
             up = self.m.tmpls[p as usize].parent;
         }
-        if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
+        if self.m.tmpls[tm as usize].native_parent.is_some()
+            || self.parent_pending(tm)
+            || self.realm_parent_leaks(tm)
+        {
             return true;
         }
         let mut cur = self.m.tmpls[tm as usize].parent;
@@ -1048,6 +1088,7 @@ impl<'a> Gen<'a> {
             if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
                 || self.stand_in_cc.get(&p).is_some_and(|c| c.ctor_leaks)
                 || self.m.tmpls[p as usize].native_parent.is_some()
+                || self.realm_parent_leaks(p)
             {
                 return true;
             }
@@ -1115,6 +1156,23 @@ impl<'a> Gen<'a> {
         if self.m.packets_inert && self.m.packet_scope.as_ref().is_some_and(|b| b.f != f) {
             self.pending_walk.entry(f).or_default().push(w);
             return true;
+        }
+        // D2: every body is generated; one not active is inert until it
+        // activates.
+        if let Some(a) = self.m.act.as_ref().filter(|a| a.inert) {
+            let on = a.on.contains(&self.m.act_key(f));
+            let a = self.m.act.as_mut().unwrap();
+            let i = f as usize;
+            if a.state.len() <= i {
+                a.state.resize(i + 1, crate::model::FN_LIVE);
+            }
+            if !on && a.state[i] == crate::model::FN_LIVE {
+                a.state[i] = crate::model::FN_INERT;
+            }
+            if a.state[i] == crate::model::FN_INERT && self.m.family_reach.on {
+                self.inert_walks.push((f, w));
+            }
+            return false;
         }
         if self.m.body_active(f) {
             return false;
@@ -1607,7 +1665,9 @@ impl<'a> Gen<'a> {
             // DECISIONS 225: a computed accessor runs on reads through the
             // prototype under any key (its `this` is seeded at
             // registration), never through a call: active with its class.
-            self.m.activate(f, "computed");
+            let at = self.m.cur_fn;
+            self.m
+                .effect_in(at, crate::model::Effect::Activate(f, "computed"));
             self.walk_fn(mi, f, &cm.function, Some(tm), None);
         }
         for d in c.fields.iter().chain(c.static_fields.iter()) {
@@ -1897,9 +1957,58 @@ impl<'a> Gen<'a> {
                     self.list_birth(fx.module, *id, list_tmpl);
                 }
                 self.direct_arr = None;
-                if let Some(perry_hir::Expr::ForInKeys(o)) = init {
+                // FVA 4.3b / E1: the keys local of a for-in, and the source of
+                // a for-of over `Object.keys(o)` / `getOwnPropertyNames(o)`
+                // written in the loop head (a fresh Array no other code sees;
+                // the counted walk binds exactly its elements, `for_of_walk`).
+                use crate::model::KeyList;
+                // The namespace pair `NamespacePatched(Object) ? Object.keys(o)
+                // : <intrinsic>` is one call of the realm's own member while
+                // its generic arm yields nothing (`namespace_pair`): its keys
+                // are `o`'s; what a replaced member returns runs the body with
+                // every key (`Gen::keys_generic`, `for_in_body`).
+                let generic = self.last_ns_generic.take();
+                let (kinit, generic) = match init {
+                    Some(perry_hir::Expr::Conditional {
+                        condition,
+                        else_expr,
+                        ..
+                    }) if self.m.ns_pairs
+                        && matches!(condition.as_ref(), perry_hir::Expr::NamespacePatched(ns) if ns == "Object")
+                        && generic.is_some() =>
+                    {
+                        (Some(else_expr.as_ref()), generic)
+                    }
+                    _ => (init.as_ref(), None),
+                };
+                let keys_src = match kinit {
+                    Some(perry_hir::Expr::ForInKeys(o)) => Some((o, KeyList::ForIn)),
+                    Some(perry_hir::Expr::ObjectKeys(o)) if name.starts_with("__forof_lit_src_") => {
+                        Some((o, KeyList::OwnKeys))
+                    }
+                    Some(perry_hir::Expr::ObjectGetOwnPropertyNames(o))
+                        if name.starts_with("__forof_lit_src_") =>
+                    {
+                        Some((o, KeyList::OwnNames))
+                    }
+                    _ => None,
+                };
+                if let Some((o, list)) = keys_src {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
-                        self.for_in_keys_of.insert((fx.module, *id), *obj);
+                        self.for_in_keys_of.insert((fx.module, *id), (*obj, list));
+                        if let Some(g) = generic {
+                            self.keys_generic.insert((fx.module, *id), g);
+                        }
+                    }
+                }
+                if let (Some(perry_hir::Expr::LocalGet(src)), true) =
+                    (kinit, name.starts_with("__forof_lit_arr_"))
+                {
+                    if let Some(&v) = self.for_in_keys_of.get(&(fx.module, *src)) {
+                        self.for_in_keys_of.insert((fx.module, *id), v);
+                    }
+                    if let Some(&g) = self.keys_generic.get(&(fx.module, *src)) {
+                        self.keys_generic.insert((fx.module, *id), g);
                     }
                 }
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {

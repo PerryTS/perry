@@ -12,6 +12,7 @@ fn site(causes: &[u64], store: bool) -> Refused {
         part: 0,
         store,
         why: None,
+        site: String::new(),
     }
 }
 
@@ -66,12 +67,13 @@ fn a_cascade_through_an_escaped_token_is_not_freed_by_its_first_root() {
     let dir = std::env::temp_dir().join(format!("ledg3_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let out = dir.join("ledger.tsv");
-    std::env::set_var("PERRY_FACTS_LEDGER", &out);
-    let path = "t.ts".to_string();
-    let module = perry_parser::parse_typescript(SRC, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
-    let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
-    std::env::remove_var("PERRY_FACTS_LEDGER");
+    let ledger = out.to_str().expect("utf-8 temp path");
+    crate::provenance::with_env(&[("PERRY_FACTS_LEDGER", ledger)], || {
+        let path = "t.ts".to_string();
+        let module = perry_parser::parse_typescript(SRC, &path).expect("parses");
+        let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
+        let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
+    });
     let read =
         |ext: &str| std::fs::read_to_string(format!("{}{ext}", out.display())).expect("written");
     let (freed, summary) = (read(".freed"), read(".summary"));

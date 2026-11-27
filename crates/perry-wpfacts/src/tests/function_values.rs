@@ -137,10 +137,11 @@ fn a_class_or_a_bound_function_in_the_set_is_not_proven() {
 fn a_body_beside_top_is_not_proven() {
     // One branch gives a body, the other a value from unknown code: the set
     // holds ⊤ beside `fa`.
-    let src = r#"import "unseen-host";
+    let src = r#"
+        declare function external(x?: unknown): any;import "unseen-host";
 
         function fa(x: number) { return x + 1; }
-        const f: any = Math.random() > 2 ? fa : (globalThis as any).hook;
+        const f: any = Math.random() > 2 ? fa : external();
         console.log(typeof f === "function" ? f(1) : 0);
     "#;
     let pf = facts(src);

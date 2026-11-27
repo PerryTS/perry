@@ -241,20 +241,24 @@ impl<'a> Gen<'a> {
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 // S8: a bare call of a name the main realm declares neither
-                // on the global object nor on its chain, in a module no
-                // Worker runs (`Model::worker_side`), calls the value of
+                // on the global object nor on its chain calls the value of
                 // [[Get]](globalThis, name) (`loads::tok_load`, rule G) with
                 // `this` undefined (ECMA-262 13.3.6.1 EvaluateCall: the
                 // reference's base is an environment record, WithBaseObject
                 // undefined; 9.1.1.4.6 GetBindingValue): this call, bound to
                 // that value. Absent: the runtime's ReferenceError, nothing
-                // is called. A module a Worker may run keeps the member call:
-                // the Worker global's native of that name may be the callee.
-                let global_get = private.is_none()
-                    && self.bare_user_global(fx.module, object, property)
-                    && !self.m.worker_side_module(fx.module);
+                // is called. In a module a Worker may run (`Model::
+                // worker_side`) the value is also the Worker global's own
+                // member of that name, as the bare read has it
+                // (`builtins::worker_global_member`).
+                let global_get =
+                    private.is_none() && self.bare_user_global(fx.module, object, property);
                 let callee_v = if global_get {
-                    Some(self.load(o, Key::Named(a)))
+                    let v = self.load(o, Key::Named(a));
+                    if self.m.worker_side_module(fx.module) {
+                        crate::builtins::worker_global_member(&mut self.m, property, v);
+                    }
+                    Some(v)
                 } else {
                     private
                 };
@@ -398,7 +402,21 @@ impl<'a> Gen<'a> {
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
-                let c = self.expr(fx, callee);
+                // A body-less `declare function` called by its name is
+                // foreign code (owner 2026-11-16: only an all-primitive
+                // extern reaches no program object, the arm above): its
+                // value is the extern model's ⊤, and what the call hands it
+                // escapes to foreign code (`Model::foreign_calls`).
+                let foreign = match callee {
+                    Expr::ExternFuncRef { name, .. } => self.declared_extern(fx.module, name),
+                    _ => false,
+                };
+                let c = if foreign {
+                    let Expr::ExternFuncRef { name, .. } = callee else { unreachable!() };
+                    self.m.top_val(&format!("runtime extern value {name}"))
+                } else {
+                    self.expr(fx, callee)
+                };
                 self.own_test_recv = Some(c);
                 let rec = site.map(|_| self.call_sites_at.len());
                 if let Some((offset, end)) = site {
@@ -439,6 +457,14 @@ impl<'a> Gen<'a> {
                 // a callee node that already holds the callee (the program's
                 // `require` from `createRequire`) runs the call at `cons`.
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if foreign {
+                    self.m.foreign_calls.insert(call);
+                    // What foreign code returns is its ⊤: it may be a
+                    // function foreign code made, so a call of ⊤ may run
+                    // foreign code, as when the extern itself is read as a
+                    // value (`extern_value`).
+                    self.m.foreign_fn_value = true;
+                }
                 if let Some(i) = rec {
                     self.call_sites_at[i].call = call;
                 }
@@ -474,6 +500,19 @@ impl<'a> Gen<'a> {
             && crate::builtins::sentinel_user_global(&self.m, property)
     }
 
+    /// `name` is a body-less `declare function` of module `mi`
+    /// (`Module::extern_funcs`) that no import or module binding shadows.
+    fn declared_extern(&self, mi: u32, name: &str) -> bool {
+        !name.starts_with("js_")
+            && !self.is_import(mi, name)
+            && !self.mods[mi as usize].scope.contains_key(name)
+            && self.modules[mi as usize]
+                .1
+                .extern_funcs
+                .iter()
+                .any(|(n, _, _)| n == name)
+    }
+
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
         name.starts_with("js_")
             && !self.is_import(mi, name)
@@ -489,14 +528,30 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
+        // REALMVAL: no binding of the program: [[Get]] of the global object
+        // under the name (ECMA-262 9.1.1.4.6), which reads the realm's
+        // declared member or the program's store (`loads::tok_load`). A
+        // runtime extern (`js_*`) is no global: its value is EXTERN's; nor
+        // is a body-less `declare function` (`Module::extern_funcs`, an FFI
+        // symbol: native code outside the program, perry-hir
+        // lower_module_fn.rs), whose value stays the extern model.
+        let declared_extern = self.modules[mi as usize]
+            .1
+            .extern_funcs
+            .iter()
+            .any(|(n, _, _)| n == name);
+        if !self.m.unit_mode && !name.starts_with("js_") && !declared_extern {
             let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let dst = self.m.node_l("global-function-value");
             let key = Key::Named(self.m.atom(name));
             self.m.load_from(t, t, key, dst);
             return dst;
         }
-        self.m.top_val(&format!("extern value {name}"))
+        // A declared extern read as a value: a call of ⊤ may call it.
+        if declared_extern && !name.starts_with("js_") {
+            self.m.foreign_fn_value = true;
+        }
+        self.m.top_val(&format!("runtime extern value {name}"))
     }
 
     /// A closure expression: register, walk its body, return its token.
@@ -846,22 +901,24 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        // No binding of the program: the global object's property, when
-        // the realm has one under the name (`AbortSignal`): a load of it,
-        // which reads the realm value while the program writes no value
-        // under the key (`native_written`) and what it wrote once it does.
-        if !self.m.unit_mode
-            && self
-                .m
-                .namespace_property(BuiltinNs::GlobalThis, name)
-                .is_some_and(|p| p.native.is_some())
-        {
-            let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-            let gn = self.tok_node(g);
-            let a = self.m.atom(name);
-            return self.load(gn, Key::Named(a));
+        self.global_binding(name)
+            .unwrap_or_else(|| self.m.top_val(&format!("unresolved class value {name}")))
+    }
+
+    /// No binding of the program: [[Get]] of the global object under the
+    /// name (ECMA-262 9.1.1.4.6; `AbortSignal`): the realm's declared
+    /// member while the program writes no value under the key
+    /// (`native_written`), what it wrote once it does, and `undefined`
+    /// (the runtime's ReferenceError) for a name nobody declares. `None` in
+    /// unit mode (another unit may bind the name).
+    pub(crate) fn global_binding(&mut self, name: &str) -> Option<NodeId> {
+        if self.m.unit_mode {
+            return None;
         }
-        self.m.top_val(&format!("unresolved class value {name}"))
+        let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let gn = self.tok_node(g);
+        let a = self.m.atom(name);
+        Some(self.load(gn, Key::Named(a)))
     }
 
     /// The class value of `instanceof Name` when `Name` is a user class
@@ -1420,7 +1477,7 @@ impl<'a> Gen<'a> {
                 self.load(recv, key)
             }
             "js_vm_module_call" => {
-                crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
+                self.interp_site("E14 node:vm");
                 self.extern_fail(name, &args, &spread)
             }
             // `module.createRequire` as a value call: the program's require.
@@ -1429,6 +1486,13 @@ impl<'a> Gen<'a> {
             "js_module_create_require_devirt" => {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                 self.tok_node(t)
+            }
+            // A direct eval (`perry-hir` `lower/dynamic_eval.rs`): its source
+            // runs once this body runs; its scope objects and `this` are
+            // handed to the interpreter (arguments of the entry).
+            "js_eval_in_scope" => {
+                self.interp_site("E14 direct eval");
+                self.extern_fail(name, &args, &spread)
             }
             _ => self.extern_fail(name, &args, &spread),
         }

@@ -40,10 +40,11 @@ fn a_literal_method_passing_this_to_its_parameter_escapes_the_literal() {
     let a = r#"
 export const lit = { n: 1, createAllType(f) { return f(this); } };
 "#;
-    let b = r#"import "unseen-host";
+    let b = r#"
+        declare function external(x?: unknown): any;import "unseen-host";
 
 import { lit } from "./a";
-lit.createAllType((globalThis as any).zz);
+lit.createAllType(external());
 console.log(lit.n + 1);
 "#;
     // Whole program only: per unit (`compute_units`, retired 2026-11-03,
@@ -58,10 +59,11 @@ fn a_literal_made_in_a_function_passing_this_to_its_parameter_escapes_the_litera
 function mk() { return { n: 1, createAllType(f: any) { return f(this); } }; }
 export const lit = mk();
 "#;
-    let b = r#"import "unseen-host";
+    let b = r#"
+        declare function external(x?: unknown): any;import "unseen-host";
 
 import { lit } from "./a";
-lit.createAllType((globalThis as any).zz);
+lit.createAllType(external());
 console.log(lit.n + 1);
 "#;
     escaped_whole(&[("a", a), ("b", b)]);
@@ -70,9 +72,10 @@ console.log(lit.n + 1);
 #[test]
 fn a_class_method_passing_this_to_a_global_callee_escapes_the_instance() {
     let a = r#"
+        declare function external(x?: unknown): any;
 export class K {
   n = 1;
-  createAllType() { return (globalThis as any).zz(this); }
+  createAllType() { return external(this); }
 }
 "#;
     let b = r#"
@@ -87,9 +90,10 @@ console.log(k.n + 1);
 #[test]
 fn a_static_method_passing_this_to_a_global_callee_escapes_the_class() {
     let a = r#"
+        declare function external(x?: unknown): any;
 export class K {
   n = 1;
-  static createAllType() { return (globalThis as any).zz(this); }
+  static createAllType() { return external(this); }
 }
 "#;
     let b = r#"
@@ -127,7 +131,8 @@ fn whole(mods: &[(&str, &str)]) -> ProgramFacts {
 #[test]
 fn a_literal_method_not_using_this_keeps_the_literal() {
     let a = r#"
-export const lit = { n: 1, createAllType() { return (globalThis as any).zz(2); } };
+        declare function external(x?: unknown): any;
+export const lit = { n: 1, createAllType() { return external(2); } };
 "#;
     proven_whole(&[("a", a), ("b", READER)]);
 }
@@ -135,7 +140,8 @@ export const lit = { n: 1, createAllType() { return (globalThis as any).zz(2); }
 #[test]
 fn a_literal_method_passing_this_to_a_global_callee_escapes_the_literal() {
     let a = r#"
-export const lit = { n: 1, createAllType() { return (globalThis as any).zz(this); } };
+        declare function external(x?: unknown): any;
+export const lit = { n: 1, createAllType() { return external(this); } };
 "#;
     escaped_whole(&[("a", a), ("b", READER)]);
 }

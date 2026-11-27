@@ -34,6 +34,7 @@ fn no_unknown_call(pf: &crate::ProgramFacts) -> bool {
 fn converted(prelude: &str, array: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         {prelude}
         class R {{ y = 1; }}
         const o: any = {{ m(a: any) {{ return a.y; }} }};
@@ -66,6 +67,7 @@ fn a_typed_array_operand_has_no_to_primitive() {
     for array in KINDS {
         let pf = facts(&format!(
             r#"
+        declare function external(x?: unknown): any;
             class R {{ y = 1; }}
             const o: any = {{ m(a: any) {{ return a.y; }} }};
             const t: any = {array};
@@ -93,7 +95,7 @@ fn a_written_to_primitive_is_read() {
 #[test]
 fn an_unknown_key_store_is_read() {
     let pf = converted(
-        "const k: any = (globalThis as any)[process.argv[2]](); (Float64Array.prototype as any)[k] = (globalThis as any)[process.argv[2]]();",
+        "const k: any = external(); (Float64Array.prototype as any)[k] = external();",
         "new Float64Array(2)",
         SET,
     );
@@ -107,6 +109,7 @@ fn a_typed_array_keeps_its_iterator() {
     for array in KINDS {
         let pf = facts(&format!(
             r#"
+        declare function external(x?: unknown): any;
             class R {{ y = 1; }}
             const o: any = {{ m(a: any) {{ return a.y; }} }};
             for (const v of {array} as any) {{ console.log(o.m(v)); }}

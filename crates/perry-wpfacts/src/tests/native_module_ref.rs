@@ -80,7 +80,7 @@ fn module_value_undeclared_member_keeps_its_arguments_escaped() {
 /// (the module object is described by its declaration only); a computed
 /// key may name any key.
 #[test]
-fn module_value_computed_key_reads_top() {
+fn module_value_computed_key_reads_its_declared_members() {
     let pf = facts(
         r#"
         const a: any = require("fs");
@@ -89,7 +89,9 @@ fn module_value_computed_key_reads_top() {
         console.log(v.q);
     "#,
     );
-    assert!(site(&pf, "q").top, "{}", pf.dump_text());
+    // REALMVAL (cliff 285e2f45a5 / 917078d93f): a module object holds exactly its
+    // declared members, so a computed key reads one of them or undefined, not ⊤.
+    assert!(!site(&pf, "q").top, "{}", pf.dump_text());
 }
 
 /// A function a module object holds declares own keys the model does not

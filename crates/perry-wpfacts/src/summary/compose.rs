@@ -155,6 +155,9 @@ pub(super) fn compose(
                         .ret_param
                         .filter(|_| !m.funcs[g as usize].no_summary)
                         .map(|i| i as usize);
+                    // The call's own wiring stands at the call.
+                    let ret = m.calls[s.calls[*ci].0 as usize].ret;
+                    let at = m.stop_top.as_ref().map(|st| st.pos_of(ret));
                     expand(
                         &mut s,
                         *ci,
@@ -165,6 +168,7 @@ pub(super) fn compose(
                         elem,
                         &slot_keys,
                         rp,
+                        at,
                     );
                     any = true;
                     n += 1;
@@ -203,6 +207,7 @@ pub(super) fn expand(
     elem: Key,
     slot_keys: &[Key],
     ret_param: Option<usize>,
+    at: Option<(u32, u32)>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -231,8 +236,14 @@ pub(super) fn expand(
     for &(a, b) in &g.edges {
         s.edges.push((tr(a), tr(b)));
     }
+    let c0 = s.cons.len();
     for (h, c) in &g.cons {
         s.cons.push((tr(*h), map_cons(c, tr, kr)));
+    }
+    if let Some(at) = at {
+        s.cons_pos.resize(c0, at);
+        s.cons_pos
+            .extend((0..g.cons.len()).map(|i| g.cons_pos.get(i).copied().unwrap_or(at)));
     }
     for (t, cs) in &g.calls {
         s.calls.push((*t, map_call(cs, tr)));
@@ -375,6 +386,9 @@ pub(super) fn expand(
             None if r != NO_NODE => s.edges.push((r, call.ret)),
             None => {}
         }
+    }
+    if let Some(at) = at {
+        s.cons_pos.resize(s.cons.len(), at);
     }
     if !s.cons_reach.is_empty() || !s.call_reach.is_empty() {
         s.cons_reach.resize(s.cons.len(), reach);

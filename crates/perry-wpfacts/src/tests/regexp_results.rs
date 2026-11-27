@@ -147,18 +147,20 @@ fn own_key_exec_write_on_an_instance_makes_exec_result_unknown() {
     );
 }
 
-/// The member read on a capture a written `exec` returned: the capture is
-/// that program object, never a primitive or a primitive container.
+/// A program store onto `RegExp.prototype.exec`. DEC 250: `exec` is an
+/// image member of the sealed `%RegExp.prototype%`, whose replacement the
+/// runtime's lock refuses (perry-abi `lock::refuses(_, Image, _)`), so
+/// `@@split` runs the intrinsic `exec` (RegExpExec): its captures are
+/// Strings or undefined, never the program object, as in
+/// `sealed_prototype_exec_write_keeps_split_captures`. Owner 11-24 (the E20
+/// realm hold dropped): the read is proven.
 #[test]
 fn written_exec_split_capture_member_is_unknown() {
-    unproven(
-        "(RegExp.prototype as any).exec = function (this: RegExp, s: string): any {\n\
+    let src = "(RegExp.prototype as any).exec = function (this: RegExp, s: string): any {\n\
          if (this.lastIndex !== 1) return null; this.lastIndex = 2; const r: any = [\"b\", { v: 7 }]; r.index = 1; return r; };\n\
          function f(s: string, re: RegExp) { const parts: any[] = s.split(re); const x = parts[1]; if (typeof x === \"object\" && x !== null) return x.v; return 0; }\n\
-         console.log(f(\"abc\", /b/));\n",
-        "x.v",
-        "v",
-    );
+         console.log(f(\"abc\", /b/));\n";
+    proves(src, "x.v", "v");
 }
 
 /// The same through a subclass `exec`.

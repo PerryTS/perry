@@ -21,7 +21,7 @@ impl Model {
             self.diagnostic_reach(f, "this", call);
         }
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::This(call, ft, this_tok));
+            self.defer(Deferred::This(call, ft, this_tok));
             return;
         }
         let f = self.tok_fn(ft);
@@ -54,7 +54,7 @@ impl Model {
     /// node observes it; the instances get the call's receiver operand.
     pub(crate) fn this_lookup(&mut self, ft: Tok, origin: Tok) {
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::ThisTo(ft, origin));
+            self.defer(Deferred::ThisTo(ft, origin));
             return;
         }
         let f = self.tok_fn(ft);
@@ -146,7 +146,7 @@ impl Model {
     }
     fn escape_this_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
+            self.defer(Deferred::EscapeThis(ft, reason));
             return;
         }
         let f = self.tok_fn(ft);
@@ -209,6 +209,9 @@ impl Model {
                 .or_default()
                 .extend(dsts.iter().copied());
         }
+        // A method or accessor unknown code holds runs on any receiver that
+        // code hands it, as a plain function does (owner 11-26: no class
+        // family narrowing until a proof exists; no runtime check backs it).
         for d in dsts {
             if !contract_only {
                 self.add_top(d, why);

@@ -120,15 +120,18 @@ fn control_stored_value_made_by_unknown_code() {
     assert!(!proven(&sites(&facts(&src), "go")));
 }
 
-/// A getter defined through ⊤ (`Object.defineProperty`): the key's value is the getter's result, not
-/// modelled here (opaque): the argument escapes.
+/// A getter defined through ⊤ (`Object.defineProperty`): P-N1 (owner
+/// 2026-11-23: a value the analysis does not model is never a built-in
+/// prototype) defines it on no `String.prototype`: `decodePrimitive` stays
+/// absent, the call throws, nothing escapes. (The control with a value
+/// unknown code made stays open above.)
 #[test]
-fn control_getter_defined_through_top() {
+fn getter_defined_through_top_defines_no_primitive_member() {
     let src = program("(process.argv[2] as any).decodePrimitive(pp, 0);").replace(
         "u[process.argv[3]] = process.argv[4];",
         "Object.defineProperty(u, process.argv[3], { get: function () { return 1; } });",
     );
-    assert!(!proven(&sites(&facts(&src), "go")));
+    assert!(proven(&sites(&facts(&src), "go")));
 }
 
 /// A delete through ⊤ stores nothing: the key reads undefined, the call

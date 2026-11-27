@@ -219,6 +219,9 @@ impl Model {
         };
         for &(key, src, site) in ss {
             self.charge_work(1);
+            if self.past_work_bound() {
+                return;
+            }
             self.store_into(y, key, src, site);
         }
     }
@@ -399,6 +402,12 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // Rule PXASSIGN: [[Set]] of a Proxy is its own internal method
+        // (10.5.9) with the Proxy the Receiver (`proxy_store`).
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            let region = self.thrown;
+            return self.proxy_store(p, key, src, site, region);
+        }
         // A host object of strings (`process.env`): the runtime's [[Set]]
         // hook (`process_env_set_field` -> `js_setenv`) runs before any
         // other step and stores ToString(v), never `v` (a program
@@ -607,6 +616,13 @@ impl Model {
                 let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                 let f = builtins::global_field(self, g, a);
                 self.edge(src, f);
+                // A key the global-store escape rule keeps (owner 11-24;
+                // a run-time-read name is not one: its runtime call hangs
+                // on this field, `Gen::runtime_global_handlers`) hands the
+                // stored value on (`tok_store`), beside the field.
+                if builtins::global_store_escapes(self, t, key) {
+                    self.with_b(|m| builtins::tok_store(m, t, key, src));
+                }
                 return;
             }
         }
@@ -631,6 +647,14 @@ impl Model {
                 return;
             }
         }
+        // A class constructor's own `prototype` is non-writable and
+        // non-configurable (`final_class_proto`): a [[Set]] writes nothing (a
+        // strict one throws the runtime's TypeError), a definition throws.
+        if let Key::Named(a) = key {
+            if self.final_class_proto(t, a) {
+                return;
+            }
+        }
         // A [[Set]] that meets the realm's accessor without a setter
         // (`navigator` on the global object) writes nothing; in strict code
         // it throws the runtime's TypeError (`Model::thrown`). Until a
@@ -640,9 +664,10 @@ impl Model {
         // `defineProperty`) is no [[Set]]: [[DefineOwnProperty]] replaces
         // the accessor (ECMA-262 10.1.6.3 step 2-3, ValidateAndApply...
         // with a data descriptor over a configurable accessor), so it takes
-        // the ordinary path: a write of that key and no other.
+        // the ordinary path: a write of that key and no other. A class field
+        // too (DefineField: CreateDataPropertyOrThrow, `own_define_site`).
         if let Key::Named(a) = key {
-            let define = self.define_site(site);
+            let define = self.own_define_site(site);
             if !elem
                 && !theirs
                 && !define
@@ -663,17 +688,20 @@ impl Model {
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
-                if !self.define_site(site) {
+                if !self.own_define_site(site) {
                     self.accessor_walk(
-                        t,
+                        self.store_recv.unwrap_or(t),
                         t,
                         key,
                         ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
                     );
+                    let region = self.store_region.unwrap_or(self.thrown);
+                    self.chain_set_rule(self.store_recv.unwrap_or(t), t, key, src, region);
                 }
                 let cp = self.cp(t);
-                if self.callthis_done.insert((cp, u32::MAX, t)) {
-                    self.cons(cp, Cons::StoreTopProto { origin: t, src });
+                let origin = self.store_recv.unwrap_or(t);
+                if self.callthis_done.insert((cp, u32::MAX, origin)) {
+                    self.cons(cp, Cons::StoreTopProto { origin, src });
                 }
                 return;
             }
@@ -1071,7 +1099,15 @@ impl Model {
         if self.unit_mode && matches!(self.toks[t as usize], TokKind::Func(..)) {
             self.note_fn_store(t, key, src);
         }
+        // OrdinarySet (10.1.9.2): a key whose lookup surely finds a realm
+        // accessor calls its setter (or, getter-only, fails) and defines no
+        // own data property; where the lookup cannot prove it, both run.
+        let realm_set = match key {
+            Key::Named(a) => slot.is_none() && self.realm_set_skip(t, a, src, site),
+            Key::Any(_) => false,
+        };
         match key {
+            Key::Named(_) if realm_set => {}
             Key::Named(a) => {
                 // A BD-A define of a non-enumerable key makes no for-in key
                 // (`field_r`, as a method definition).
@@ -1145,6 +1181,15 @@ impl Model {
                 self.rel(|| format!("anystore {t} {src} {f} site={site} fn={sf} m={sm}"));
                 self.edge(src, f);
                 if let Some(tm) = tm {
+                    let bit = match self.toks[t as usize] {
+                        TokKind::Obj(..) => 1,
+                        TokKind::ClassObj(_) => 2,
+                        _ => 4,
+                    };
+                    // Rule NUMAPP: this application names a non-numeric key
+                    // only if its key is not a number-only key.
+                    let bit = if num_only { bit } else { bit | 8 };
+                    *self.any_writer_objs.entry((tm, site)).or_default() |= bit;
                     let birth = self.stores[site as usize].birth;
                     let w = self.any_writers.entry(tm).or_default();
                     if birth {
@@ -1165,8 +1210,10 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native. A
         // definition runs none: [[DefineOwnProperty]] calls no setter
-        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region.
-        if !self.define_site(site) {
+        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region. A
+        // class field is one (DefineField, 10.2.10: CreateDataPropertyOrThrow),
+        // as is every `own_define_site`.
+        if !self.own_define_site(site) {
             self.builtin_field_use(
                 t,
                 key,
@@ -1175,16 +1222,19 @@ impl Model {
             // A setter a declaration made the receiver with (`onabort`).
             self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
             self.accessor_walk(
-                t,
+                self.store_recv.unwrap_or(t),
                 t,
                 key,
                 ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
             );
+            let region = self.store_region.unwrap_or(self.thrown);
+            self.chain_set_rule(self.store_recv.unwrap_or(t), t, key, src, region);
         }
         if !self.is_array_like(t) {
             let cp = self.cp(t);
-            if self.callthis_done.insert((cp, u32::MAX, t)) {
-                self.cons(cp, Cons::StoreTopProto { origin: t, src });
+            let origin = self.store_recv.unwrap_or(t);
+            if self.callthis_done.insert((cp, u32::MAX, origin)) {
+                self.cons(cp, Cons::StoreTopProto { origin, src });
             }
         }
         // A callable namespace's own property is the realm's only under a
@@ -1225,9 +1275,64 @@ impl Model {
 }
 
 impl Model {
-    /// A store site of `defineProperty` (`Gen::define_property`,
-    /// `define_by_data`, `define_any_on`): its value is defined with
-    /// [[DefineOwnProperty]], which runs no [[Set]] and so no setter.
+    /// A site that defines an own property ([[DefineOwnProperty]], no
+    /// [[Set]]): `defineProperty`, a class field (CreateDataPropertyOrThrow,
+    /// 7.3.6 / 10.2.10 DefineField), a literal-descriptor or birth define.
+    pub(super) fn own_define_site(&self, site: SiteId) -> bool {
+        self.define_site(site)
+            || self.stores.get(site as usize).is_some_and(|s| {
+                s.define_attrs.is_some()
+                    || s.desc.starts_with("field ")
+                    || s.desc.starts_with("define ")
+            })
+    }
+
+    /// The named store of `src` into `t` under `a` at `site` writes no own
+    /// property (`realm_accessor_sure`); filed for `settle_realm_set`. A
+    /// definition makes the own property: the pair's lookup no longer finds
+    /// the accessor.
+    fn realm_set_skip(&mut self, t: Tok, a: Atom, src: NodeId, site: SiteId) -> bool {
+        if self.own_define_site(site) {
+            if self.realm_set_open.insert((t, a)) {
+                self.reopen_realm_set();
+            }
+            return false;
+        }
+        if !self.realm_accessor_sure(t, a) {
+            return false;
+        }
+        self.realm_set_skips.push((t, a, src, site));
+        true
+    }
+
+    /// Stores filed by `realm_set_skip` whose lookup is no longer sure write
+    /// their own property after all.
+    fn reopen_realm_set(&mut self) {
+        let skips = std::mem::take(&mut self.realm_set_skips);
+        let mut kept = Vec::with_capacity(skips.len());
+        let mut replay = Vec::new();
+        for (t, a, src, site) in skips {
+            if self.realm_accessor_sure(t, a) {
+                kept.push((t, a, src, site));
+            } else {
+                self.realm_set_open.insert((t, a));
+                replay.push((t, a, src, site));
+            }
+        }
+        self.realm_set_skips = kept;
+        for (t, a, src, site) in replay {
+            self.store_into(t, Key::Named(a), src, site);
+        }
+    }
+
+    pub(crate) fn settle_realm_set(&mut self) -> bool {
+        if self.realm_set_skips.is_empty() {
+            return false;
+        }
+        self.reopen_realm_set();
+        !self.wl.is_empty()
+    }
+
     pub(super) fn define_site(&self, site: SiteId) -> bool {
         self.stores
             .get(site as usize)

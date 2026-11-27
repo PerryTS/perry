@@ -10,18 +10,18 @@ impl Model {
     /// `t[k]` in it reads that key only (ECMA-262 14.7.5.6
     /// ForIn/OfBodyEvaluation, 14.7.5.9 EnumerateObjectProperties), so the
     /// per-key runs are the loop's whole effect on `t`.
-    pub(crate) fn for_in_tok(&mut self, call: CallId, ft: Tok, t: Tok) {
+    pub(crate) fn for_in_tok(&mut self, call: CallId, ft: Tok, t: Tok, list: KeyList) {
         if self.act.is_some() {
             let f = self.tok_fn(ft);
             self.activate(f, "for-in");
         }
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::ForIn(call, ft, t));
+            self.defer(Deferred::ForIn(call, ft, t, list));
             return;
         }
         let f = self.tok_fn(ft);
         let runs = self.summarized(f) && self.instantiable(ft);
-        let Some(keys) = self.for_in_keys(f, t) else {
+        let Some(keys) = self.for_in_keys(f, t, list) else {
             if for_in_diag() {
                 self.for_in_diag_why(f, ft, t);
             }
@@ -29,11 +29,11 @@ impl Model {
         };
         if !runs {
             self.for_in_named_run(call, ft, &keys);
-            self.for_in_named.push((call, ft, t));
+            self.for_in_named.push((call, ft, t, list));
             return;
         }
         if self.for_in_key_runs(call, ft, &keys).is_some() {
-            self.for_in_runs.push((call, ft, t));
+            self.for_in_runs.push((call, ft, t, list));
         }
     }
 
@@ -141,8 +141,18 @@ impl Model {
     /// methods and every enumerable field the program wrote
     /// (`Node::enum_key`); keys written later get their run once the
     /// worklist is empty (`settle_for_in`).
-    fn for_in_keys(&self, f: FnIdx, t: Tok) -> Option<Vec<Atom>> {
-        let keys = self.enum_keys(t)?;
+    ///
+    /// A for-of over `Object.keys(o)` or `Object.getOwnPropertyNames(o)`
+    /// (`KeyList`) visits the keys rule EK or PK lists for `t`, the same
+    /// constants `Cons::OwnKeys` / `Cons::OwnNames` give its array.
+    fn for_in_keys(&self, f: FnIdx, t: Tok, list: KeyList) -> Option<Vec<Atom>> {
+        let keys = match list {
+            KeyList::ForIn => self.enum_keys(t)?,
+            KeyList::OwnKeys if t != TOP && self.own_props_modelled(t) => self.enum_keys(t)?,
+            KeyList::OwnKeys => return None,
+            KeyList::OwnNames if t != TOP => self.proto_names(t)?,
+            KeyList::OwnNames => return None,
+        };
         if self.for_in_defines.contains(&f)
             && keys.iter().any(|a| !self.for_in_define_keys.contains(a))
         {
@@ -315,7 +325,14 @@ impl Model {
         }
         let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
         let acc = self.accessor_keys.get(&t).into_iter().flatten();
-        let written = self.field_keys.get(&t).into_iter().flatten();
+        // A field node a lookup made (`o.k` read through the chain, a realm
+        // read of `@@toStringTag`) names no property: [[Get]] creates none
+        // (ECMA-262 10.1.8.1). A written one holds the stored value.
+        let written = self.field_keys.get(&t).into_iter().flatten().filter(|&&a| {
+            self.fields
+                .get(&(t, a))
+                .is_some_and(|&n| self.node_held(n) || self.nodes[n as usize].enum_key)
+        });
         let named = self
             .proto_writers
             .keys()
@@ -392,13 +409,16 @@ impl Model {
     /// happened.
     pub(crate) fn settle_for_in(&mut self) -> bool {
         let mut more = false;
-        for (call, ft, t) in self.for_in_runs.clone() {
+        for (call, ft, t, list) in self.for_in_runs.clone() {
             if self.for_in_any.contains(&(call, ft)) {
                 continue;
             }
             let f = self.tok_fn(ft);
-            match self.for_in_keys(f, t) {
+            match self.for_in_keys(f, t, list) {
                 None => {
+                    if for_in_diag() {
+                        self.for_in_diag_why(f, ft, t);
+                    }
                     self.for_in_every_key(call, ft);
                     more = true;
                 }
@@ -406,13 +426,16 @@ impl Model {
             }
         }
         // FORIN1: the shared named runs, the same way.
-        for (call, ft, t) in self.for_in_named.clone() {
+        for (call, ft, t, list) in self.for_in_named.clone() {
             if self.for_in_any.contains(&(call, ft)) {
                 continue;
             }
             let f = self.tok_fn(ft);
-            match self.for_in_keys(f, t) {
+            match self.for_in_keys(f, t, list) {
                 None => {
+                    if for_in_diag() {
+                        self.for_in_diag_why(f, ft, t);
+                    }
                     self.for_in_every_key(call, ft);
                     more = true;
                 }
@@ -483,5 +506,23 @@ impl Model {
             .map(|&(k, n, _)| format!("shape{k}:{}", held(n)))
             .collect();
         eprintln!("perry: wpfacts forindiag   any={any:?} shaped={shaped:?}");
+        if let TokKind::Proto(tm) = self.toks[t as usize] {
+            let names = |v: &mut dyn Iterator<Item = Atom>| -> Vec<String> {
+                v.map(|a| {
+                    let late = self.spelled_atoms.is_some_and(|n| a as usize >= n);
+                    format!("{}{}", self.atoms[a as usize], if late { "(late)" } else { "" })
+                })
+                .collect()
+            };
+            eprintln!(
+                "perry: wpfacts forindiag   proto names={:?} computed={} foreign={} acc={:?} written={:?} writers={:?}",
+                self.proto_names(t).map(|v| v.len()),
+                self.tmpls[tm as usize].has_computed_members,
+                self.foreign.contains_key(&tm),
+                names(&mut self.accessor_keys.get(&t).into_iter().flatten().copied()),
+                names(&mut self.field_keys.get(&t).into_iter().flatten().copied()),
+                names(&mut self.proto_writers.keys().filter(|&&(w, _)| w == tm).map(|&(_, a)| a)),
+            );
+        }
     }
 }

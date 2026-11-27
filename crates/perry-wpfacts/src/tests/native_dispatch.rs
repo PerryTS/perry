@@ -162,8 +162,10 @@ fn an_implicit_protocol_on_an_object_keeps_the_fact_open() {
 
 #[test]
 fn an_unknown_value_keeps_the_fact_open() {
-    // node: prints `undefined`.
-    let why = open_reason("const h = (process as any).noSuchMember;\nconsole.log(typeof h);\n");
+    // The result of a body-less `declare function`: an unknown value. (A
+    // member of `process` the realm does not declare reads undefined under
+    // REALMVAL, cliff 285e2f45a5.)
+    let why = open_reason("declare function hostValue(): any;\nconst h = hostValue();\nconsole.log(typeof h);\n");
     assert!(why.starts_with("O1:L1:"), "{why}");
 }
 
@@ -254,7 +256,7 @@ fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
 #[test]
 fn native_dispatch_named_negative_controls_keep_the_generic_route() {
     for (key, src) in [
-        ("m", "const x = (globalThis as any).hostValue; x.m();"),
+        ("m", "const x = external(); x.m();"),
         ("get", "const x: any = new Map(); x.get = function() { return 7; }; console.log(x.get('a'));"),
         ("get", "(Map.prototype as any).get = function() { return 7; }; const x: any = new Map(); console.log(x.get('a'));"),
         ("call", "const f = 'abc'.charCodeAt; console.log(f.call('abc', 0));"),

@@ -73,15 +73,17 @@ fn an_any_receiver_of_an_unknown_call_leaves_console_modeled() {
     assert_site(&src, true);
 }
 
-/// Control c0_global: the global object handed to a function read off it
-/// under a computed key. The unknown code that holds it writes no key of it
-/// (R-GLOBAL step 2) but reads its properties, so `box`'s value leaves by
-/// that read, never by a write of `box`.
+/// Control c0_global: the global object handed to a function foreign code
+/// returned (`opaque()`, a declared extern: its result is foreign code's
+/// ⊤, `Model::foreign_fn_value`). That code writes no key of the global
+/// object (R-GLOBAL step 2) but reads its properties
+/// (`global_field_read_by_unknown`), so `box`'s value leaves by that read,
+/// never by a write of `box`.
 #[test]
 fn the_global_object_handed_to_unknown_code_reads_the_program_store() {
     let src = format!(
-        "{K}(globalThis as any).box = o;\n\
-         const u: any = (globalThis as any)[process.argv[2]];\n\
+        "{K}declare function opaque(): any; (globalThis as any).box = o;\n\
+         const u: any = opaque();\n\
          u(globalThis);\n\
          const b: any = (globalThis as any).box;\n\
          console.log(b.k.m()); // SITE\n"

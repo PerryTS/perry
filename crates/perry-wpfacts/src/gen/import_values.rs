@@ -20,6 +20,15 @@ impl<'a> Gen<'a> {
             g.m.top_val(&why)
         };
         let Some(path) = path else {
+            // A builtin module's export: that key of the namespace object
+            // the realm declares for it (its own keys are its exports;
+            // `default` reads the declared `default` member).
+            if !self.m.unit_mode {
+                if let Some(ns) = self.builtin_module_value(src) {
+                    let a = self.m.atom(name);
+                    return self.load(ns, Key::Named(a));
+                }
+            }
             return unresolved(self);
         };
         let imp_path = path;

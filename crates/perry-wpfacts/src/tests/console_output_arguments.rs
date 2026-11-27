@@ -19,7 +19,7 @@ fn facts_of(body: &str) -> ProgramFacts {
         // A store into ⊤ under any key, as three.js `toArray` called back.
         // (`unknown` is a value, not a method of the global object: a call
         // `globalThis.hostTake(f)` hands it the global object as `this`.)
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare function hostValue(): any; const unknown: any = hostValue;
         unknown.take(function (arr: any, k: any) {{ arr[k] = 1; }});
         {body}
         "#
@@ -54,10 +54,12 @@ fn console_output_methods_keep_their_arguments_past_a_top_store() {
     }
 }
 
-/// Control: the global object handed to unknown code puts `console` in
-/// its reach; a store into ⊤ may then replace `console.warn`.
+/// P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+/// built-in object or the global object, so with the global object handed the store into ⊤ replaces no
+/// `console.warn`, handed or not; the runtime formatter reads `s` per its
+/// contract (owner 2026-11-23, Phase B).
 #[test]
-fn global_object_given_to_unknown_code_writes_console() {
+fn global_object_given_to_unknown_code_writes_no_console() {
     let pf = facts_of(
         r#"
         unknown.take2(globalThis);
@@ -66,12 +68,15 @@ fn global_object_given_to_unknown_code_writes_console() {
         console.log(g(s));
         "#,
     );
-    assert!(!proven(&pf, "size"), "{}", pf.dump_text());
+    assert!(proven(&pf, "size"), "{}", pf.dump_text());
 }
 
-/// Control: `console` itself handed to unknown code.
+/// P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+/// built-in object or the global object, so with `console` itself handed the store into ⊤ replaces no
+/// `console.warn`, handed or not; the runtime formatter reads `s` per its
+/// contract (owner 2026-11-23, Phase B).
 #[test]
-fn console_given_to_unknown_code_is_written() {
+fn console_given_to_unknown_code_is_not_written() {
     let pf = facts_of(
         r#"
         unknown.take2(console);
@@ -80,7 +85,7 @@ fn console_given_to_unknown_code_is_written() {
         console.log(g(s));
         "#,
     );
-    assert!(!proven(&pf, "size"), "{}", pf.dump_text());
+    assert!(proven(&pf, "size"), "{}", pf.dump_text());
 }
 
 /// Control: the program replaces `console.warn`; its function runs.

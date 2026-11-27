@@ -423,10 +423,9 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
                 received_property(descriptor.get_nanbox_f64(), "value")
             },
         );
-        let builtin = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-            brand.as_ptr(),
-            brand.len(),
-        ));
+        // The realm's original constructor: node's inspect never reads the
+        // global binding.
+        let builtin = scope.root_nanbox_f64(crate::object::builtin_constructor_value(brand));
         let changed = constructor.get_nanbox_u64() != builtin.get_nanbox_u64();
         if !custom && changed {
             return Some(received_text(&if length == 0 {

@@ -51,9 +51,9 @@ pub(crate) struct BodyCons {
 }
 
 impl BodyCons {
-    pub(crate) fn birth_field(key: Key, src: Operand) -> Self {
+    pub(crate) fn birth_field(key: Key, src: Operand, tm: TmplId) -> Self {
         Self::capture(
-            &Cons::BirthField { key, src: 0 },
+            &Cons::BirthField { key, src: 0, tm },
             |_| src,
             |_| unreachable!(),
         )
@@ -136,6 +136,8 @@ pub(crate) struct BodyInput {
     pub edge_reach: Vec<u64>,
     pub cons_reach: Vec<u64>,
     pub call_reach: Vec<u64>,
+    /// Program positions, parallel to `cons` (`Summary::cons_pos`).
+    pub cons_pos: Vec<(u32, u32)>,
 }
 
 impl BodyInput {
@@ -151,6 +153,7 @@ impl BodyInput {
             edge_reach: Vec::new(),
             cons_reach: Vec::new(),
             call_reach: Vec::new(),
+            cons_pos: Vec::new(),
             edges: Vec::new(),
             cons: Vec::new(),
             calls: Vec::new(),
@@ -212,6 +215,7 @@ pub(crate) fn encode_body(input: BodyInput, keep: &FxHashSet<NodeId>) -> Summary
         edge_reach,
         cons_reach: input.cons_reach,
         call_reach: input.call_reach,
+        cons_pos: input.cons_pos,
         ..Default::default()
     };
     compress(&mut s, keep);
@@ -477,6 +481,15 @@ pub fn compress(s: &mut Summary, keep: &FxHashSet<NodeId>) {
             .zip(cons.iter())
             .filter(|(_, c)| c.is_some())
             .map(|(m, _)| m)
+            .collect();
+    }
+    if !s.cons_pos.is_empty() {
+        let cp = std::mem::take(&mut s.cons_pos);
+        s.cons_pos = cp
+            .into_iter()
+            .zip(cons.iter())
+            .filter(|(_, c)| c.is_some())
+            .map(|(p, _)| p)
             .collect();
     }
     s.cons = cons

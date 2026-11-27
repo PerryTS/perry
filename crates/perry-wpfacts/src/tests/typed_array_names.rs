@@ -12,8 +12,9 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
-        class ValueOf {{ size = 3; valueOf(): any {{ (globalThis as any).hostTake(this); return 1; }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
+        class ValueOf {{ size = 3; valueOf(): any {{ external(this); return 1; }} }}
         function g(a: any) {{ return a.size; }}
         const k = Math.floor(Math.random() * 2);
         {body}
@@ -41,43 +42,43 @@ macro_rules! case {
 case!(
     typed_array_length_key_names_no_field,
     false,
-    "const ta = new Float32Array(6); const h: any = { a: 1 }; const o: any = new Svc(); h[ta.length] = o; (globalThis as any).hostTake(h.a); console.log(g(o));"
+    "const ta = new Float32Array(6); const h: any = { a: 1 }; const o: any = new Svc(); h[ta.length] = o; external(h.a); console.log(g(o));"
 );
 // (b) a named store on a typed array is an ordinary property: the named
 // read sees it.
 case!(
     typed_array_named_store_is_read_by_name,
     true,
-    "const ta: any = new Float32Array(6); const o: any = new Svc(); ta.foo = o; (globalThis as any).hostTake(ta.foo); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const o: any = new Svc(); ta.foo = o; external(ta.foo); console.log(g(o));"
 );
 // (c) a store under an unknown String key may be `foo`.
 case!(
     typed_array_unknown_string_key_is_read_by_name,
     true,
-    "const ta: any = new Float32Array(6); const s = String(Math.random()); const o: any = new Svc(); ta[s] = o; (globalThis as any).hostTake(ta.foo); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const s = String(Math.random()); const o: any = new Svc(); ta[s] = o; external(ta.foo); console.log(g(o));"
 );
 // (d) a named store never reaches the elements.
 case!(
     typed_array_named_store_is_no_element,
     false,
-    "const ta: any = new Float32Array(6); const o: any = new Svc(); ta.foo = o; (globalThis as any).hostTake(ta[0]); (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const o: any = new Svc(); ta.foo = o; external(ta[0]); external(ta[k]); console.log(g(o));"
 );
 // (d') an unknown String key may be an index: the element store runs
 // ToNumber(v), so `valueOf` runs.
 case!(
     typed_array_unknown_string_key_may_be_an_index,
     true,
-    "const ta: any = new Float32Array(6); const s = String(Math.random()); const o: any = new ValueOf(); ta[s] = o; (globalThis as any).hostTake(ta[0]); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const s = String(Math.random()); const o: any = new ValueOf(); ta[s] = o; external(ta[0]); console.log(g(o));"
 );
 // (e) a key that may be anything: named and element reads both see it
 // (the control stays conservative: the store is not split by key kind).
 case!(
     typed_array_any_key_is_read_by_name,
     true,
-    "const ta: any = new Float32Array(6); const key: any = (globalThis as any).hostKey(); const o: any = new Svc(); ta[key] = o; (globalThis as any).hostTake(ta.foo); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const key: any = external(); const o: any = new Svc(); ta[key] = o; external(ta.foo); console.log(g(o));"
 );
 case!(
     typed_array_any_key_is_read_by_index,
     true,
-    "const ta: any = new Float32Array(6); const key: any = (globalThis as any).hostKey(); const o: any = new Svc(); ta[key] = o; (globalThis as any).hostTake(ta[0]); console.log(g(o));"
+    "const ta: any = new Float32Array(6); const key: any = external(); const o: any = new Svc(); ta[key] = o; external(ta[0]); console.log(g(o));"
 );

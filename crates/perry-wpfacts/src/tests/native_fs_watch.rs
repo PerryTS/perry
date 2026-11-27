@@ -170,7 +170,10 @@ fn write_sync_options_getter_still_runs() {
 }
 
 /// Named control: the listener runs (the declared call): what it stores
-/// into a global that unknown code reads escapes.
+/// into a global that unknown code reads escapes. Owner 11-24 decision 2:
+/// unknown code that holds the global object reads only the global names
+/// the realm declares, so the control stores under one the runtime reads
+/// (`onerror`; was `leak`, which no realm name reads).
 #[test]
 fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
     let pf = facts(
@@ -180,7 +183,7 @@ fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
         declare function hostSink(x: any): void;
         function sys(path: string) {
             const _fs: typeof import("fs") = require("fs");
-            _fs.watch(path, { persistent: false } as any, (ev: any) => { (globalThis as any).leak = p; });
+            _fs.watch(path, { persistent: false } as any, (ev: any) => { (globalThis as any).onerror = p; });
             hostSink(globalThis);
         }
         sys(process.argv[1]);
@@ -191,13 +194,14 @@ fn a_listener_storing_into_a_global_unknown_code_reads_escapes_it() {
 }
 
 /// RED (R-GLOBAL, owner 2026-11-18): the global object given to unknown code
-/// gives it what the program stored on that object, nothing else: a module
+/// gives it what the program stored on that object under a name the realm
+/// declares (owner 11-24 decision 2: `onerror`), nothing else: a module
 /// binding never stored there, and a global stored while the global object
 /// stays the program's, keep their facts.
 #[test]
 fn a_value_not_on_the_handed_global_object_stays_proven() {
     for (store, hand) in [
-        ("(globalThis as any).leak = p;", "hostSink(globalThis);"),
+        ("(globalThis as any).onerror = p;", "hostSink(globalThis);"),
         (
             "(globalThis as any).leak = p; (globalThis as any).keep = q;",
             "hostSink(p);",
@@ -226,6 +230,68 @@ fn a_value_not_on_the_handed_global_object_stays_proven() {
             pf.dump_text()
         );
     }
+}
+
+/// RED (STOP10, owner 2026-11-16: only an all-primitive extern reaches no
+/// program object): a body-less `declare function` handed a value is
+/// foreign code, not the runtime. Once it holds ⊤ and the global object is
+/// in ⊤ it reads every global, so owner 11-24 decision 2 (unknown code reads
+/// only the realm-declared names) does not apply: a value the program
+/// stored under `leak` escapes, in each order, through the extern's value,
+/// and when the extern is handed another object while the global object
+/// reaches ⊤ through unknown code.
+#[test]
+fn a_global_object_foreign_code_may_hold_reads_every_name() {
+    let mut bad = Vec::new();
+    for (pre, post) in [
+        ("(globalThis as any).leak = p;", "hostSink(globalThis);"),
+        ("hostSink(globalThis);", "(globalThis as any).leak = p;"),
+        (
+            "(globalThis as any).leak = p;",
+            "const h: any = hostSink; h(globalThis);",
+        ),
+        (
+            "(globalThis as any).leak = p; hostSink({ k: 1 });",
+            "const f: any = (globalThis as any)[process.argv[2]]; f(globalThis);",
+        ),
+    ] {
+        let pf = facts(&format!(
+            r#"
+        class P {{ x: any; constructor(x: number) {{ this.x = x; }} }}
+        const p = new P(1);
+        declare function hostSink(x: any): void;
+        {pre}
+        {post}
+        console.log(p.x);
+    "#
+        ));
+        if field(tmpl(&pf, "P"), "x").readonly {
+            bad.push(format!(
+                "{pre} {post}: p.x proven although foreign code may read leak"
+            ));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP (owner 11-24 decision 2): a declared extern handed only a primitive
+/// holds nothing; the global object handed to unknown code (the runtime)
+/// is read under the realm-declared names only, so `leak` stays proven.
+#[test]
+fn a_declared_extern_handed_a_primitive_holds_no_global() {
+    let pf = facts(
+        r#"
+        class P { x: any; constructor(x: number) { this.x = x; } }
+        const p = new P(1);
+        declare function hostSink(x: any): void;
+        (globalThis as any).leak = p;
+        hostSink(1);
+        const f: any = (globalThis as any)[process.argv[2]];
+        f(globalThis);
+        console.log(p.x);
+    "#,
+    );
+    assert!(field(tmpl(&pf, "P"), "x").readonly, "{}", pf.dump_text());
 }
 
 /// Named control: `watch` called through an alias of fs that is ⊤ (what an

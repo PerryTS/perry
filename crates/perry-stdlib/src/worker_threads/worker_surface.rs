@@ -330,13 +330,20 @@ pub(super) fn install_web_worker_globals() {
     if global().is_null() {
         return;
     }
+    // The members this installs on the Worker's global object, for the
+    // compiler's model of a module a Worker runs (perry-wpfacts gen_expr):
+    // `self` is the global itself, the handlers start null.
+    // Each native's `length` is its Web IDL one (WebIDL 3.7.6: the shortest
+    // overload's required arguments): postMessage(message, …) 1,
+    // addEventListener(type, callback, …) 2, removeEventListener 2, close 0.
+    perry_runtime::realm_decl! { "%WorkerGlobal%", kind = birth_site; "%WorkerGlobal%.self", attrs = 7, alias = "%Global%"; "%WorkerGlobal%.onmessage", value = null, attrs = 7; "%WorkerGlobal%.onmessageerror", value = null, attrs = 7; "%WorkerGlobal%.onerror", value = null, attrs = 7; }
     set_object_field(global(), "self", global_h.get_nanbox_f64());
     let post_message_h = scope.root_nanbox_f64(closure_value(
-        perry_runtime::fn_info!(web_worker_post_message, 2; with_declared(2)),
+        perry_runtime::fn_info!(#[realm("%WorkerGlobal%.postMessage", provider = closure_alloc)] export crate::worker_threads::worker_surface::web_worker_post_message, 2; with_declared(2), with_length(1)),
     ));
     set_object_field(global(), "postMessage", post_message_h.get_nanbox_f64());
     let add_event_listener_h = scope.root_nanbox_f64(closure_value(
-        perry_runtime::fn_info!(web_worker_add_event_listener, 3; with_declared(3)),
+        perry_runtime::fn_info!(#[realm("%WorkerGlobal%.addEventListener", provider = closure_alloc)] export crate::worker_threads::worker_surface::web_worker_add_event_listener, 3; with_declared(3), with_length(2)),
     ));
     set_object_field(
         global(),
@@ -344,7 +351,7 @@ pub(super) fn install_web_worker_globals() {
         add_event_listener_h.get_nanbox_f64(),
     );
     let remove_event_listener_h = scope.root_nanbox_f64(closure_value(
-        perry_runtime::fn_info!(web_worker_remove_event_listener, 2; with_declared(2)),
+        perry_runtime::fn_info!(#[realm("%WorkerGlobal%.removeEventListener", provider = closure_alloc)] export crate::worker_threads::worker_surface::web_worker_remove_event_listener, 2; with_declared(2), with_length(2)),
     ));
     set_object_field(
         global(),
@@ -352,7 +359,7 @@ pub(super) fn install_web_worker_globals() {
         remove_event_listener_h.get_nanbox_f64(),
     );
     let close_h = scope.root_nanbox_f64(closure_value(
-        perry_runtime::fn_info!(web_worker_close, 0; with_declared(0)),
+        perry_runtime::fn_info!(#[realm("%WorkerGlobal%.close", provider = closure_alloc)] export crate::worker_threads::worker_surface::web_worker_close, 0; with_declared(0), with_length(0)),
     ));
     set_object_field(global(), "close", close_h.get_nanbox_f64());
     set_object_field(global(), "onmessage", js_null());
@@ -360,9 +367,13 @@ pub(super) fn install_web_worker_globals() {
     set_object_field(global(), "onerror", js_null());
 }
 
+/// The worker global's `on<type>` handler: the runtime's by-name global read
+/// (realm table `RUNTIME_GLOBAL_READS`).
 pub(super) fn web_worker_global_handler(name: &str) -> Option<u64> {
-    let global_value = perry_runtime::object::js_get_global_this();
-    object_event_handler(global_value.to_bits(), name)
+    callback_bits_from_value(perry_runtime::object::js_get_global_this_builtin_value(
+        name.as_ptr(),
+        name.len(),
+    ))
 }
 
 extern "C" fn web_worker_post_message(

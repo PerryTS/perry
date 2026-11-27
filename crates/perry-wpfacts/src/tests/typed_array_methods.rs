@@ -3,8 +3,8 @@ use super::*;
 fn check(body: &str, yes: bool) {
     let src = format!(
         r#"
-        (globalThis as any).hostTake = (_x: any) => {{}};
-        class Svc {{ marker = 3; length = 1; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ marker = 3; length = 1; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.marker; }}
         const o: any = new Svc(); const a: any = new Uint8Array([1, 2]);
         {body}

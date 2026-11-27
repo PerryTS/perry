@@ -1,0 +1,1 @@
+A program store onto the global object under a named key (`g["globalThis"] = globalThis`) no longer makes a computed read of the global object (`globalThis["on" + type]`) answer an unknown value: the read takes the stored key's global field, as a named read does, so the call of what it read and the sites behind it stay proven.

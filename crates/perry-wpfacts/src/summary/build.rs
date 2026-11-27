@@ -231,6 +231,17 @@ struct Birth {
 /// Literals each function births whose template token only its own body
 /// holds, with fields only generation's direct writes fill: per instance.
 fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
+    // A named-key lookup on a token makes that token's holder sets (the
+    // pass and stop nodes of `Model::holders`, keyed by (token, key)):
+    // its own lookup cache, which every born token makes for itself on
+    // its own first lookup of the key (an instance's copy of the load
+    // walks from its own token). They hold the token without being a
+    // holder of it.
+    let mut lookup_own: FxHashMap<NodeId, Tok> = FxHashMap::default();
+    for (&(t, _), &(p, s)) in &m.holder_nodes {
+        lookup_own.insert(p, t);
+        lookup_own.insert(s, t);
+    }
     let mut holders: FxHashMap<Tok, Vec<NodeId>> = FxHashMap::default();
     for (n, node) in m.nodes.iter().enumerate() {
         if node.pts.is_empty() {
@@ -238,7 +249,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         }
         for t in node.pts.to_sorted() {
             if let TokKind::Obj(tm, NO_CTX) = m.toks[t as usize] {
-                if m.tmpl_fn.contains_key(&tm) {
+                if m.tmpl_fn.contains_key(&tm) && lookup_own.get(&(n as NodeId)) != Some(&t) {
                     holders.entry(t).or_default().push(n as NodeId);
                 }
             }
@@ -266,6 +277,11 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             if let Some(&n) = map.get(t) {
                 own_of.insert(n, *t);
             }
+        }
+    }
+    for (&n, &t) in &lookup_own {
+        if holders.contains_key(&t) {
+            own_of.insert(n, t);
         }
     }
     let mut preds: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
@@ -309,13 +325,19 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         // makes for itself on its first lookup (`Model::cp`): no effect of
         // the body.
         let pn = m.proto_node.get(&t).copied();
+        // The holder sets' steps along the chain and the visits of what
+        // they find (`Model::holder_walk`) are that lookup cache's too.
+        let mine = |x: &NodeId| lookup_own.get(x) == Some(&t);
         let cache = |n: NodeId, c: &Cons| {
-            Some(n) == pn
+            (Some(n) == pn
                 && match c {
-                    Cons::ProtoClosure { .. } | Cons::Raise { .. } => true,
+                    Cons::ProtoClosure { .. } | Cons::Raise { .. } | Cons::HandRaise { .. } => true,
                     Cons::ChainUnion { of, .. } => *of == t,
+                    Cons::HolderStep { pass, stop, .. } => mine(pass) && mine(stop),
                     _ => false,
-                }
+                })
+                || (mine(&n)
+                    && matches!(c, Cons::VisitHolders { origin, .. } | Cons::VisitStop { origin, .. } if *origin == t))
         };
         // A method the body calls on the literal (`params.shift()`): its
         // field node binds `this` to the literal and runs per (call,
@@ -339,9 +361,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             let cs = &m.nodes[n as usize].cons;
             let binds = rest
                 && cs.iter().any(|c| bound(n, c))
-                && cs
-                    .iter()
-                    .all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+                && cs.iter().all(|c| {
+                    bound(n, c) || matches!(c, Cons::Raise { .. } | Cons::HandRaise { .. })
+                });
             binds || cs.iter().all(|c| cache(n, c))
         };
         let mut ok = own.iter().all(|&n| own_cons(n));
@@ -1196,7 +1218,7 @@ fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
                         proto: crate::model::Protocol::ToPrimitive,
                         ..
                     } => {}
-                    Cons::Raise { .. } => {}
+                    Cons::Raise { .. } | Cons::HandRaise { .. } => {}
                     // The key as a receiver (`key.slice(i)`, `key.length`;
                     // three.js `isBlobURL(key)` composed into Cache.get/add):
                     // the read binds `this` to the same value and changes
@@ -1267,7 +1289,7 @@ fn called_param(s: &Summary) -> Option<u32> {
                 // The call of it, and where what it throws goes.
                 match c {
                     Cons::Call { .. } => called = true,
-                    Cons::Raise { .. } => {}
+                    Cons::Raise { .. } | Cons::HandRaise { .. } => {}
                     _ => return false,
                 }
             } else if super::map::cons_fields(c).0.contains(&p) {
@@ -1418,7 +1440,11 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
             }
             for &h in &roots {
                 for &src in &srcs {
-                    s.cons.push((enc(h), BodyCons::birth_field(*k, src)));
+                    s.cons.push((enc(h), BodyCons::birth_field(*k, src, b.tm)));
+                    // A birth's field stands at the literal holding it.
+                    if let Some(st) = m.stop_top.as_ref() {
+                        s.cons_pos.push(st.pos_of(h));
+                    }
                 }
             }
         }
@@ -1493,6 +1519,10 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     for &(h, i) in &e.cons {
         let c = &m.nodes[h as usize].cons[i as usize];
         s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
+        if let Some(st) = m.stop_top.as_ref() {
+            let p = st.cons_pos.get(&(h, i)).copied();
+            s.cons_pos.push(p.unwrap_or(crate::topstop::NOPOS));
+        }
         if sw {
             s.cons_reach
                 .push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));

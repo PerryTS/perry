@@ -104,7 +104,7 @@ fn a_reading_has_instance_hook_keeps_the_call_proven() {
 /// left-hand side escapes.
 #[test]
 fn an_unknown_right_hand_side_escapes_the_left_hand_side() {
-    let pf = facts(&REPLACES_F.replace("RHS", "(globalThis as any)[process.argv[2]]"));
+    let pf = facts(&REPLACES_F.replace("RHS", "new Function(process.argv[2])()"));
     assert!(
         matches!(probe_call(&pf), Verdict::No(_)),
         "{}",

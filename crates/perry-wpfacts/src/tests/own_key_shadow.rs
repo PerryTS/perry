@@ -17,9 +17,10 @@ use super::*;
 fn size_verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        const name: string = process.argv[3];
-        const h: any = (globalThis as any)[process.argv[2]]();
-        h[name] = (globalThis as any)[process.argv[2]]();
+        declare function external(x?: unknown): any;
+        declare const name: string;
+        const h: any = external();
+        h[name] = 1;
         class Svc {{ size = 3; }}
         {body}
         "#
@@ -107,8 +108,8 @@ fn a_computed_delete_through_top_keeps_the_key_of_an_object_that_never_escaped()
 #[test]
 fn a_computed_delete_through_top_revokes_the_key_of_an_escaped_object() {
     let v = size_verdict(&format!(
-        "{P} const p = new P(new Svc()); (globalThis as any)[process.argv[2]](p); \
-         delete (globalThis as any)[process.argv[2]]()[name]; console.log(p.total());"
+        "{P} const p = new P(new Svc()); external(p); \
+         delete external()[name]; console.log(p.total());"
     ));
     assert!(!proven(&v), "{v:?}");
 }
@@ -127,7 +128,7 @@ fn a_define_property_through_top_revokes_the_key() {
 fn a_define_property_on_the_receiver_revokes_the_key() {
     let v = size_verdict(&format!(
         "{P} const p: any = new P(new Svc()); \
-         Object.defineProperty(p, \"svc\", {{ get() {{ return (globalThis as any)[process.argv[2]](); }} }}); console.log(p.total());"
+         Object.defineProperty(p, \"svc\", {{ get() {{ return external(); }} }}); console.log(p.total());"
     ));
     // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there; the getter's unknown value is what revokes the proof.
     assert!(!proven(&v), "{v:?}");
@@ -136,7 +137,7 @@ fn a_define_property_on_the_receiver_revokes_the_key() {
 #[test]
 fn an_escaped_receiver_reads_the_prototype() {
     let v = size_verdict(&format!(
-        "{P} const p = new P(new Svc()); (globalThis as any)[process.argv[2]](p); console.log(p.total());"
+        "{P} const p = new P(new Svc()); external(p); console.log(p.total());"
     ));
     assert!(!proven(&v), "{v:?}");
 }
