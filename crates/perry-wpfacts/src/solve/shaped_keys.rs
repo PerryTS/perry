@@ -102,6 +102,49 @@ impl Model {
         }
     }
 
+    /// Premise P-PROTOKEY (owner 11-28, the shape of DECISIONS 217): a
+    /// computed read `C[k]` of class constructor `C` whose key is an unknown
+    /// String (shape 0) never reads `C`'s own `prototype`. That property is
+    /// non-enumerable, non-writable and non-configurable from birth
+    /// (ECMA-262 15.7.14 step 16, MakeConstructor 10.2.5 with
+    /// writablePrototype false), so no enumeration-derived key (for-in,
+    /// `Object.keys` / `entries`) names it and no store replaces it. It is
+    /// still read by the named forms (`C.prototype`, `C["prototype"]`, a key
+    /// holding the String constant "prototype": `Key::Named`) and by a key
+    /// of reflective enumeration (`Object.getOwnPropertyNames`,
+    /// `Reflect.ownKeys`, the keys of `Object.getOwnPropertyDescriptors`),
+    /// which lists non-enumerable keys: such a key holds the any-String
+    /// entry (`reflective_key_strs`) and reads under its shape, which admits
+    /// `prototype`. The node: every other own field, a field made later
+    /// too (`field_r`), and what stores under a computed key wrote.
+    pub(crate) fn class_any_read(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.class_any_reads.get(&t) {
+            return n;
+        }
+        let n = self.node_named("classanyread", || format!("classanyread({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.class_any_reads.insert(t, n);
+        let any = self.field_any(t);
+        self.edge(any, n);
+        let num = self.numeric_field(t);
+        self.edge(num, n);
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if self.atoms[a as usize] == "prototype" {
+                continue;
+            }
+            if let Some(&f) = self.fields.get(&(t, a)) {
+                self.edge(f, n);
+            }
+        }
+        if let Some(j) = self.joined_of(t) {
+            for (_, v) in j.keys {
+                self.edge(v, n);
+            }
+        }
+        n
+    }
+
     /// The own-field values a computed-key read of `t` sees.
     pub fn key_fields(&mut self, t: Tok, key: Key) -> NodeId {
         let split = self
@@ -110,6 +153,9 @@ impl Model {
         let Some(s) = split else {
             return match key {
                 Key::Named(a) => self.field_r(t, a),
+                Key::Any(0) if matches!(self.toks[t as usize], TokKind::ClassObj(_)) => {
+                    self.class_any_read(t)
+                }
                 Key::Any(_) => self.all_fields(t),
             };
         };

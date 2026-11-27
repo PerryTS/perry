@@ -2312,6 +2312,18 @@ impl Model {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
                             self.load_from(origin, obj, Key::Any(shape), dst);
                         }
+                        // P-PROTOKEY: a reflective own key beside other
+                        // values (a Symbol of `Reflect.ownKeys`) reads
+                        // under its shape too: a class's `prototype`.
+                        if named
+                            && self.key_may_be_reflective(n)
+                            && self
+                                .idx_done
+                                .insert((n, obj, dst, crate::model::IDX_REFL_KEY))
+                        {
+                            let s = self.any_string_shape();
+                            self.load_from(origin, obj, Key::Any(s), dst);
+                        }
                     }
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
@@ -2490,7 +2502,7 @@ impl Model {
                 // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
                 // ForIn/OfHeadEvaluation step 6.a).
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.for_in_every_key(call, ft);
+                    self.for_in_every_key(call, ft, list == crate::model::KeyList::OwnNames);
                 }
                 for &t in toks {
                     self.for_in_tok(call, ft, t, list);
@@ -2582,12 +2594,12 @@ impl Model {
                 // for-in run over the keys `for_in_keys` lists,
                 // `for_in_named_run`) is one of them: a named store per
                 // constant, made as constants arrive. A key that turns any
-                // String later takes the rule below.
-                let (kp, ks) = (self.nodes[n as usize].prim, self.nodes[n as usize].strs);
-                if !self.key_nodes.contains_key(&n)
-                    && kp == prim::STR
-                    && ks >= crate::model::STRS_SET0
-                {
+                // String later takes the rule below, and so does one holding
+                // a solver spelling (`const_str_key`): the any-String entry
+                // of a reflective key (`reflective_key_strs`) names every
+                // key, not the one its spelling is.
+                let ks = self.nodes[n as usize].strs;
+                if !self.key_nodes.contains_key(&n) && self.const_str_key(n) {
                     for i in 0..self.str_atoms(ks).len() {
                         let a = self.str_atoms(ks)[i];
                         if self.keyed_named.insert((n, src, a)) {

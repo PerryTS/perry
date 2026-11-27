@@ -4706,7 +4706,10 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             let pb = site_tmpl(m, call, "arraybox");
             let fa = m.field_any(pb);
-            m.add_prim(fa, prim::STR | prim::SYMBOL);
+            // P-PROTOKEY: its Strings are reflective keys.
+            m.add_prim(fa, prim::SYMBOL);
+            let set = m.reflective_key_strs();
+            m.add_s(fa, &[], prim::STR, set);
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Reflect, "has") => {

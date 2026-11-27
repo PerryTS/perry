@@ -2302,7 +2302,9 @@ impl Model {
             // return, so the body runs once with every String key
             // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
             // arm), the enumeration itself `proxy_own_keys`.
-            Cons::ForInKeys { ft, call, .. } => self.for_in_every_key(call, ft),
+            Cons::ForInKeys { ft, call, list } => {
+                self.for_in_every_key(call, ft, list == crate::model::KeyList::OwnNames)
+            }
             // Rule PXENUM: for-in over an object whose chain holds the Proxy
             // (14.7.5.9 EnumerateObjectProperties): the walk reaching it
             // runs its [[OwnPropertyKeys]], [[GetOwnProperty]] and
