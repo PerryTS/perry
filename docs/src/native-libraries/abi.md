@@ -77,7 +77,7 @@ source of truth for exact signatures and safety requirements.
 | Buffers and BigInts | `alloc_buffer`, `read_buffer_bytes`, `alloc_bigint_from_str`, `read_bigint_limbs` |
 | Async work | `JsPromise`, `JsNativeAsyncCompletion`, `spawn_blocking`, `run_pending`, `pool::{submit, run, cancel, turn}`, `agent_post`, `turnloop_net` |
 | Native state and GC | The typed handle registry, mutable root scanners, and `TransientRootScope` |
-| Errors and integration | Error/warning helpers, `json_stringify`, auxiliary event-pump hooks, and `RawNetVtable` registration |
+| Errors and integration | Error/warning helpers (`throw_with_code`, `throw_program_value`), `json_stringify`, auxiliary event-pump hooks, and `RawNetVtable` registration |
 
 ### Strings
 
