@@ -390,7 +390,8 @@ impl Model {
         let mut callee_dn = None;
         if callee_first
             && (reason.starts_with("receiver of a call of an unknown function value")
-                || reason.starts_with("passed to a call of an unknown function value"))
+                || reason.starts_with("passed to a call of an unknown function value")
+                || reason.starts_with("passed to foreign code (a declared extern) [call "))
         {
             for c in self.reason_calls(e.reason) {
                 match d.unknown_calls.get(&c) {
