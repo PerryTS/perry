@@ -1197,9 +1197,9 @@ pub(super) fn loop_deadline() -> Option<Instant> {
 }
 
 /// DESIGN §9 `fast()`: a nonblocking turn, only when turnloop has outstanding
-/// work: referenced work, or a due deadline. Every deadline Perry arms is
-/// unref'd, so a due one on a loop that is not `alive()` is still owed the turn
-/// that delivers it; without it the park reads the same past deadline forever.
+/// work: referenced work, or a due deadline. An unref'd deadline does not make
+/// the loop `alive()`, yet a due one is still owed the turn that delivers it;
+/// without it the park reads the same past deadline forever.
 /// Staged completions are dispatched either way: a close-phase turn can stage
 /// the last ones of a loop that is no longer alive.
 #[inline]

@@ -332,7 +332,7 @@ pub extern "C" fn js_event_loop_poll_wait() {
 
 /// The zero-timeout poll phase (an immediate is queued, or nothing is live):
 /// one nonblocking turn of this thread's loop plus dispatch. No loop is
-/// created, an idle loop is not turned (`fast_turn`'s `alive()` gate), and it
+/// created, an idle loop with no due deadline is not turned (`fast_turn`), and it
 /// is not the #1114 spin: the caller runs the check phase next.
 #[no_mangle]
 pub extern "C" fn js_event_loop_poll_nowait() {
