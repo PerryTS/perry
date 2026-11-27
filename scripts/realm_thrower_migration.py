@@ -7,7 +7,7 @@ from pathlib import Path
 import realm_site_migration as s
 
 FILE = 'crates/perry-runtime/src/object/arguments.rs'
-NAME = 'Function.prototype.arguments.<get>'
+NAME = '%ThrowTypeError%'
 OLD = 'crate::fn_info!(arguments_throw_type_error, 0; with_declared(0))'
 ATTR = '#[realm("' + NAME + '", integrity = frozen, spec = {name = ""}, emit = metadata(realm_thrower_public))]'
 NAME_LITERAL = 'super::native_module::set_bound_native_closure_name(closure, "");'

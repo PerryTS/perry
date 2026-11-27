@@ -303,27 +303,71 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
 }
 
 /// `Function.prototype.caller` and `.arguments` (ECMA-262 §10.2.4
-/// AddRestrictedFunctionProperties): each an accessor whose getter and setter
-/// are `%ThrowTypeError%`, in the slots the static layout lists.
+/// AddRestrictedFunctionProperties), in the slots the static layout lists.
+/// Each half is its own function (`get caller`, `set caller`, ...) as in V8,
+/// none of them `%ThrowTypeError%`; every one throws the restricted TypeError.
 fn install_function_restricted_accessors(proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
-    let thrower = super::super::arguments::thrower_closure_value().to_bits();
-    for key in [&b"arguments"[..], b"caller"] {
+    let pairs = [
+        (
+            &b"arguments"[..],
+            crate::fn_info!(#[realm("Function.prototype.arguments.<get>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get arguments"), with_declared(0)),
+            crate::fn_info!(#[realm("Function.prototype.arguments.<set>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set arguments"), with_declared(1)),
+        ),
+        (
+            &b"caller"[..],
+            crate::fn_info!(#[realm("Function.prototype.caller.<get>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get caller"), with_declared(0)),
+            crate::fn_info!(#[realm("Function.prototype.caller.<set>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set caller"), with_declared(1)),
+        ),
+    ];
+    for (key, get_info, set_info) in pairs {
+        let name = std::str::from_utf8(key).unwrap_or_default();
+        let half = |info, prefix: &str, length: u32| {
+            let closure = crate::closure::js_closure_alloc(info, 0);
+            if closure.is_null() {
+                return None;
+            }
+            let label = format!("{prefix} {name}");
+            super::super::native_module::set_bound_native_closure_name(closure, &label);
+            super::super::native_module::set_builtin_closure_length(closure as usize, length);
+            super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+            Some(crate::value::js_nanbox_pointer(closure as i64).to_bits())
+        };
+        let (Some(get), Some(set)) = (half(get_info, "get", 0), half(set_info, "set", 1)) else {
+            return;
+        };
         // SAFETY: the fresh intrinsic, under the bootstrap's no-move scope.
         unsafe {
             crate::object::accessor_pair::store_own_accessor_bytes(
                 proto_obj as usize,
                 key,
                 Some(crate::object::accessor_pair::Accessor {
-                    get: thrower,
-                    set: thrower,
+                    get,
+                    set,
                     ..Default::default()
                 }),
             );
         }
     }
+}
+
+const RESTRICTED_ACCESS: &[u8] = b"'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them";
+
+extern "C" fn function_restricted_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    crate::object::throw_object_type_error(RESTRICTED_ACCESS);
+}
+
+extern "C" fn function_restricted_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
+    crate::object::throw_object_type_error(RESTRICTED_ACCESS);
 }
 
 extern "C" fn object_prototype_dunder_proto_getter_thunk(

@@ -988,7 +988,7 @@ fn birth_family(
             crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
                 crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
                 0,
-            ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; constructor; apply; bind; call; toString; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
+            ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; constructor; apply; bind; call; toString; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<set>"); caller = accessor(get = "Function.prototype.caller.<get>", set = "Function.prototype.caller.<set>"); [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
         }
     } else if name == "Iterator" {
         crate::object::iterator_ctor::iterator_prototype_object()
