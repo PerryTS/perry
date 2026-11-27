@@ -117,6 +117,8 @@ unsafe fn to_numeric(value: f64) -> f64 {
     if crate::symbol::js_is_symbol(value) != 0 {
         return crate::builtins::js_number_coerce(value);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
     match crate::value::to_string_primitive::to_primitive_number(value) {
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::Primitive(p) => {
             // A BigInt primitive stays a BigInt (that's the whole point of
@@ -128,15 +130,10 @@ unsafe fn to_numeric(value: f64) -> f64 {
             }
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
-            if jsval.is_handle() {
-                // The handle already completed ToPrimitive above. Convert its
-                // default string directly so user getters aren't consulted a
-                // second time by js_number_coerce's handle arm.
-                let string = crate::value::js_jsvalue_to_string(value);
-                crate::builtins::js_number_coerce(crate::value::js_nanbox_string(string as i64))
-            } else {
-                crate::builtins::js_number_coerce(value)
-            }
+            // ToPrimitive already ran; convert the default string directly so
+            // no user method is consulted a second time.
+            let string = crate::value::js_jsvalue_to_string(value_handle.get_nanbox_f64());
+            crate::builtins::js_number_coerce(crate::value::js_nanbox_string(string as i64))
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
             throw_add_type_error(b"Cannot convert object to primitive value")
@@ -469,20 +466,13 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     a + b
 }
 
-/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
-/// unchanged, every other value is coerced via `ToNumber`. The codegen's
-/// update path uses this for the *operand read* so that the postfix return
-/// value and the stepping base keep their BigInt type instead of collapsing
-/// to a Number (`let i = 10n; i++` must stay a BigInt — otherwise a later
-/// `i + 87n` throws a mixed-type TypeError; test262
-/// BigInt/prototype/toString/a-z).
+/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt, or a BigInt that
+/// ToPrimitive returns for an object, passes through; every other value takes
+/// ToNumber. The postfix return value and the stepping base therefore keep
+/// their BigInt type (`let i = 10n; i++` stays a BigInt).
 #[no_mangle]
 pub unsafe extern "C" fn js_to_numeric(value: f64) -> f64 {
-    if JSValue::from_bits(value.to_bits()).is_bigint() {
-        value
-    } else {
-        crate::builtins::js_number_coerce(value)
-    }
+    to_numeric(value)
 }
 
 /// Step a ToNumeric operand by `1` of its own numeric type for `++`/`--`.

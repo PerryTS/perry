@@ -15,7 +15,7 @@ use crate::object::ObjectHeader;
 /// of `obj` (on `obj` or on its chain), with `obj` as `this`. `None` for a
 /// static class accessor, which the complete read calls.
 #[inline]
-pub(super) unsafe fn call_getter(
+pub(crate) unsafe fn call_getter(
     obj: *const ObjectHeader,
     acc: crate::object::accessor_pair::Accessor,
 ) -> Option<f64> {

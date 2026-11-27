@@ -127,17 +127,7 @@ pub unsafe extern "C" fn js_response_static_json(
         super::response_ctor::response_init(init_status, init_status_text_ptr, true);
     // Start from any user-provided headers, then add the default content-type
     // only if the init headers didn't already set one.
-    let headers_id = handle_id(headers_handle);
-    let mut headers = if headers_id != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id)
-            .map(|record| record.store.clone())
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
+    let mut headers = headers::headers_store_of(headers_handle).unwrap_or_default();
     if !headers.has("content-type") {
         headers.set("content-type", "application/json");
     }

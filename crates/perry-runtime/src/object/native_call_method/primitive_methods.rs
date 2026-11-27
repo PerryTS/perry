@@ -756,9 +756,9 @@ pub(super) unsafe fn dispatch_primitive(
         }
     }
 
-    // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the
-    // ObjectHeader path below would dereference garbage. Detect symbols
-    // up front via the side-table.
+    // A symbol is answered here: the object probes below would read it as an
+    // ordinary object. Any other name is a `Symbol.prototype` lookup, as for
+    // the other primitives at the end of the dispatcher.
     if jsval.is_pointer() {
         let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         if crate::symbol::is_registered_symbol(raw_ptr) {
@@ -772,7 +772,24 @@ pub(super) unsafe fn dispatch_primitive(
                 "description" => {
                     f64::from_bits(crate::symbol::js_symbol_description(sym_f64).to_bits())
                 }
-                _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+                _ => {
+                    let args = refreshed_args();
+                    match super::call_primitive_builtin_prototype_method(
+                        sym_f64,
+                        b"Symbol",
+                        method_name,
+                        args.as_ptr(),
+                        args.len(),
+                    ) {
+                        Some(result) => result,
+                        None => crate::error::js_throw_type_error_not_a_function(
+                            b"symbol".as_ptr(),
+                            b"symbol".len(),
+                            method_name.as_ptr(),
+                            method_name.len(),
+                        ),
+                    }
+                }
             });
         }
     }

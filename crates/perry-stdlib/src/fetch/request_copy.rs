@@ -40,7 +40,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             keepalive: false,
             duplex: "half".to_string(),
             signal: f64::from_bits(TAG_UNDEFINED),
-            cached_headers_id: None,
+            cached_headers: 0,
             body_error: None,
             read_body_stream_id: None,
         }
@@ -53,7 +53,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     );
     let mut body_error = request.body_error.is_some();
     request.headers = request_headers_snapshot(&request);
-    request.cached_headers_id = None;
+    request.cached_headers = 0;
     request.read_body_stream_id = None;
     request.body_used = false;
 
@@ -103,15 +103,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     }
     let headers = field(b"headers");
     if headers.to_bits() != TAG_UNDEFINED {
-        let headers_root = scope.root_nanbox_f64(headers);
-        let handle = js_headers_from_value(headers_root.get_nanbox_f64());
-        let _headers_pin = lifecycle::pin_handles(&[handle]);
-        request.headers = HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&handle_id(handle))
-            .map(|h| h.store.clone())
-            .unwrap_or_default();
+        request.headers = headers::headers_store_from_init(headers);
     }
     if let Some(value) = string_field(b"integrity") {
         request.integrity = value;

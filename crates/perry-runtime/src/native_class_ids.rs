@@ -79,6 +79,13 @@ pub(crate) const COMPONENT_DRIVER_PUMP: u32 = 0xFFFF_2436;
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
 /// already bake into emitted code -- moving a live class id is #10824's hazard
 /// for no gain, so the range gets a legacy companion instead of a renumbering.
+/// `Headers` (`instanceof Headers`, `BuiltinInstanceIdentity::Class`): an
+/// ordinary object whose payload slot owns its header list (perry-stdlib
+/// `fetch/headers.rs`). The builtin id that always named the interface;
+/// outside the block, so it is not in `ALL`, and a worker transfer rejects
+/// it through its payload cell (`thread/clone_write.rs`).
+pub const HEADERS: u32 = 0xFFFF_002A;
+
 /// Outside the block, so it is not in `ALL`.
 pub(crate) const ASYNC_RESOURCE_LEGACY: u32 = 0xFFFF_0079;
 pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;

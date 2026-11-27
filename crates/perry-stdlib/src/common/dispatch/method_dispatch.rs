@@ -807,10 +807,6 @@ unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64>
         if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, &args) {
             return Some(v);
         }
-        if let Some(v) = crate::fetch::dispatch_headers_method(handle as usize, method_name, &args)
-        {
-            return Some(v);
-        }
     }
     None
 }

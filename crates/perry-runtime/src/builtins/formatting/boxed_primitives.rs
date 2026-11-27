@@ -285,12 +285,12 @@ pub(crate) fn boxed_primitive_to_string_tag(value: f64) -> Option<&'static str> 
 #[no_mangle]
 pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
     let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_NUMBER, 0);
-    // `new Number()` (no args) is spec'd to box +0, not NaN. js_number_coerce
-    // would map undefined to NaN, so detect the missing-arg sentinel first.
+    // `new Number()` (no args) is spec'd to box +0, not NaN, but `Number(undefined)`
+    // is NaN, so detect the missing-arg sentinel first.
     let payload = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
         0.0
     } else {
-        js_number_coerce(value)
+        crate::builtins::js_number_from_value(value)
     };
     register_boxed_primitive_payload(obj, payload);
     attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_NUMBER);

@@ -13,7 +13,6 @@ pub(crate) fn native_property_bag(id: usize) -> Option<u64> {
         };
     }
     read!(FETCH_RESPONSES);
-    read!(HEADERS_REGISTRY);
     read!(REQUEST_REGISTRY);
     read!(BLOB_REGISTRY);
     read!(body_metadata::FORM_DATA_REGISTRY);
@@ -34,7 +33,6 @@ pub(crate) fn set_native_property_bag(id: usize, bits: u64) -> bool {
         };
     }
     write!(FETCH_RESPONSES);
-    write!(HEADERS_REGISTRY);
     write!(REQUEST_REGISTRY);
     write!(BLOB_REGISTRY);
     write!(body_metadata::FORM_DATA_REGISTRY);

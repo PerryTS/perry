@@ -392,15 +392,12 @@ fn to_uint16(code: f64) -> u16 {
 /// `nextCU = ToUint16(next)`, where `ToUint16` first applies the abstract
 /// `ToNumber`. A bare numeric value short-circuits; everything else is run
 /// through the full `ToNumber` so a boxed `new Boolean(true)` / a `{ valueOf }`
-/// object coerce (→ 1 / their numeric value) instead of mapping to `0`. A
-/// `BigInt` throws `TypeError` (abstract `ToNumber(BigInt)`, unlike the lenient
-/// `Number(bigint)`); a `Symbol` throws via `js_number_coerce`.
+/// object coerce (→ 1 / their numeric value) instead of mapping to `0`, and a
+/// `BigInt` or `Symbol` throws.
 fn fromcharcode_arg_to_uint16(code: f64) -> u16 {
     let jv = crate::value::JSValue::from_bits(code.to_bits());
     let n = if jv.is_number() {
         code
-    } else if jv.is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     } else {
         crate::builtins::js_number_coerce(code)
     };

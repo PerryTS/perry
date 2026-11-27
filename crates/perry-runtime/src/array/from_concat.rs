@@ -696,7 +696,7 @@ pub(crate) fn array_like_length_f64(items: f64) -> f64 {
         raw as *const crate::object::ObjectHeader,
         key,
     );
-    let n = crate::math::js_math_to_number(length_val);
+    let n = crate::builtins::js_number_coerce(length_val);
     if n.is_nan() || n <= 0.0 {
         return 0.0;
     }

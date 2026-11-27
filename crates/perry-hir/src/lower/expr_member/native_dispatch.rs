@@ -138,7 +138,11 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // surface, so preserve that: dispatch any member not handled by the
         // PropertyGet arms above.
         "dns" | "dns/promises" | "dgram" | "inspector" | "inspector/promises" | "url"
-        | "worker_threads" | "util" | "sys" | "console" | "Headers" => true,
+        | "worker_threads" | "util" | "sys" | "console" => true,
+        // A Headers instance is an ordinary GC object: its members live on
+        // Headers.prototype and it has no native data getters, so a bare
+        // member read (`h.expando`) is an own-property GET.
+        "Headers" => false,
         // Any other module (e.g. a mis-tagged `debug` createDebug value): a bare
         // member read is an own-property GET, never an invoking dispatch.
         _ => false,

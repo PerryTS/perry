@@ -6,8 +6,6 @@
 //! root. Relocation passes still rewrite surviving slots. Each thread scans
 //! only the handles it owns; another mutator's heap must never be visited.
 //!
-//! * `HeadersRecord::method_values` — the bound-method closure behind
-//!   `headers.get` / `headers.entries` / … (one per `(handle, method)`),
 //! * `FormDataStore::method_values` — the same for `FormData`,
 //! * `RequestRecord::signal` — the `AbortSignal` object behind `request.signal`.
 //!
@@ -157,8 +155,14 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     // Each mutator visits only the records it owns (`lifecycle::owns`).
     if let Ok(mut responses) = FETCH_RESPONSES.lock() {
         for (id, record) in responses.iter_mut() {
-            if lifecycle::owns(*id) && record.props != 0 {
+            if !lifecycle::owns(*id) {
+                continue;
+            }
+            if record.props != 0 {
                 visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
+            if record.cached_headers != 0 {
+                visitor.visit_nanbox_u64_slot(&mut record.cached_headers);
             }
         }
     }
@@ -166,16 +170,6 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
         for (id, record) in blobs.iter_mut() {
             if lifecycle::owns(*id) && record.props != 0 {
                 visitor.visit_nanbox_u64_slot(&mut record.props);
-            }
-        }
-    }
-    if let Ok(mut headers) = HEADERS_REGISTRY.lock() {
-        for (_, record) in headers.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
-            if record.props != 0 {
-                visitor.visit_nanbox_u64_slot(&mut record.props);
-            }
-            for bits in record.method_values.values_mut() {
-                visitor.visit_nanbox_u64_slot(bits);
             }
         }
     }
@@ -195,6 +189,9 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
                 visitor.visit_nanbox_u64_slot(&mut request.props);
             }
             visitor.visit_nanbox_f64_slot(&mut request.signal);
+            if request.cached_headers != 0 {
+                visitor.visit_nanbox_u64_slot(&mut request.cached_headers);
+            }
             if let Some(error) = &mut request.body_error {
                 visitor.visit_nanbox_f64_slot(error);
             }

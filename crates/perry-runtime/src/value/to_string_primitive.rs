@@ -506,11 +506,19 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
     // (heap-dependent: sometimes a fake "method" → spurious TypeError, e.g.
     // `"" + new Float64Array([1])`). Its ToPrimitive resolves to
     // %TypedArray%.prototype.toString (= `join(",")`); detect via the
-    // registry (no deref) and join. `Symbol.toPrimitive` was already
-    // consulted by the caller (`js_to_primitive`).
+    // registry (no deref) and join, unless a patched own `valueOf`/`toString`
+    // answers first. `Symbol.toPrimitive` was already consulted by the caller
+    // (`js_to_primitive`).
     if (value.to_bits() & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         let addr = (value.to_bits() & POINTER_MASK) as usize;
         if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            if let Some(p) = crate::typedarray_props::typed_array_own_to_primitive_number(
+                addr,
+                value_handle.get_nanbox_f64(),
+            ) {
+                return OrdinaryToPrimitiveOutcome::Primitive(p);
+            }
+            let addr = (value_handle.get_nanbox_f64().to_bits() & POINTER_MASK) as usize;
             let joined = crate::typedarray_hook_slots::js_typed_array_join(
                 addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 std::ptr::null(),

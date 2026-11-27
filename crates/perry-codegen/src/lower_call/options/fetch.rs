@@ -13,7 +13,7 @@ use super::get_raw_string_ptr;
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::rooting::{any_operand_may_collect, with_rooted_group};
-use crate::types::{DOUBLE, I1, I64};
+use crate::types::{DOUBLE, I64};
 
 /// Dispatch for the Web Fetch API family: Response/Headers/Request
 /// methods and property getters. Called before the generic
@@ -127,133 +127,40 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
     };
 
     // ── Headers method dispatch ──
+    // A Headers is an ordinary GC object: the receiver is lowered TOGETHER
+    // with the arguments and rooted across them, and every operand reaches
+    // the runtime boxed, so the string coercions (user `toString`) run there
+    // with the receiver rooted.
     if module == "Headers" {
-        let h_handle = lower_expr(ctx, recv)?;
-        match method {
-            "set" | "append" => {
-                if args.len() < 2 {
-                    return Ok(Some(double_literal(0.0)));
-                }
-                let (arg_values, arg_group) =
-                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let key_ptr = crate::lower_call::raw_string_ptr_of(ctx, &arg_values[0]);
-                let val_ptr = crate::lower_call::raw_string_ptr_of(ctx, &arg_values[1]);
-                let runtime_fn = if method == "append" {
-                    "js_headers_append"
-                } else {
-                    "js_headers_set"
-                };
-                ctx.block().call(
-                    DOUBLE,
-                    runtime_fn,
-                    &[(DOUBLE, &h_handle), (I64, &key_ptr), (I64, &val_ptr)],
-                );
-                let result = Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                arg_group.release(ctx);
-                return Ok(result);
-            }
-            "get" => {
-                if args.is_empty() {
-                    return Ok(Some(double_literal(0.0)));
-                }
-                let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
-                let str_ptr = ctx.block().call(
-                    I64,
-                    "js_headers_get",
-                    &[(DOUBLE, &h_handle), (I64, &key_ptr)],
-                );
-                // `js_headers_get` returns a NULL string pointer for an absent
-                // header. Per WHATWG `Headers.get` must yield `null` — NaN-boxing
-                // the null pointer as a STRING made `typeof h.get(x) === "string"`
-                // and `h.get(x) !== null`, so `h.get("x-forwarded-host") ??
-                // h.get("host")` never fell through (Auth.js v5's trustHost URL
-                // builder then did `new URL("://")` → "Invalid URL", 500 on every
-                // authenticated page). Mirror `UrlSearchParamsGet`: box null as
-                // TAG_NULL. (Same pattern as searchParams.get.)
-                let blk = ctx.block();
-                let is_null = blk.icmp_eq(I64, &str_ptr, "0");
-                let as_string = nanbox_string_inline(blk, &str_ptr);
-                let str_bits = ctx.block().bitcast_double_to_i64(&as_string);
-                let selected =
-                    ctx.block()
-                        .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &str_bits);
-                return Ok(Some(ctx.block().bitcast_i64_to_double(&selected)));
-            }
-            "getSetCookie" => {
-                let arr =
-                    ctx.block()
-                        .call(DOUBLE, "js_headers_get_set_cookie", &[(DOUBLE, &h_handle)]);
-                return Ok(Some(arr));
-            }
-            "has" => {
-                if args.is_empty() {
-                    return Ok(Some(double_literal(f64::from_bits(
-                        crate::nanbox::TAG_FALSE,
-                    ))));
-                }
-                let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
-                let out = ctx.block().call(
-                    DOUBLE,
-                    "js_headers_has",
-                    &[(DOUBLE, &h_handle), (I64, &key_ptr)],
-                );
-                return Ok(Some(out));
-            }
-            "delete" => {
-                if args.is_empty() {
-                    return Ok(Some(double_literal(f64::from_bits(
-                        crate::nanbox::TAG_UNDEFINED,
-                    ))));
-                }
-                let key_ptr = get_raw_string_ptr(ctx, &args[0])?;
-                ctx.block().call(
-                    DOUBLE,
-                    "js_headers_delete",
-                    &[(DOUBLE, &h_handle), (I64, &key_ptr)],
-                );
-                return Ok(Some(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ))));
-            }
-            "forEach" => {
-                if args.is_empty() {
-                    return Ok(Some(double_literal(0.0)));
-                }
-                let cb = lower_expr(ctx, &args[0])?;
-                ctx.block().call(
-                    DOUBLE,
-                    "js_headers_for_each",
-                    &[(DOUBLE, &h_handle), (DOUBLE, &cb)],
-                );
-                return Ok(Some(double_literal(f64::from_bits(
-                    crate::nanbox::TAG_UNDEFINED,
-                ))));
-            }
-            // `headers.keys()` / `.values()` / `.entries()` return arrays
-            // sorted by header name (WHATWG Fetch spec). The arrays are
-            // themselves iterable via the array Symbol.iterator, so
-            // `for…of`, spread, and `Array.from` all work for free
-            // (refs #576).
-            "keys" => {
-                let arr = ctx
-                    .block()
-                    .call(DOUBLE, "js_headers_keys", &[(DOUBLE, &h_handle)]);
-                return Ok(Some(arr));
-            }
-            "values" => {
-                let arr = ctx
-                    .block()
-                    .call(DOUBLE, "js_headers_values", &[(DOUBLE, &h_handle)]);
-                return Ok(Some(arr));
-            }
-            "entries" => {
-                let arr = ctx
-                    .block()
-                    .call(DOUBLE, "js_headers_entries", &[(DOUBLE, &h_handle)]);
-                return Ok(Some(arr));
-            }
+        let (runtime_fn, arity, returns_undefined) = match method {
+            "set" => ("js_headers_set", 2, true),
+            "append" => ("js_headers_append", 2, true),
+            "get" => ("js_headers_get", 1, false),
+            "has" => ("js_headers_has", 1, false),
+            "delete" => ("js_headers_delete", 1, true),
+            "forEach" => ("js_headers_for_each", 1, true),
+            "getSetCookie" => ("js_headers_get_set_cookie", 0, false),
+            // `keys()` / `values()` / `entries()` return arrays sorted by
+            // header name (WHATWG Fetch); the arrays are themselves
+            // iterable (refs #576).
+            "keys" => ("js_headers_keys", 0, false),
+            "values" => ("js_headers_values", 0, false),
+            "entries" => ("js_headers_entries", 0, false),
             _ => return Ok(None),
+        };
+        let lowered = &args[..args.len().min(arity)];
+        let (h, values, group) = crate::lower_call::lower_operands_rooted(ctx, recv, lowered)?;
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let mut operands = vec![h];
+        operands.extend(values);
+        while operands.len() < arity + 1 {
+            operands.push(undefined.clone());
         }
+        let call_args: Vec<(crate::types::LlvmType, &str)> =
+            operands.iter().map(|v| (DOUBLE, v.as_str())).collect();
+        let out = ctx.block().call(DOUBLE, runtime_fn, &call_args);
+        group.release(ctx);
+        return Ok(Some(if returns_undefined { undefined } else { out }));
     }
 
     // ── Request property getters ──
