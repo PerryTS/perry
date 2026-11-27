@@ -2112,7 +2112,6 @@ js_math_sin	f64	f64
 js_math_sinh	f64	f64
 js_math_tan	f64	f64
 js_math_tanh	f64	f64
-js_math_to_number	f64	f64
 js_math_trunc	f64	f64
 js_message_channel_new	f64	
 js_message_port_constructor_error	f64	

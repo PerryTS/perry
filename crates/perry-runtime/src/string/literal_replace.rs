@@ -286,9 +286,6 @@ pub(crate) fn split(receiver: f64, separator: f64, limit: f64) -> f64 {
         } else {
             limit.get_nanbox_f64()
         };
-        if crate::value::JSValue::from_bits(primitive.to_bits()).is_bigint() {
-            crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
-        }
         let n = crate::builtins::js_number_coerce(primitive);
         if !n.is_finite() || n == 0.0 {
             0

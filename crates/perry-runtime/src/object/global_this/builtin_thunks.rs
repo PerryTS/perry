@@ -95,7 +95,7 @@ pub(crate) extern "C" fn math_random_thunk(
 }
 
 fn math_number_arg(value: f64) -> f64 {
-    crate::math::js_math_to_number(value)
+    crate::builtins::js_number_coerce(value)
 }
 
 fn math_to_int32(value: f64) -> i32 {

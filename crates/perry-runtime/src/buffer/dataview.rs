@@ -126,9 +126,6 @@ fn to_byte_offset(value: f64) -> i64 {
     if let Some(offset) = numeric_byte_offset(value) {
         return offset;
     }
-    if crate::value::JSValue::from_bits(value.to_bits()).is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
-    }
     let n = crate::builtins::js_number_coerce(value);
     let i = if n.is_nan() { 0.0 } else { n.trunc() };
     if !(0.0..=9_007_199_254_740_991.0).contains(&i) {
@@ -149,12 +146,6 @@ fn to_number(value: f64) -> f64 {
     // Includes every IEEE-754 NaN encoding that is not in Perry's tag band.
     if js_value.is_number() {
         return value;
-    }
-    // DataView SetViewValue uses the abstract ToNumber operation, which rejects
-    // BigInt. `js_number_coerce` also serves explicit Number(), where conversion
-    // from BigInt is allowed, so reject it at this call site.
-    if js_value.is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     }
     crate::builtins::js_number_coerce(value)
 }

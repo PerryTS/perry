@@ -510,18 +510,6 @@ pub(crate) fn rtf_parts(
     parts
 }
 
-/// `ToNumber(value)` that rejects BigInt with a TypeError, matching the
-/// ECMA-262 abstract operation. `js_number_coerce` alone converts `1n` → `1`
-/// (for `Number(1n)`), but `Intl` `format`/`select*` go through ToNumber, so
-/// `format(1n, "day")` must throw. A Symbol still throws inside `js_number_coerce`,
-/// and an object's `valueOf` is honoured there.
-pub(crate) fn to_number_reject_bigint(value: f64) -> f64 {
-    if JSValue::from_bits(value.to_bits()).is_bigint() {
-        throw_type_error("Cannot convert a BigInt value to a number");
-    }
-    crate::builtins::js_number_coerce(value)
-}
-
 /// Shared steps of `format`/`formatToParts`: `value = ? ToNumber(value)` (a
 /// Symbol or BigInt throws TypeError; an object's `valueOf` is honoured), then
 /// `unit = ? ToString(unit)`, then the RangeError guards for a non-finite value
@@ -546,7 +534,7 @@ pub(crate) fn rtf_instance_parts_and_unit(
         get_string_field(obj, KEY_RTF_NUMBERING).unwrap_or_else(|| "latn".to_string());
     // ToNumber: a Symbol/BigInt value throws TypeError *before* the finite-ness
     // RangeError (format/value-symbol.js); an object's valueOf is invoked.
-    let number = to_number_reject_bigint(value);
+    let number = crate::builtins::js_number_coerce(value);
     // ToString(unit): a Symbol throws TypeError (before the RangeError enum
     // guard), matching ECMA-262 ToString — format/unit-invalid.js.
     if unsafe { crate::symbol::js_is_symbol(unit_arg) != 0 } {
@@ -698,7 +686,7 @@ fn plural_digit_option(options: f64, key: &str, min: f64, max: f64) -> Option<f6
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         return None;
     }
-    let number = to_number_reject_bigint(value);
+    let number = crate::builtins::js_number_coerce(value);
     let Some(integer) = plural_digit_integer(number, min, max) else {
         throw_range_error(&format!(
             "Value {number} out of range for Intl.PluralRules options property {key}"
@@ -942,7 +930,7 @@ pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
         get_string_field_from_raw_handle(&obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
     let notation = get_string_field_from_raw_handle(&obj, KEY_PR_NOTATION)
         .unwrap_or_else(|| "standard".to_string());
-    let n = to_number_reject_bigint(value.get_nanbox_f64());
+    let n = crate::builtins::js_number_coerce(value.get_nanbox_f64());
     let language = intl_language(&locale);
     string_value(plural_category(&language, is_ordinal, &notation, n))
 }
@@ -1040,8 +1028,8 @@ pub(crate) fn plural_select_range(start: f64, end: f64) -> f64 {
     {
         throw_type_error("Intl.PluralRules.prototype.selectRange: start and end must be defined");
     }
-    let s = to_number_reject_bigint(start);
-    let e = to_number_reject_bigint(end);
+    let s = crate::builtins::js_number_coerce(start);
+    let e = crate::builtins::js_number_coerce(end);
     if s.is_nan() || e.is_nan() {
         throw_range_error("Invalid values for Intl.PluralRules.selectRange()");
     }

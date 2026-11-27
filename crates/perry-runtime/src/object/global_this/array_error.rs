@@ -598,10 +598,6 @@ pub(crate) unsafe fn generic_array_like_to_vec(args_array: f64) -> Vec<f64> {
     // Spec `ToLength` runs `ToIntegerOrInfinity`, which itself runs
     // `ToNumber` — and `ToNumber(BigInt)` is a `TypeError`, not an implicit
     // narrowing conversion (test262 length-property-is-bigint-value).
-    // `js_number_coerce` doesn't special-case BigInt, so reject it here first.
-    if JSValue::from_bits(len_val.to_bits()).is_bigint() {
-        throw_type_error_message(b"Cannot convert a BigInt value to a number");
-    }
     let len_num = crate::builtins::js_number_coerce(len_val);
     let len = if len_num.is_nan() {
         0

@@ -1261,11 +1261,7 @@ pub(crate) unsafe fn arguments_object_length(obj: *const ObjectHeader) -> u32 {
         return 0;
     }
     let value = js_arguments_length_value(crate::value::js_nanbox_pointer(obj as i64));
-    let tagged = JSValue::from_bits(value.to_bits());
-    if tagged.is_bigint() {
-        super::throw_object_type_error(b"Cannot convert a BigInt value to a number");
-    }
-    let value = if tagged.is_number() {
+    let value = if JSValue::from_bits(value.to_bits()).is_number() {
         value
     } else {
         crate::builtins::js_number_coerce(value)
