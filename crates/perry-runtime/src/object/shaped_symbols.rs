@@ -519,6 +519,168 @@ pub(crate) unsafe fn delete_on(addr: usize, obj: *mut ObjectHeader, symbol: usiz
     true
 }
 
+/// The entry of `obj`'s own present symbol key `symbol`, read from `obj`'s
+/// own key list (no holder route). `None` when the list does not name it
+/// present, or when the object's keys moved to an overflow table (the
+/// caller's generic path answers those).
+///
+/// # Safety
+/// `obj` is a live, unforwarded ordinary object whose attributes live in its
+/// key list (an object its runtime family births).
+#[inline]
+unsafe fn own_listed(obj: *const ObjectHeader, symbol: usize) -> Option<(u32, u8, u64)> {
+    if super::overflow::has_overflow(obj) {
+        return None;
+    }
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let index = position_in(keys, symbol)?;
+    let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
+    if value == crate::value::TAG_HOLE {
+        return None;
+    }
+    Some((index, key_attrs::keys_entry(keys.arr(), index), value))
+}
+
+/// `obj`'s own data value of `symbol`: [[GetOwnProperty]].[[Value]] of an
+/// own data property. `None` for an absent key or an accessor.
+///
+/// # Safety
+/// As [`own_listed`].
+#[inline]
+pub(crate) unsafe fn own_data_value(obj: *const ObjectHeader, symbol: usize) -> Option<u64> {
+    let (_, entry, value) = own_listed(obj, symbol)?;
+    (entry & key_attrs::ENTRY_ACCESSOR == 0).then_some(value)
+}
+
+/// The entry of `obj`'s own present key `symbol` ([`entry`] without the
+/// holder route).
+///
+/// # Safety
+/// As [`own_listed`].
+#[inline]
+pub(crate) unsafe fn own_entry(obj: *const ObjectHeader, symbol: usize) -> Option<u8> {
+    own_listed(obj, symbol).map(|(_, entry, _)| entry)
+}
+
+/// Store `bits` into `obj`'s own data property `symbol` when OrdinarySet
+/// with `obj` as its own receiver writes exactly that slot: the key is own,
+/// present, a data property held inline, and writable on an unfrozen object.
+/// A runtime-only (`private`) entry is written whatever its attributes, as
+/// [`define_on`] writes an existing key. `false`, having changed nothing,
+/// otherwise.
+///
+/// # Safety
+/// As [`own_listed`].
+#[inline]
+pub(crate) unsafe fn store_own_data(
+    obj: *mut ObjectHeader,
+    symbol: usize,
+    bits: u64,
+    private: bool,
+) -> bool {
+    let Some((index, entry, _)) = own_listed(obj, symbol) else {
+        return false;
+    };
+    if entry & key_attrs::ENTRY_ACCESSOR != 0 {
+        return false;
+    }
+    if !private {
+        let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
+        if entry & key_attrs::ENTRY_NON_WRITABLE != 0
+            || (*gc)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0
+        {
+            return false;
+        }
+    }
+    let slot = object_keys(obj).storage_slot(index);
+    if slot >= object_inline_capacity(obj) {
+        return false;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::store_object_field_slot(obj, slot as usize, bits);
+    true
+}
+
+/// A fresh instance of `class_id` born in the final shape its prototype
+/// `proto` recorded for it (`ObjectMeta::instance_birth`, written by
+/// [`record_birth`]), its slots `0..values.len()` holding `values`. `None`,
+/// with nothing reachable made, when no record names `class_id` or the
+/// record no longer validates as that birth.
+///
+/// # Safety
+/// `proto` is the live intrinsic prototype (rooted by its realm cell);
+/// `values` are pointer-free words (no root or barrier is needed for them).
+pub(crate) unsafe fn born_on_record(
+    class_id: u32,
+    proto: *mut ObjectHeader,
+    values: &[u64],
+) -> Option<*mut ObjectHeader> {
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto));
+    if meta.is_null() {
+        return None;
+    }
+    let word = (*meta).instance_birth;
+    if word as u32 != class_id {
+        return None;
+    }
+    let proto_id = (*meta).proto_serial;
+    let id = crate::codegen_abi::LayoutWord((word >> 32) as u32);
+    let count = values.len() as u32;
+    let rep = shapes::shape_rep_for_word(id);
+    if !(0..count).all(|slot| field_rep::slot_rep(rep, slot) == field_rep::REP_ANY) {
+        return None;
+    }
+    let obj = super::object_alloc_unpublished(class_id, count);
+    if obj.is_null() {
+        return None;
+    }
+    let kind = shapes::store_kind::receiver_ordinary_kind(obj);
+    if !shapes::shape_is_attributed_filled_birth(id, proto_id, count, kind) {
+        return None;
+    }
+    if crate::arena::pointer_in_nursery(obj as usize) {
+        // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+        (*obj).parent_class_id = id.0;
+    } else {
+        shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    }
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)) as *mut u64;
+    for (i, &bits) in values.iter().enumerate() {
+        debug_assert!(!crate::value::JSValue::from_bits(bits).is_pointer());
+        crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+            obj as usize,
+            fields.add(i) as usize,
+            i,
+            bits,
+        );
+    }
+    Some(obj)
+}
+
+/// Record `obj`'s shape on its prototype `proto` as the final birth shape of
+/// `class_id` ([`born_on_record`]). `obj` was just built by the family's
+/// ordinary sequence, keys in birth order; nothing is recorded when its
+/// header carries per-object descriptor state a replay would not reproduce,
+/// or when `proto` has no meta record yet (no allocation here).
+///
+/// # Safety
+/// `obj` and `proto` are live; nothing allocates in between.
+pub(crate) unsafe fn record_birth(class_id: u32, proto: *mut ObjectHeader, obj: *mut ObjectHeader) {
+    let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 || super::overflow::has_overflow(obj) {
+        return;
+    }
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto));
+    if meta.is_null() {
+        return;
+    }
+    let shape = shapes::object_shape_stamp(obj);
+    // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
+    // reference.
+    (*meta).instance_birth = u64::from(class_id) | u64::from(shape.0) << 32;
+    shapes::note_old_generation_carrier(shapes::shape_record_for_word(shape));
+}
+
 unsafe fn store(obj: *mut ObjectHeader, index: u32, bits: u64) {
     let live = object_live_slot_count(obj);
     if index < object_inline_capacity(obj) {
