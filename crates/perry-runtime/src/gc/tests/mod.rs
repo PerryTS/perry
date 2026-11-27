@@ -3,6 +3,7 @@ mod alloc;
 mod allocation_pacing;
 mod arena_right_size;
 mod arguments_objects;
+mod array_from_async_roots;
 mod array_named_props;
 mod array_pointer_slot_enumeration;
 mod barrier;
