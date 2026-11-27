@@ -1197,10 +1197,11 @@ pub(super) fn loop_deadline() -> Option<Instant> {
 }
 
 /// DESIGN §9 `fast()`: a nonblocking turn, only when turnloop has outstanding
-/// work. P0 submits no operation, so `alive()` is false and this makes no OS
-/// call on the hot promise path. Staged completions are dispatched either way:
-/// a close-phase turn can stage the last ones of a loop that is no longer
-/// alive.
+/// work: referenced work, or a due deadline. Every deadline Perry arms is
+/// unref'd, so a due one on a loop that is not `alive()` is still owed the turn
+/// that delivers it; without it the park reads the same past deadline forever.
+/// Staged completions are dispatched either way: a close-phase turn can stage
+/// the last ones of a loop that is no longer alive.
 #[inline]
 pub(super) fn fast_turn() {
     if STATE.with(Cell::get) != LoopState::Owner {
@@ -1214,7 +1215,13 @@ pub(super) fn fast_turn() {
         let Some(agent) = slot.as_mut() else {
             return false;
         };
-        if !agent.driver.alive() {
+        let due = || {
+            agent
+                .driver
+                .next_deadline()
+                .is_some_and(|at| at <= agent.driver.now())
+        };
+        if !agent.driver.alive() && !due() {
             return false;
         }
         if let Ok(info) = agent.driver.turn(Timeout::Now, &mut agent.completions) {
