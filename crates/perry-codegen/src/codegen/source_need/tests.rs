@@ -197,6 +197,14 @@ fn a_parent_class_is_reachable_from_its_subclass() {
 }
 
 #[test]
+fn a_fresh_class_evaluation_carries_its_template() {
+    let (m, need) = run("function f() { class K {} return K; } const a: any = f(), b: any = f(); console.log(String(a));");
+    let e = Ent::Class(0, class_id(&m, "K"));
+    assert_eq!(strict(&need, e), Class3::MayStringify);
+    assert!(known(&need, e));
+}
+
+#[test]
 fn static_this_carries_the_class() {
     let (m, need) =
         run("class S { static name2() { return `${this}`; } } console.log(S.name2().length);");
