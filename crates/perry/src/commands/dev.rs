@@ -285,6 +285,7 @@ fn build_once(
         source_root: None,
         source_root_target: None,
         macro_import_stack: Vec::new(),
+        host_surface: Vec::new(),
         input: input.to_path_buf(),
         output: Some(output.to_path_buf()),
         keep_intermediates: false,

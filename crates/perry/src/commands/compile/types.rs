@@ -111,6 +111,12 @@ pub struct CompileArgs {
     #[arg(long, hide = true)]
     pub macro_import_stack: Vec<PathBuf>,
 
+    /// Load a host-surface-v1 manifest: what the embedder or target runtime
+    /// adds to the realm (globals, host objects), for whole-program facts
+    /// (repeatable).
+    #[arg(long, value_name = "PATH")]
+    pub host_surface: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,

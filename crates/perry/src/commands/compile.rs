@@ -64,6 +64,7 @@ mod output_path;
 mod parse_cache;
 mod post_link;
 mod precompile_capture;
+mod host_surfaces;
 mod program_facts;
 mod reach_report;
 mod reachability;

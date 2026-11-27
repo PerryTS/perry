@@ -1934,6 +1934,14 @@ pub fn run_with_parse_cache(
     // HIR: a proven call is the same HIR a build without the pair has, so
     // class layouts, births, constructor contracts, providers and module
     // options see what they see there.
+    // HOSTSURF guard: a host that adds globals needs its surface loaded
+    // before the facts may read `%Global%` as complete.
+    let host_surfaces = super::host_surfaces::collect(
+        &args.host_surface,
+        &ctx.native_libraries,
+        args.target.as_deref(),
+    )?;
+    super::host_surfaces::guard(&host_surfaces, perry_wpfacts::enabled_from_env())?;
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
         super::program_facts::export_sources(&ctx),
