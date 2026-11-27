@@ -14,6 +14,7 @@
 use super::call_shadow::whole;
 
 const MEMO_ONE: &str = r#"
+        declare function external(x?: unknown): any;
 function memoizeOne<A extends string | number, T>(callback: (arg: A) => T): (arg: A) => T {
   const map = new Map<string, T>();
   return (arg: A) => {
@@ -63,7 +64,7 @@ fn memo_one(host: &str, make: &str) -> String {
 #[test]
 fn a_memo_made_in_a_function_keeps_its_own_map() {
     let src = memo_one(
-        "function mkHost() { return memoizeOne((b: number) => (globalThis as any).host ?? ((x: number) => x)); }\n\
+        "function mkHost() { return memoizeOne((b: number) => external() ?? ((x: number) => x)); }\n\
          const getHost = mkHost();\n",
         "memoizeOne",
     );
@@ -75,7 +76,7 @@ fn a_memo_made_in_a_function_keeps_its_own_map() {
 #[test]
 fn a_memo_at_a_program_site_and_one_in_a_function_have_two_maps() {
     let src = memo_one(
-        "const getHost = memoizeOne((b: number) => (globalThis as any).host ?? ((x: number) => x));\n",
+        "const getHost = memoizeOne((b: number) => external() ?? ((x: number) => x));\n",
         "memoizeOne",
     );
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
@@ -88,7 +89,7 @@ fn a_memo_at_a_program_site_and_one_in_a_function_have_two_maps() {
 fn a_memoize_box_is_per_call_site() {
     let src = format!(
         "{MEMO}
-        function mkHost() {{ return memoize(() => (globalThis as any).host ?? ((x: number) => x)); }}
+        function mkHost() {{ return memoize(() => external() ?? ((x: number) => x)); }}
         const getHost = mkHost();
         function createFactory(flags: number) {{
           const getPrimary = memoize(() => () => ({{ kind: 312 }}));
@@ -114,7 +115,7 @@ fn a_memoize_box_is_per_call_site() {
 fn a_forwarding_maker_keeps_two_memos_apart() {
     let src = memo_one(
         "function mk(cb: (b: number) => any) { return memoizeOne(cb); }\n\
-         const getHost = mk((b: number) => (globalThis as any).host ?? ((x: number) => x));\n",
+         const getHost = mk((b: number) => external() ?? ((x: number) => x));\n",
         "mk",
     );
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
@@ -158,7 +159,7 @@ console.log(n, factory.flags);
 fn one_memo_shared_with_a_top_callback_stays_unproven() {
     let src = format!(
         "import \"unseen-host\"; {MEMO_ONE}
-        function mkShared() {{ return memoizeOne((k: number) => k > 400 ? (globalThis as any).host : () => ({{ kind: k }})); }}
+        function mkShared() {{ return memoizeOne((k: number) => k > 400 ? external() : () => ({{ kind: k }})); }}
         const shared = mkShared();
         const getHost = shared;
         {}",
@@ -177,7 +178,7 @@ fn one_memo_shared_with_a_top_callback_stays_unproven() {
 fn one_site_in_a_loop_merges_its_memos() {
     let src = format!(
         "import \"unseen-host\"; {MEMO_ONE}
-        const cbs = [(k: number) => (globalThis as any).host, (k: number) => () => ({{ kind: k }})];
+        const cbs = [(k: number) => external(), (k: number) => () => ({{ kind: k }})];
         function mkAll() {{ const out: any[] = []; for (const cb of cbs) out.push(memoizeOne(cb)); return out; }}
         const memos = mkAll();
         const getHost = memos[0];

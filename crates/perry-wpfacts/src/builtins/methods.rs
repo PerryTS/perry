@@ -48,23 +48,12 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
     crate::family_reach::tok(m, t, _key);
     // R-GLOBAL-NAME: a named global the runtime never reads by name is the
     // program's own property of the global object (its field, written by
-    // the store); no E20 sink.
+    // the store); no E20 sink. The self keys (`globalThis`, `global`) are
+    // such names (R-GLOBAL-SELF): the runtime reaches the global object
+    // through `js_get_global_this`, and every program read of the name
+    // (bare `globalThis`, `globalThis.X`, `typeof globalThis`) reads the
+    // field (`declared_global_value`).
     if !m.unit_mode && super::global_object(m, t) && !super::global_store_escapes(m, t, _key) {
-        return;
-    }
-    // The global object's self-reference (`globalThis.globalThis = v`):
-    // bare reads of the name are the global object, so a stored global
-    // object (the receiver itself) hands unknown code nothing new and the
-    // realm stays the program's; any other stored value escapes as before.
-    if !m.unit_mode && super::global_object(m, t) && super::global_self_key(m, t, _key) {
-        let r = m.reason("E20 stored on the global object's self-reference");
-        m.cons(
-            src,
-            Cons::RuntimeStore {
-                reason: r,
-                retained: t,
-            },
-        );
         return;
     }
     match m.toks[t as usize] {
@@ -148,7 +137,7 @@ fn native_waits(m: &mut Model, r: NativeRecv, key: Key, call: CallId) -> bool {
     if m.sum.ready {
         return false;
     }
-    m.sum.deferred.push(Deferred::Native(r, key, call));
+    m.defer(Deferred::Native(r, key, call));
     true
 }
 
@@ -503,12 +492,17 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // builtin object: absent unless the description names it, as the
     // iteration protocol of the builtin iterables is; a builtin namespace
     // whose own keys and chain are described, `Object[Symbol.iterator]`
-    // included); on anything else it is a computed-key method.
+    // included; a host namespace whose keys the realm declaration answers,
+    // `declaration_answers_keys`: ToPrimitive of `Atomics` looks up
+    // `@@toPrimitive` there, ECMA-262 7.1.1 step 2.a, and finds none, so
+    // OrdinaryToPrimitive runs `Object.prototype.valueOf` / `toString`,
+    // 20.1.3.7 / 20.1.3.6); on anything else it is a computed-key method.
     let described = match &m.toks[t as usize] {
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
-        TokKind::Builtin(ns) => name
-            .as_deref()
-            .is_some_and(|n| n.starts_with(WK_PREFIX) && members::ns_member(*ns, n).is_some()),
+        TokKind::Builtin(ns) => name.as_deref().is_some_and(|n| {
+            n.starts_with(WK_PREFIX)
+                && (members::ns_member(*ns, n).is_some() || super::declaration_answers_keys(m, *ns))
+        }),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {

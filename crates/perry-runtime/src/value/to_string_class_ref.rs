@@ -10,10 +10,30 @@ use super::to_string_primitive::{
 };
 use super::*;
 
+/// `ToPrimitive` step 1.b (§7.1.1): the `@@toPrimitive` method's outcome.
 pub(crate) enum CustomToPrimitiveOutcome {
+    /// `@@toPrimitive` is undefined or null: OrdinaryToPrimitive runs.
     Absent,
     Primitive(f64),
-    TypeError,
+    /// GetMethod found a value that is not callable.
+    NotCallable(f64),
+    /// The method returned an object.
+    ObjectResult,
+}
+
+impl CustomToPrimitiveOutcome {
+    /// The primitive, or `None` when the method is absent; throws the
+    /// TypeError Node throws for the other two outcomes.
+    pub(crate) fn primitive_or_throw(self) -> Option<f64> {
+        match self {
+            CustomToPrimitiveOutcome::Absent => None,
+            CustomToPrimitiveOutcome::Primitive(p) => Some(p),
+            CustomToPrimitiveOutcome::NotCallable(method) => {
+                crate::array::throw_value_not_a_function(method)
+            }
+            CustomToPrimitiveOutcome::ObjectResult => throw_cannot_convert_to_primitive(),
+        }
+    }
 }
 pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPrimitiveOutcome {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -29,7 +49,7 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
 
     let method_tag = method.to_bits() & 0xFFFF_0000_0000_0000;
     if !crate::value::is_reference_bits(method_tag) {
-        return CustomToPrimitiveOutcome::TypeError;
+        return CustomToPrimitiveOutcome::NotCallable(method);
     }
     // #10510: `Date.prototype[Symbol.toPrimitive]` is `OrdinaryToPrimitive`
     // with the hint-selected order; run it without materializing the hint
@@ -55,13 +75,13 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
     let method = method_handle.get_nanbox_f64();
     let result = if crate::proxy_hooks::proxy_is_proxy(method) == 1 {
         if !crate::proxy_hooks::proxy_wraps_callable(method) {
-            return CustomToPrimitiveOutcome::TypeError;
+            return CustomToPrimitiveOutcome::NotCallable(method);
         }
         crate::proxy_hooks::call_proxy_value_with_this(method, receiver, &[hint])
     } else {
         let method_ptr = (method.to_bits() & POINTER_MASK) as usize;
         if !crate::closure::is_closure_ptr(method_ptr) {
-            return CustomToPrimitiveOutcome::TypeError;
+            return CustomToPrimitiveOutcome::NotCallable(method);
         }
         crate::closure::native_call_value_this(
             method,
@@ -74,7 +94,7 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
     if is_primitive_value(result) {
         CustomToPrimitiveOutcome::Primitive(result)
     } else {
-        CustomToPrimitiveOutcome::TypeError
+        CustomToPrimitiveOutcome::ObjectResult
     }
 }
 /// Run full `ToPrimitive` for an INT32-tagged constructor ClassRef.
@@ -90,11 +110,7 @@ pub(crate) unsafe fn class_ref_to_primitive(value: f64, hint: i32) -> f64 {
         2 => (b"string", true),
         _ => (b"default", false),
     };
-    match custom_to_primitive(value, hint_name) {
-        CustomToPrimitiveOutcome::Absent => {
-            ordinary_to_primitive_for_toprimitive(value, string_first)
-        }
-        CustomToPrimitiveOutcome::Primitive(p) => p,
-        CustomToPrimitiveOutcome::TypeError => throw_cannot_convert_to_primitive(),
-    }
+    custom_to_primitive(value, hint_name)
+        .primitive_or_throw()
+        .unwrap_or_else(|| ordinary_to_primitive_for_toprimitive(value, string_first))
 }

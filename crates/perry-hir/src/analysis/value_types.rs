@@ -1157,7 +1157,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::PathNormalize(_)
         | Expr::PathFormat(_)
         | Expr::PathResolveJoin(_, _)
-        | Expr::PathWin32Join(_, _)
+        | Expr::PathWin32Join(_)
         | Expr::PathWin32 {
             method:
                 PathWin32Method::Dirname

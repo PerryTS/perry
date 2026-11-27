@@ -312,10 +312,10 @@ getter!(ports, state::MESSAGE_PORTS);
 pub(super) fn install(proto: *mut ObjectHeader) {
     for (name, info) in [
         ("data", crate::fn_info!(#[realm("MessageEvent.prototype.data.<get>", effects = { returns(islot(this, data)) })] export crate::event_target::message_event::data, 0; with_name("get data"), with_flags(crate::closure::FN_BUILTIN))),
-        ("origin", crate::fn_info!(#[realm("MessageEvent.prototype.origin.<get>")] export crate::event_target::message_event::origin, 0; with_name("get origin"), with_flags(crate::closure::FN_BUILTIN))),
-        ("lastEventId", crate::fn_info!(#[realm("MessageEvent.prototype.lastEventId.<get>")] export crate::event_target::message_event::last_event_id, 0; with_name("get lastEventId"), with_flags(crate::closure::FN_BUILTIN))),
-        ("source", crate::fn_info!(#[realm("MessageEvent.prototype.source.<get>")] export crate::event_target::message_event::source, 0; with_name("get source"), with_flags(crate::closure::FN_BUILTIN))),
-        ("ports", crate::fn_info!(#[realm("MessageEvent.prototype.ports.<get>")] export crate::event_target::message_event::ports, 0; with_name("get ports"), with_flags(crate::closure::FN_BUILTIN))),
+        ("origin", crate::fn_info!(#[realm("MessageEvent.prototype.origin.<get>", effects = { returns(prim(str)) })] export crate::event_target::message_event::origin, 0; with_name("get origin"), with_flags(crate::closure::FN_BUILTIN))),
+        ("lastEventId", crate::fn_info!(#[realm("MessageEvent.prototype.lastEventId.<get>", effects = { returns(prim(str)) })] export crate::event_target::message_event::last_event_id, 0; with_name("get lastEventId"), with_flags(crate::closure::FN_BUILTIN))),
+        ("source", crate::fn_info!(#[realm("MessageEvent.prototype.source.<get>", effects = { returns(islot(this, source)) })] export crate::event_target::message_event::source, 0; with_name("get source"), with_flags(crate::closure::FN_BUILTIN))),
+        ("ports", crate::fn_info!(#[realm("MessageEvent.prototype.ports.<get>", effects = { returns(islot(this, ports)) })] export crate::event_target::message_event::ports, 0; with_name("get ports"), with_flags(crate::closure::FN_BUILTIN))),
     ] {
         prototype::accessor(proto, name, info, None, true);
     }

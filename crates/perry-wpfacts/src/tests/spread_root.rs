@@ -13,6 +13,7 @@ use super::*;
 fn escapes(src_expr: &str, copy: &str) -> bool {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         const svc: any = new Svc();
         class Node3 {{ userData: any = {{}}; name = "n"; }}
@@ -64,7 +65,7 @@ fn control_literal_source_modeled() {
 /// the target's inspect hook is unknown and `svc` escapes.
 #[test]
 fn control_host_source_escapes() {
-    assert!(escapes("(globalThis as any).hostGive()", ASSIGN));
+    assert!(escapes("external()", ASSIGN));
 }
 
 /// The three.js shape (`convertArray`: `new type(array)` with `type` Array or a
@@ -82,6 +83,7 @@ fn assign_from_dynamic_ctor_result_keeps_target_modeled() {
 fn copy_escapes(body: &str) -> bool {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         const svc: any = new Svc();
         const t: any = {{}};
@@ -100,7 +102,7 @@ fn copy_escapes(body: &str) -> bool {
 #[test]
 fn assign_from_typed_array_copies_expando() {
     assert!(copy_escapes(
-        "const ta: any = new Float32Array(2); ta.foo = svc; Object.assign(t, ta); (globalThis as any).hostTake(t.foo);"
+        "const ta: any = new Float32Array(2); ta.foo = svc; Object.assign(t, ta); external(t.foo);"
     ));
 }
 
@@ -117,6 +119,6 @@ fn assign_from_typed_array_expando_unhanded_modeled() {
 #[test]
 fn spread_of_object_array_copies_elements() {
     assert!(copy_escapes(
-        "const arr: any[] = [svc]; const u: any = { ...arr }; (globalThis as any).hostTake(u[0]);"
+        "const arr: any[] = [svc]; const u: any = { ...arr }; external(u[0]);"
     ));
 }

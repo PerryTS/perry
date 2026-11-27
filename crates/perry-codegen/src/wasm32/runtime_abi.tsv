@@ -2944,8 +2944,7 @@ js_path_dirname	ptr	ptr
 js_path_extname	ptr	ptr
 js_path_format	ptr	f64
 js_path_is_absolute	i32s	ptr
-js_path_join	ptr	ptr,ptr
-js_path_join_value	ptr	f64,f64
+js_path_join_values	ptr	ptr,i32u
 js_path_matches_glob	i32s	ptr,ptr
 js_path_matches_glob_value	i32s	f64,f64
 js_path_normalize	ptr	ptr
@@ -2966,8 +2965,7 @@ js_path_win32_dirname	ptr	ptr
 js_path_win32_extname	ptr	ptr
 js_path_win32_format	ptr	f64
 js_path_win32_is_absolute	i32s	ptr
-js_path_win32_join	ptr	ptr,ptr
-js_path_win32_join_value	ptr	f64,f64
+js_path_win32_join_values	ptr	ptr,i32u
 js_path_win32_matches_glob	i32s	ptr,ptr
 js_path_win32_matches_glob_value	i32s	f64,f64
 js_path_win32_normalize	ptr	ptr
@@ -4505,6 +4503,7 @@ js_unsettled_top_level_await_exit	void
 js_urierror_new	ptr	ptr
 js_url_can_parse	i32s	ptr
 js_url_can_parse_with_base	i32s	ptr,ptr
+js_url_coerce_base	ptr	f64
 js_url_coerce_string	ptr	f64
 js_url_create_object_url	ptr	f64
 js_url_domain_to_ascii	f64	f64
@@ -4517,11 +4516,13 @@ js_url_get_host	f64	ptr
 js_url_get_hostname	f64	ptr
 js_url_get_href	f64	ptr
 js_url_get_origin	f64	ptr
+js_url_get_password	f64	ptr
 js_url_get_pathname	f64	ptr
 js_url_get_port	f64	ptr
 js_url_get_protocol	f64	ptr
 js_url_get_search	f64	ptr
 js_url_get_search_params	f64	ptr
+js_url_get_username	f64	ptr
 js_url_href_if_url	f64	f64
 js_url_legacy_parse	f64	f64,f64,f64
 js_url_legacy_resolve	f64	f64,f64

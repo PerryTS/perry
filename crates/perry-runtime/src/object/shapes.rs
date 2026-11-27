@@ -60,9 +60,12 @@ pub(crate) use shapes_branded_birth::branded_birth_layout;
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
 mod shapes_last_key_rollback;
+#[path = "shapes_runtime_base.rs"]
+mod shapes_runtime_base;
 pub(crate) use shapes_last_key_rollback::{
     note_last_key_parent, publish_object_shape_last_key_rollback,
 };
+pub(crate) use shapes_runtime_base::runtime_base_of_word;
 #[path = "shapes_linked_birth.rs"]
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]

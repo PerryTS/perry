@@ -389,7 +389,7 @@ icu_calendar = { version = "2", default-features = false, features = ["compiled_
 # ICU's semantic field annotations drive Intl.DateTimeFormat#formatToParts.
 writeable = { version = "0.6", optional = true }
 idna = { version = "1", optional = true }
-url = { version = "2", optional = true }
+url = { version = "2", optional = true, features = ["expose_internals"] }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format
 # encode/decode + record types; we drive it synchronously over a blocking
 # std::net::UdpSocket (TCP fallback on truncation), so — unlike hickory-resolver

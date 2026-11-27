@@ -219,6 +219,9 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
             );
         }
+    } else if export_module_name == "process" {
+        let decorated = unsafe { nm_attach_process(property_name, value.get_nanbox_f64(), 0) };
+        value.set_nanbox_f64(decorated);
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
@@ -335,7 +338,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", effects = { stores(fresh); returns(native("node:fs.Utf8Stream")) }, capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key, constructible = true; "node:fs.default.promises.<get>", effects = { stores(fresh); returns(namespace("node:fs.promises")) }, capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
@@ -417,6 +420,7 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
             ("url", "resolveObject") => realm_native_url_resolveObject_metadata!(name),
             ("http", "_connectionListener") => realm_native_http_connectionListener_metadata!(name),
             ("module", "runMain") => realm_native_module_runMain_metadata!(name),
+            ("process", "hrtime.bigint") => "bigint",
             _ => prop,
         }
     }
@@ -850,13 +854,9 @@ fn attach_assertion_error_prototype(constructor_value: f64) {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let error = {
-        let name = "Error";
-        scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-            name.as_ptr(),
-            name.len(),
-        ))
-    };
+    // `%Error%`, not the global binding: node's AssertionError extends the
+    // realm's original Error whatever `globalThis.Error` holds.
+    let error = scope.root_nanbox_f64(crate::object::builtin_constructor_value("Error"));
     let error_prototype = {
         scope.root_nanbox_f64(unsafe {
             crate::value::js_dynamic_object_get_property(
@@ -1032,7 +1032,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_name("get issuerCertificate"), with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(undefined)) })] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_name("get issuerCertificate"), with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -1689,6 +1689,38 @@ pub(crate) unsafe fn nm_attach_stream(
         value = attach_stream_promisify_custom(value, property_name);
     }
     value
+}
+
+/// The `process` members' own properties, at both places a `process`
+/// callable is minted (`bound_native_callable_export_value` and the
+/// statically named export declarations).
+pub(crate) unsafe fn nm_attach_process(property_name: &str, value: f64, _addr: usize) -> f64 {
+    if property_name == "hrtime" {
+        attach_process_hrtime_bigint(value)
+    } else {
+        value
+    }
+}
+
+/// `process.hrtime` carries `bigint` as an own function member, as in Node
+/// (`hrtime.bigint = hrtimeBigInt`: writable, enumerable, configurable), so a
+/// `process.hrtime` read as a value (`const p = process; p.hrtime.bigint()`)
+/// holds what the direct `process.hrtime.bigint()` lowering calls. Decorated
+/// where the one `hrtime` callable is minted ([`nm_attach_process`]).
+fn attach_process_hrtime_bigint(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hrtime = scope.root_nanbox_f64(value);
+    let bigint = scope.root_nanbox_f64(bound_native_callable_export_value(
+        "process",
+        "hrtime.bigint",
+    ));
+    crate::closure::closure_define_data_with_attrs(
+        crate::value::js_nanbox_get_pointer(hrtime.get_nanbox_f64()) as usize,
+        "bigint",
+        bigint.get_nanbox_f64(),
+        crate::object::PropertyAttrs::new(true, true, true),
+    );
+    hrtime.get_nanbox_f64()
 }
 
 /// Ensure the public `ChildProcess` constructor has its prototype. The direct

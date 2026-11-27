@@ -80,7 +80,8 @@ fn parsed_json_receiver_has_json_domain_and_all_primitives() {
 fn unmodeled_global_receiver_is_explicit_top() {
     // `unknownThing` is an unseen module's global.
     let src = &unseen(
-        r#"const recv: any = (globalThis as any).unknownThing;
+        r#"
+        declare function external(x?: unknown): any;const recv: any = external();
         const key: any = "value"; console.log(recv[key]);"#,
     );
     let pf = facts(src);

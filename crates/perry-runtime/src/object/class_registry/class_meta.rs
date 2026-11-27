@@ -399,7 +399,11 @@ pub(crate) unsafe fn text_encoding_stream_new_with_constructor(
 }
 
 unsafe fn text_encoding_stream_new(constructor_name: &[u8], class_id: u32) -> f64 {
-    let ctor = js_get_global_this_builtin_value(constructor_name.as_ptr(), constructor_name.len());
+    // The realm's original constructor, not the global binding: node builds
+    // the stream with it whatever `globalThis.<name>` holds now.
+    let ctor = crate::object::builtin_constructor_value(
+        std::str::from_utf8(constructor_name).expect("a static ASCII constructor name"),
+    );
     text_encoding_stream_new_with_constructor(ctor, class_id)
 }
 

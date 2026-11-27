@@ -17,10 +17,10 @@ fn verdict(tail: &str) -> Verdict {
 
 /// The rule is behind `PERRY_FACTS_PROMISE_ALL_INDEX` (default off).
 fn verdict_with(tail: &str, on: bool) -> Verdict {
-    std::env::set_var("PERRY_FACTS_PROMISE_ALL_INDEX", if on { "1" } else { "0" });
-    let v = verdict_src(tail);
-    std::env::remove_var("PERRY_FACTS_PROMISE_ALL_INDEX");
-    v
+    let v = if on { "1" } else { "0" };
+    crate::provenance::with_env(&[("PERRY_FACTS_PROMISE_ALL_INDEX", v)], || {
+        verdict_src(tail)
+    })
 }
 
 fn verdict_src(tail: &str) -> Verdict {
@@ -29,7 +29,7 @@ fn verdict_src(tail: &str) -> Verdict {
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare function hostValue(): any; const unknown: any = hostValue;
         const take = (x: any) => {{ unknown.take(x); }};
         (function () {{ {tail} }})();
         console.log(g(s));

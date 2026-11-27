@@ -1568,7 +1568,7 @@ fn listener_key(event: &str) -> Vec<u8> {
 }
 
 fn alloc_object_value(field_count: u32) -> f64 {
-    box_ptr(crate::realm_decl! { birth js_object_alloc(CLUSTER_SHAPE_ID, field_count); realm { "node:cluster.settings", kind = namespace, extends = "node:cluster.settings", members = { }; "node:cluster.workers", kind = namespace, extends = "node:cluster.workers", members = { }; } } as *const u8)
+    box_ptr(crate::realm_decl! { birth js_object_alloc(CLUSTER_SHAPE_ID, field_count); realm { "node:cluster.settings", kind = namespace, members = { }; "node:cluster.workers", kind = namespace, members = { }; } } as *const u8)
 }
 
 fn alloc_array_value(capacity: u32) -> f64 {

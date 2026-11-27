@@ -12,8 +12,9 @@
 
 use super::*;
 
-/// A store of an unknown function into a value unknown code returns,
-/// under the key `next` (it may add `Array.prototype.next`), then `use`
+/// A program store of an unknown function as `Array.prototype.next`, by
+/// name (P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype: a store into a value unknown code returns adds no
+/// `Array.prototype.next`), then `use`
 /// consumes an iterable whose `[Symbol.iterator]()` returns the array `a`
 /// (or, with `direct`, `a` itself); the site is `a[0].size` after it.
 fn verdict(use_src: &str, direct: bool) -> (Vec<String>, Verdict) {
@@ -27,9 +28,8 @@ fn verdict(use_src: &str, direct: bool) -> (Vec<String>, Verdict) {
         export {{}};
         class Svc {{ size = 3; }}
         function g(o: any) {{ return o.size; }}
-        const f: any = (globalThis as any)[process.argv[2] ?? "Object"];
-        const u: any = f(process.argv[3]);
-        u.next = f(process.argv[4]);
+        declare function opaque(): any; const f: any = opaque();
+        (Array.prototype as any).next = f(process.argv[4]);
         const a: any[] = [new Svc()];
         const src: any = {src};
         try {{ {use_src} }} catch {{}}

@@ -165,12 +165,15 @@ impl Model {
                 self.store_into(d, Key::Named(a), n, site);
             }
         }
+        // And every JSON-RT copy of `t` has it.
+        self.json_rt_replay(t, a, n);
     }
 
     /// `t` escaped: each own key of it may now be enumerable (`enum_own`):
     /// the fields not enumerable before join its for-in keys and its
     /// spreads.
     pub(crate) fn enum_escaped(&mut self, t: Tok) {
+        self.json_rt_escaped(t);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.field_r(t, a);
             if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
@@ -181,6 +184,19 @@ impl Model {
             }
             self.spread_replay(t, a, f);
         }
+    }
+
+    /// K3BUILD7: `a` is class constructor `t`'s own `prototype`, which
+    /// ClassDefinitionEvaluation makes non-writable and non-configurable
+    /// (ECMA-262 15.7.14: MakeConstructor(F, false, proto), 10.2.5): no
+    /// [[Set]] (10.1.9.2 step 2.a) and no [[DefineOwnProperty]] (10.1.6.3
+    /// ValidateAndApplyPropertyDescriptor step 5) by any code changes it,
+    /// under a named or a computed key: its field holds what the class
+    /// definition put there and nothing a store writes.
+    pub(crate) fn final_class_proto(&self, t: Tok, a: Atom) -> bool {
+        matches!(self.toks[t as usize], TokKind::ClassObj(tm)
+            if matches!(self.tmpls[tm as usize].kind, crate::model::TmplKind::Class { literal_shape: false, .. }))
+            && self.atoms[a as usize] == "prototype"
     }
 
     /// Field `a` of `t` as a read or a non-enumerable definition finds it:
@@ -255,7 +271,9 @@ impl Model {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
-            self.edge(any, n);
+            if !self.final_class_proto(t, a) {
+                self.edge(any, n);
+            }
             // A JSON object's property named here: its own position class
             // (`json_pos`), distinct from every other name's.
             // Every property of a parsed object is an own enumerable data
@@ -391,15 +409,27 @@ impl Model {
             return;
         }
         let opaque = !self.own_props_modelled(s);
-        // Any key of the source may be an index of an Array target.
-        self.mark_hole(d);
-        self.map_open(d);
-        let fa_d = self.any_key_node(d);
+        // Rule PXASSIGN: `Object.assign( px, s )` (20.1.2.1 step
+        // 4.b.iii.2.b): each copied key is Set( px, key, v, true ), the
+        // Proxy's [[Set]] (`store_into`); the values of keys the model does
+        // not name gather in `fa_d`, a [[Set]] of some key once one is there
+        // (`Cons::UnnamedSet`). A Proxy has no own fields of its own.
+        let px = matches!(self.toks[d as usize], TokKind::Proxy(_));
+        let fa_d = if px {
+            let w = self.node_l("proxy-assign-unnamed");
+            self.cons(w, Cons::UnnamedSet { target: d, site });
+            w
+        } else {
+            // Any key of the source may be an index of an Array target.
+            self.mark_hole(d);
+            self.map_open(d);
+            self.any_key_node(d)
+        };
         // A String wrapper's own indices are its characters (10.4.3.5).
         if !opaque && self.may_wrap_string(s) {
             self.add_prim(fa_d, prim::STR);
         }
-        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d, self.thrown));
+        self.builtin_own_copy(s, fa_d);
         // A typed array's integer indices are own enumerable keys whose
         // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
         // stores them under index keys of the target (7.3.25).
@@ -473,20 +503,24 @@ impl Model {
         // source has such a key (an unmodeled source may have any).
         // It is a write of the target under some key as well: onto a
         // builtin prototype, every key of it (`note_native_write`).
-        if opaque {
+        if px {
+            // `fa_s` reaches `fa_d` (above), whose rule is the Set.
+        } else if opaque {
             self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s, self.thrown));
             self.note_unnamed_set(d);
         } else {
-            self.cons(fa_s, Cons::UnnamedSet { target: d });
+            self.cons(fa_s, Cons::UnnamedSet { target: d, site });
         }
-        // Numeric-only source properties keep their range through a copy.
-        let numeric_s = self.numeric_field(s);
-        let numeric_d = self.numeric_field(d);
-        self.edge(numeric_s, numeric_d);
+        if !px {
+            // Numeric-only source properties keep their range through a copy.
+            let numeric_s = self.numeric_field(s);
+            let numeric_d = self.numeric_field(d);
+            self.edge(numeric_s, numeric_d);
+        }
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
         let act = ChainAct::Load(fa_d, self.thrown);
-        self.any_walk_holders.entry(s).or_default().push((s, act));
+        self.any_walk_holders.entry(s).or_default().push((s, Key::any(), act));
         self.accessor_hit(s, s, Key::any(), act);
     }
 
@@ -798,7 +832,7 @@ impl Model {
         let act = ChainAct::Load(dst, self.thrown);
         // Any-key lookups subscribe through the holder relation;
         // named-key replay in `visits` does not cover them.
-        self.any_walk_holders.entry(t).or_default().push((t, act));
+        self.any_walk_holders.entry(t).or_default().push((t, Key::any(), act));
         self.accessor_hit(t, t, Key::any(), act);
     }
 
@@ -1185,6 +1219,17 @@ impl Model {
 
     /// The one array index key node `key` holds: a numeric literal
     /// (`Gen::num_literal`) of one integer in index range.
+    /// A key node holding the one integer `i` (`Gen::num_literal`'s node,
+    /// made by a rule): a read under it is the read `a[i]` is.
+    pub(crate) fn index_literal(&mut self, i: u32) -> NodeId {
+        let n = self.node_named("NUMLIT", || format!("NUMLIT{i}"));
+        let nd = &mut self.nodes[n as usize];
+        nd.ruled = true;
+        nd.range = crate::model::Iv::literal(i as f64);
+        self.add_prim(n, prim::NUM);
+        n
+    }
+
     pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);

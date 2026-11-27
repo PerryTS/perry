@@ -47,7 +47,7 @@ fn a_null_prototype_groups_key_reads_no_builtin_member() {
 #[test]
 fn a_value_stored_on_the_groups_object_is_read() {
     for b in uses() {
-        let b = format!("if (m) m.groups[k] = (globalThis as any).hostGet();\n{b}");
+        let b = format!("if (m) m.groups[k] = external();\n{b}");
         assert!(!proven(&b), "{b}");
     }
 }

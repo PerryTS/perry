@@ -230,7 +230,26 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                     self.string_limit,
                 )
             }
-            Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
+            Expr::PathJoin(parts) => {
+                let mut parts = parts.iter();
+                let mut joined = match parts.next() {
+                    Some(first) => self.strings(first, depth + 1)?,
+                    None => return Err("path.join without arguments".into()),
+                };
+                for part in parts {
+                    let right = self.strings(part, depth + 1)?;
+                    joined = product(
+                        &joined,
+                        &right,
+                        static_path_join,
+                        &mut self.work,
+                        self.string_limit,
+                    )?
+                    .paths;
+                }
+                Ok(PathValues::strings(joined))
+            }
+            Expr::PathResolveJoin(left, right) => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;
                 product(

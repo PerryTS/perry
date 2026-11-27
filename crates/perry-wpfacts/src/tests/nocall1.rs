@@ -115,10 +115,13 @@ fn function_beside_object_is_bound() {
 }
 
 /// (c) KEEP: a callee that may be host code is unknown and holds the realm.
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn keep_host_callee_held() {
     let src = format!(
-        "{OBJ}const g: any = (globalThis as any)[process.argv[2]];\ng(o);\nconst r = o.m();\nconsole.log(r);\n"
+        "import \"unseen-host\";\n{OBJ}const g: any = (globalThis as any)[process.argv[2]];\ng(o);\nconst r = o.m();\nconsole.log(r);\n"
     );
     assert!(held(&src), "a host callee holds the realm");
     assert!(!mono(&calls(&src, "m")), "o escaped to unknown code");
@@ -143,6 +146,9 @@ fn proto_in_any_key_pool_join_only_throws() {
 
 /// KEEP: %TypedArray%.from with a constructor as this runs its steps
 /// (unmodelled: unknown code may run).
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn keep_typedarray_from_on_constructor_held() {
     for call in [
@@ -150,7 +156,7 @@ fn keep_typedarray_from_on_constructor_held() {
         "class F extends Float32Array {}\nconst x = F.from(o as any);",
         "const h: any = { from: Float32Array.from, C: Float32Array };\nconst x = h.from.call(h.C, o);",
     ] {
-        let src = format!("{OBJ}{call}\nconsole.log(x);\nconst r = o.m();\nconsole.log(r);\n");
+        let src = format!("import \"unseen-host\";\n{OBJ}{call}\nconsole.log(x);\nconst r = o.m();\nconsole.log(r);\n");
         assert!(held(&src), "a constructor as this: still unknown: {call:?}");
     }
 }

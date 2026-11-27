@@ -36,6 +36,38 @@ impl Model {
         }
     }
 
+    /// SPREADOWN: a copy from builtin function value `t` (CopyDataProperties,
+    /// ECMA-262 7.3.25, for a spread 13.2.5.5, a rest 14.3.3.3 and
+    /// `Object.assign` 20.1.2.1) reads `t.[[OwnPropertyKeys]]()` and copies
+    /// the enumerable own keys only. A realm-declared own property of a
+    /// builtin function is not enumerable (ECMA-262 18: unless specified
+    /// otherwise every data property of a built-in object is
+    /// { [[Enumerable]]: false }), so the copy takes the program-owned own
+    /// fields of each value `t` may denote and runs its own accessors; an
+    /// inherited value (Function.prototype's, Object.prototype's) is never
+    /// copied, unlike a [[Get]] of some key (`builtin_field_use`).
+    pub(crate) fn builtin_own_copy(&mut self, t: Tok, dst: NodeId) {
+        if !builtins::builtin_function(self, t) {
+            return;
+        }
+        let e = self.own_copies.entry(t).or_default();
+        if e.contains(&dst) {
+            return;
+        }
+        e.push(dst);
+        for h in self.native_holders(t) {
+            self.native_own_copy_at(t, h, dst);
+        }
+    }
+
+    fn native_own_copy_at(&mut self, origin: Tok, holder: Tok, dst: NodeId) {
+        let key = Key::any();
+        let n = self.key_fields(holder, key);
+        self.edge(n, dst);
+        let act = ChainAct::Load(dst, self.thrown);
+        self.accessor_hit(origin, holder, key, act);
+    }
+
     fn native_field_at(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
         if matches!(act, ChainAct::Lookup { .. }) {
             self.accessor_walk(origin, holder, key, act);
@@ -128,6 +160,16 @@ impl Model {
         for (origin, key, act) in uses {
             self.native_field_at(origin, t, key, act);
         }
+        let mut copies = Vec::new();
+        for holder in self.native_holders(t) {
+            for &d in self.own_copies.get(&holder).map_or(&[][..], |v| &v[..]) {
+                self.charge_work(1);
+                copies.push((holder, d));
+            }
+        }
+        for (origin, d) in copies {
+            self.native_own_copy_at(origin, t, d);
+        }
         if self.realm_held {
             let reason = match self.hold_reason {
                 Some(r) if !self.interp_runs => r,
@@ -203,7 +245,19 @@ impl Model {
         }
         // Unknown code can install an own member even when the intrinsic
         // prototype refuses additions. Ordinary reads replay that write.
-        builtins::note_native_write(self, holder, None, "built-in object given to unknown code");
+        // Whole program (owner premise 2026-11-19), unknown code never
+        // writes an intrinsic it reaches through a handed value; program
+        // stores onto it are recorded where they are made, and the field
+        // sink below still hands their values over. Code the analysis does
+        // not see (`foreign_code`) may.
+        if self.foreign_code() {
+            builtins::note_native_write(
+                self,
+                holder,
+                None,
+                "built-in object given to unknown code",
+            );
+        }
         let r = reason
             .unwrap_or_else(|| self.reason("field of a built-in object interpreted code may read"));
         let all = self.all_fields(holder);

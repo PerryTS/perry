@@ -125,7 +125,7 @@ fn open_chain_still_takes_the_number_key_write() {
 fn fn_program(decl: &str, store: &str, call: &str) -> String {
     unseen(&format!(
         "class N {{ v = 1; }}
-        const top: any = (globalThis as any).someHost;
+        const top: any = external();
         {store}
         {decl}
         function run(n: N): number {{ try {{ {call}; }} catch {{}} return /*A*/ n.v; }}

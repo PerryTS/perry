@@ -27,6 +27,15 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// An eval-like source site runs interpreted code when its body runs
+    /// (`Cons::InterpRuns`), not from the start of the solve.
+    pub(crate) fn interp_site(&mut self, why: &str) {
+        let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let n = self.tok_node(gt);
+        let r = self.m.reason(why);
+        self.m.cons(n, Cons::InterpRuns { reason: r });
+    }
+
     pub(crate) fn to_sink(&mut self, v: NodeId, why: &str) {
         let r = self.m.reason(why);
         self.m.sink_node(v, r);
@@ -524,6 +533,24 @@ impl<'a> Gen<'a> {
     }
 
     /// The key of a computed READ or method call. `Symbol.iterator` & co.:
+    /// HasBinding of a `with` object environment (9.1.1.2.1; perry-runtime
+    /// object/with_env.rs `js_with_has_binding`): HasProperty( o, name ),
+    /// then Get( o, @@unscopables ) and, on an object, Get( it, name ),
+    /// ToBoolean'd. On a Proxy each runs its trap (`has`, `get`).
+    fn with_has_binding(&mut self, o: NodeId, property: &str) {
+        let a = self.m.atom(property);
+        self.m.cons(
+            o,
+            Cons::HasProp {
+                key: Key::Named(a),
+                idx: NO_NODE,
+            },
+        );
+        let us = self.m.atom("@@__perry_wk_unscopables");
+        let u = self.load(o, Key::Named(us));
+        self.load(u, Key::Named(a));
+    }
+
     /// the atom of `Expr::WellKnownSymbol` is `@@__perry_wk_<name>`, one
     /// symbol per name, so the read names it. Stores keep
     /// `Key::Any`, which every named read sees; as an atom it can only
@@ -815,6 +842,7 @@ impl<'a> Gen<'a> {
         let out = self.tmp("nspair");
         self.m.edge(ri, out);
         self.m.edge(rg, out);
+        self.last_ns_generic = Some(rg);
         out
     }
 
@@ -991,6 +1019,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.with_has_binding(o, property);
                 let a = self.m.atom(property);
                 let out = self.load(o, Key::Named(a));
                 let fb = self.expr(fx, fallback);
@@ -1013,6 +1042,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.with_has_binding(o, property);
                 let v = self.expr(fx, value);
                 let a = self.m.atom(property);
                 self.store(
@@ -1321,13 +1351,16 @@ impl<'a> Gen<'a> {
             Expr::InstanceOf { expr, ty, ty_expr } => {
                 let lhs = self.expr(fx, expr);
                 // The right-hand side is a value: the dynamic type
-                // expression, or the user class `ty` names (codegen
+                // expression, the user class `ty` names (codegen
                 // `class_ids`: a local or imported user class, called with
-                // its class value). InstanceofOperator runs its
-                // `@@hasInstance` (GetMethod) either way.
+                // its class value), else the global binding `ty` names,
+                // which this program site reads (owner 2026-11-24 RTREAD
+                // (B): it sees the program's store there).
+                // InstanceofOperator runs its `@@hasInstance` (GetMethod)
+                // either way.
                 let rhs = match ty_expr {
                     Some(t) => Some(self.expr(fx, t)),
-                    None => self.instanceof_class(mi, ty),
+                    None => self.instanceof_class(mi, ty).or_else(|| self.global_binding(ty)),
                 };
                 if let Some(tv) = rhs {
                     // Symbol.hasInstance is a protocol method, called with
@@ -1433,13 +1466,11 @@ impl<'a> Gen<'a> {
                 let dst = self.private_getter_or_load(mi, object, o, a);
                 // S8: on the global sentinel a name the main realm does not
                 // declare is [[Get]] on the global object (`loads::tok_load`);
-                // in a module a Worker may run, the Worker global's own
-                // native of that name (perry-stdlib worker_threads
-                // worker_surface.rs: `postMessage`, `addEventListener`, …)
-                // may be the value as well: unknown to the model.
+                // in a module a Worker may run, also what the Worker global's
+                // own member of that name holds, as the realm declares it
+                // (`builtins::worker_global_member`).
                 if self.bare_user_global(mi, object, property) && self.m.worker_side_module(mi) {
-                    self.m.add_top(dst, |_| format!("Worker global {property}"));
-                    self.m.add_prim(dst, prim::ALL);
+                    crate::builtins::worker_global_member(&mut self.m, property, dst);
                 }
                 self.field_reads.push(dst);
                 if !component {
@@ -1988,6 +2019,7 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        self.m.cons(o, Cons::DeleteIdx { idx: k, reason: r });
                     }
                     other => {
                         let _ = self.expr(fx, other);

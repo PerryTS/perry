@@ -539,13 +539,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
 
         // Path operations
-        Expr::PathJoin(a, b) => Expr::PathJoin(
-            Box::new(substitute_expr(a, substitutions)),
-            Box::new(substitute_expr(b, substitutions)),
+        Expr::PathJoin(args) => Expr::PathJoin(
+            args.iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
-        Expr::PathWin32Join(a, b) => Expr::PathWin32Join(
-            Box::new(substitute_expr(a, substitutions)),
-            Box::new(substitute_expr(b, substitutions)),
+        Expr::PathWin32Join(args) => Expr::PathWin32Join(
+            args.iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
         Expr::PathWin32 { method, args } => Expr::PathWin32 {
             method: *method,

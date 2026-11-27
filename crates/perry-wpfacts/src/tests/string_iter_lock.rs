@@ -17,7 +17,7 @@ fn facts_of(key: &str, src: &str) -> ProgramFacts {
         export {{}};
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
-        const f: any = (globalThis as any)[process.argv[2] ?? "Object"];
+        declare function opaque(): any; const f: any = opaque();
         const u: any = f(process.argv[3]);
         u[{key}] = (q: any) => q;
         const s: any = process.argv.length > 9 ? [1] : "ab";
@@ -82,13 +82,12 @@ fn an_argument_given_to_a_string_iterator_next_reaches_no_one() {
     assert!(proven(&v), "{r:?} {v:?}");
 }
 
-/// Control: `return` is absent on `%StringIteratorPrototype%`, which takes
-/// adds; a store of `return` into an unknown value may add it there, and
-/// `IteratorClose` on the `break` calls it with the iterator as `this`
-/// (7.4.11 GetMethod(iterator, "return")): the stored function writes
-/// through `this`.
+/// `return` is absent on `%StringIteratorPrototype%`, which takes adds; a
+/// store of `return` into an unknown value adds none there
+/// (P-N1 (owner 2026-11-23): a value the analysis does not model is never a built-in prototype), so `IteratorClose` on the `break` calls no stored
+/// function and `it.box` stays the `Svc`.
 #[test]
-fn a_store_of_return_may_add_what_iterator_close_calls() {
+fn a_store_of_return_into_an_unknown_value_adds_nothing_iterator_close_calls() {
     let (r, v) = receivers(
         "\"z\"",
         "u[\"return\"] = function (this: any) { this.box = u; return {}; }; \
@@ -96,7 +95,7 @@ fn a_store_of_return_may_add_what_iterator_close_calls() {
          for (const c of { [Symbol.iterator]: () => it }) { console.log(c); break; } \
          console.log(g(it.box));",
     );
-    assert!(!proven(&v), "{r:?} {v:?}");
+    assert!(proven(&v), "{r:?} {v:?}");
 }
 
 /// Control: `next` written on the string iterator itself is an own key,

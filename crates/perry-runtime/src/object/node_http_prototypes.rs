@@ -1174,19 +1174,20 @@ unsafe fn incoming_init(
     one_pass
 }
 
-/// Is `obj` exactly on the request layout's keys (born on it, or on its keys
-/// under a derived chain; no shadow bit), so each of its keys names its slot?
+/// Is `obj` on the request layout's keys (born on it, on its keys under a
+/// derived chain, or on keys added after them; no shadow bit), so each of
+/// the layout's keys names its slot?
 ///
 /// # Safety
 /// `obj` is a live object header.
 #[inline]
 unsafe fn on_incoming_layout(obj: *const ObjectHeader) -> bool {
-    // Born on the layout and still on it: one compare.
-    if (*obj).parent_class_id == layouts::INCOMING_MESSAGE::WORD {
-        return true;
-    }
-    crate::node_stream::instance_birth::instance_layout(obj)
-        .is_some_and(|desc| (*desc).layout_id == layouts::INCOMING_MESSAGE::WORD)
+    // Born on the layout and still on it, or on a shape that descends from
+    // it by key adds (`req[sym] = v`), whose record names it as its runtime
+    // base: the layout's keys keep their slots. A shadowed word (overflow
+    // or attribute variant) declines.
+    crate::object::shapes::runtime_base_of_word((*obj).parent_class_id)
+        == layouts::INCOMING_MESSAGE::WORD
 }
 
 /// The word in `slot` of a request on its layout ([`on_incoming_layout`]),
@@ -1672,6 +1673,68 @@ mod tests {
         });
     }
     fn no_methods(_: &mut crate::native_payload::PayloadPrototype) {}
+
+    /// A program key add (`res.write = f`) moves the response to a dynamic
+    /// shape whose record names the response layout as its runtime base:
+    /// the payload is still read from its fixed slot, no key lookup.
+    #[test]
+    fn a_program_key_add_keeps_the_response_layout_as_runtime_base() {
+        on_a_fresh_thread(|| unsafe {
+            static FAMILY: crate::native_payload::NativePayloadFamily =
+                crate::native_payload::NativePayloadFamily {
+                    class_id: crate::native_class_ids::HTTP_SERVER_RESPONSE,
+                    links_owner: false,
+                    name: "ServerResponse",
+                    constructor_export: None,
+                    constructor_length: 0,
+                    install_prototype: no_methods,
+                };
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let proto = super::ensure_http_prototype(super::HttpProto::ServerResponse);
+            let req = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
+            let res = super::js_node_http_server_response_birth(proto, req);
+            let obj = (res.to_bits() & POINTER_MASK) as usize;
+            assert!(crate::native_payload::attach_to_object(
+                res, &FAMILY, 7u64, 0
+            ));
+            let born = (*(obj as *const ObjectHeader)).parent_class_id;
+            let cell = crate::native_payload::payload_cell_of_object(obj as *const ObjectHeader);
+            assert!(cell.is_some());
+            crate::object::js_object_set_field_by_name(
+                obj as *mut ObjectHeader,
+                (atom("perryAddedKey") & POINTER_MASK) as *const crate::StringHeader,
+                3.0,
+            );
+            let word = (*(obj as *const ObjectHeader)).parent_class_id;
+            assert_ne!(word, born, "the add leaves the response layout's word");
+            assert_eq!(
+                crate::object::shapes::runtime_base_of_word(word),
+                crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+                "the added-to shape names the response layout as its base"
+            );
+            assert_eq!(
+                crate::native_payload::payload_cell_of_object(obj as *const ObjectHeader),
+                cell,
+                "the payload is read from the base layout's slot"
+            );
+            assert_eq!(get(obj, "perryAddedKey"), 3.0f64.to_bits());
+            assert_eq!(get(obj, "statusCode"), 200.0f64.to_bits());
+            // An ordinary object with other keys has no base.
+            let plain = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
+            let p = (plain.to_bits() & POINTER_MASK) as usize;
+            crate::object::js_object_set_field_by_name(
+                p as *mut ObjectHeader,
+                (atom("perryAddedKey") & POINTER_MASK) as *const crate::StringHeader,
+                1.0,
+            );
+            assert_eq!(
+                crate::object::shapes::runtime_base_of_word(
+                    (*(p as *const ObjectHeader)).parent_class_id
+                ),
+                0
+            );
+        });
+    }
 
     /// The response layout lists the payload key: the attach fills its slot,
     /// and the response stays on its layout (no key-add transition).

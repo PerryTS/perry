@@ -643,6 +643,8 @@ JS_ALLOC_RE = re.compile(
     # its coerced pointer across the lowering of `base`. Verified to exist
     # before being added, per the extrapolated-suffix warning below.
     r"url_coerce_string|"
+    # Its optional-base twin (null for `undefined`, else the same coercion).
+    r"url_coerce_base|"
     # #10762's `_box` twins of the two coercions: the `String(x)` / `${x}`
     # lowerings now call these instead of `js_string_coerce` /
     # `js_template_string_coerce`, and return the NaN-boxed result -- a heap
@@ -1844,7 +1846,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_suppressed_error_new",
     "js_symbol_new",
     "js_text_decoder_new",
-    "js_url_coerce_string",
+    "js_url_coerce_base", "js_url_coerce_string",
     "js_value_to_string_with_encoding",
     "js_value_to_string_with_encoding_or_radix",
     "js_writable_stream_new_from_sink_object",

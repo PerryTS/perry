@@ -22,8 +22,9 @@ fn proven(src: &str) -> bool {
 fn program(bind: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         class Inner {{ witness = 1; }}
-        class Box {{ a = new Inner(); b: any = (globalThis as any).hostVal(); }}
+        class Box {{ a = new Inner(); b: any = external(); }}
         function read(box: any) {{
             {bind}
             const v = box[k];
@@ -64,7 +65,7 @@ fn reassigned_key_names_none() {
 fn constant_key_set_reads_no_prototype_member() {
     assert!(proven(
         &program(r#"let k = "a"; if (box.b === "t") k = "b";"#)
-            .replace("b: any = (globalThis as any).hostVal();", "b = \"s\";")
+            .replace("b: any = external();", "b = \"s\";")
     ));
 }
 

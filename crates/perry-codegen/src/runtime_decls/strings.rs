@@ -1914,8 +1914,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_values_value", I64, &[DOUBLE]);
     module.declare_function("js_object_entries", I64, &[I64]);
     module.declare_function("js_object_entries_value", I64, &[DOUBLE]);
-    module.declare_function("js_path_join", I64, &[I64, I64]);
-    module.declare_function("js_path_win32_join", I64, &[I64, I64]);
     // path.win32 sub-namespace (issue #1162)
     module.declare_function("js_path_win32_dirname", I64, &[I64]);
     module.declare_function("js_path_win32_basename", I64, &[I64]);
@@ -1948,8 +1946,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // rooted across the second's materialisation. See
     // perry-runtime/src/path/value_args.rs.
     module.declare_function("js_path_arg_header", I64, &[DOUBLE]);
-    module.declare_function("js_path_join_value", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_path_win32_join_value", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_path_join_values", I64, &[PTR, I32]);
+    module.declare_function("js_path_win32_join_values", I64, &[PTR, I32]);
     module.declare_function("js_path_resolve_join_value", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_win32_resolve_join_value", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_path_basename_ext_value", I64, &[DOUBLE, DOUBLE]);

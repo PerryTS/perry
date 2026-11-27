@@ -257,8 +257,9 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         let scope = crate::gc::RuntimeHandleScope::new();
         let args = scope.root_raw_const_ptr(arr_ptr);
         let arg = |i: usize| -> f64 {
-            let header = args.get_raw_const_ptr::<crate::array::ArrayHeader>();
-            *(crate::array::array_elements_ptr(header) as *const f64).add(i)
+            args.with_const_ptr::<crate::array::ArrayHeader, _>(|header| {
+                *(crate::array::array_elements_ptr(header) as *const f64).add(i)
+            })
         };
 
         // No format string → empty result. Node returns "" for
@@ -530,6 +531,27 @@ mod s_placeholder_policy_tests {
 
     fn boxed(ptr: *mut crate::object::ObjectHeader) -> f64 {
         crate::value::js_nanbox_pointer(ptr as i64)
+    }
+
+    /// Every placeholder reads its argument through the rooted array handle.
+    #[test]
+    fn placeholders_read_each_argument_in_order() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let fmt = crate::string::js_string_from_bytes(b"%d-%s".as_ptr(), 5);
+            let x = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+            let args = crate::array::js_array_alloc(3);
+            let args =
+                crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(fmt as i64));
+            let args = crate::array::js_array_push_f64(args, 3.0);
+            let args =
+                crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(x as i64));
+            let out = js_util_format(args);
+            assert_eq!(
+                crate::builtins::formatting::jsvalue_string_content(out).as_deref(),
+                Some("3-x")
+            );
+        }
     }
 
     /// #9463: which values `%s` inspects instead of `String()`-coercing.

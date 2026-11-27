@@ -156,7 +156,7 @@ forwarding stub without queueing it.
 `PERRY_GC_SCAVENGE` is on by default and lets nursery pressure route to the
 direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 16 MiB by default
-<!-- gc-fact: SCAVENGE_NURSERY_CAP_DEFAULT_MB = 16 in crates/perry-runtime/src/gc/policy.rs -->.
+<!-- gc-fact: SCAVENGE_NURSERY_CAP_DEFAULT_MB = 16 in crates/perry-runtime/src/gc/policy/nursery_cap.rs -->.
 The effective cap is a survival-driven ladder over that base, counted in
 quarters of it
 <!-- gc-fact: NURSERY_CAP_SCALE_UNIT = 4 in crates/perry-runtime/src/gc/tenuring.rs -->:

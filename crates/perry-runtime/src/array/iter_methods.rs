@@ -1629,6 +1629,11 @@ fn render_callback_plain(cb_boxed: f64) -> String {
     jsvalue_to_owned_string(cb_boxed)
 }
 
+/// Throw V8's `<typeof> <value> is not a function` TypeError for `value`.
+pub(crate) fn throw_value_not_a_function(value: f64) -> ! {
+    throw_not_a_function(render_callback_typeof(value))
+}
+
 #[cold]
 fn throw_not_a_function(rendered: String) -> ! {
     let message = format!("{} is not a function", rendered);

@@ -348,8 +348,6 @@ fn collect_used_new_fields_in_expr(
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. }
         | Expr::MathPow(left, right)
-        | Expr::PathJoin(left, right)
-        | Expr::PathWin32Join(left, right)
         | Expr::ObjectIs(left, right)
         | Expr::ObjectHasOwn(left, right)
         | Expr::PathRelative(left, right)
@@ -516,7 +514,9 @@ fn collect_used_new_fields_in_expr(
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. }
         | Expr::MathMin(args)
-        | Expr::MathMax(args) => {
+        | Expr::MathMax(args)
+        | Expr::PathJoin(args)
+        | Expr::PathWin32Join(args) => {
             for arg in args {
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }

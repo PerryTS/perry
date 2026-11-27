@@ -620,6 +620,13 @@ pub struct ElisionFacts {
     /// sees no lane and keeps its ordinary tiers.
     pub rest_lane_reads: std::collections::BTreeMap<u32, u32>,
     pub indexed_metadata_pristine: bool,
+    /// GUARDS1 class 3: compiled code never writes a typed view's metadata
+    /// accessors on a typed-array or Buffer prototype nor relinks one
+    /// (wpfacts `typed_metadata_written`), and no interpreted code runs: the
+    /// runtime's `PERRY_TYPED_NAMED_PROPS_INVALIDATED` is never set, so the
+    /// typed metadata fast paths test nothing
+    /// (`property_get::typed_named::emit_named_props_pristine`).
+    pub typed_metadata_unwritten: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the
     /// program's life (FVA 3.4): a call of one is its declaration, unguarded.

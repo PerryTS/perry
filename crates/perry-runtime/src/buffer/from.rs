@@ -289,11 +289,14 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
     Some(result.with_mut_ptr(|r| r))
 }
 
+/// Node's `Buffer.from` only calls a callable `@@toPrimitive` and only takes a
+/// string result; anything else falls through to its argument-type error.
 unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
-    let primitive = crate::symbol::js_to_primitive(value, 2);
-    if primitive.to_bits() == value.to_bits() {
+    let crate::value::to_string_class_ref::CustomToPrimitiveOutcome::Primitive(primitive) =
+        crate::value::to_string_class_ref::custom_to_primitive(value, b"string")
+    else {
         return None;
-    }
+    };
     let primitive_value = crate::JSValue::from_bits(primitive.to_bits());
     if primitive_value.is_any_string() {
         return Some(js_buffer_from_value(primitive.to_bits() as i64, encoding));
@@ -381,8 +384,9 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
         buf
     } else if let Some(buf) = unsafe { buffer_from_object_to_primitive(value_f64, encoding) } {
         buf
+    } else if crate::array::clean_arr_ptr(ptr as *const ArrayHeader).is_null() {
+        throw_invalid_buffer_from_first_arg()
     } else {
-        // Assume it's an array of numbers
         js_buffer_from_array(ptr as *const ArrayHeader)
     }
 }

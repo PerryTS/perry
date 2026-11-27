@@ -26,9 +26,11 @@ mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
 pub use native_protocol::sentinel_user_global;
-pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
+pub(crate) use native_protocol::{
+    array_methods_writes, census_native_op_writes, census_native_written, typed_metadata_writes,
+};
 pub use undeclared::{
-    builtin_function, declared_data_global, global_object, global_self_key, global_store_escapes,
+    builtin_function, declared_data_global, global_object, global_store_escapes,
     native_may_be, plain_namespace_own_store, realm_reads_store, undeclared,
 };
 pub(crate) mod regex_tail;
@@ -36,8 +38,9 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
-    run_function, run_member,
+    construct_layout, declared_construct, declared_member, declared_proto_method,
+    declared_receiver_method, declared_static, declared_super_construct, run_construct,
+    run_function, run_member, run_native, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -51,10 +54,10 @@ pub use native_protocol::{
     global_user_key, global_user_method, global_value_written, is_builtin_module,
     native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
     native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_writers_why, native_written, native_written_by, note_global_in_top,
-    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
-    note_realm_held, program_global_fn, require_parts, settle_native_given, GlobalAnyRead,
-    WriteValue,
+    native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
+    note_global_holder, note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
+    note_realm_held, program_global_fn, require_parts, runtime_global_call, settle_native_given,
+    GlobalAnyRead, WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
@@ -185,6 +188,15 @@ fn builtin_module_names() -> impl Iterator<Item = &'static str> {
 /// `spec` names the builtin `name` (`fs`, `node:fs`).
 fn same_builtin(name: &str, spec: &str) -> bool {
     name.strip_prefix("node:").unwrap_or(name) == spec.strip_prefix("node:").unwrap_or(spec)
+}
+
+/// Does the realm declare `key` as an own member of the `node:vm` module
+/// object (`Script`, `runInNewContext`, ...)?
+fn vm_member(m: &Model, key: &str) -> bool {
+    m.declarations
+        .named("node:vm", m)
+        .and_then(|h| m.declarations.property(h, key, m))
+        .is_some()
 }
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
@@ -357,8 +369,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
             crate::unksrc::held("method", why, call, f);
         }
     }
-    // Unknown code runs, handed values or not: it holds the realm.
-    if !m.realm_held {
+    // Unknown code runs, handed values or not: it holds the realm where code
+    // beside the program may name it (`Model::realm_nameable`).
+    if !m.realm_held && m.realm_nameable() {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
         if m.keysnap.is_some() {
             m.keysnap_at(
@@ -512,18 +525,117 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
     out
 }
 
+/// RTREAD14: the event the runtime calls a handler it reads by global name
+/// with (`Gen::runtime_global_handlers`), born at that call when a value
+/// first reaches the handler's field: a MessageEvent (perry-runtime
+/// event_target/message_event.rs `delivery_with_ports`, [[Prototype]]
+/// %MessageEvent.prototype%, no own property) whose [[data]] is the
+/// structured clone of what the parent posted (perry-stdlib
+/// channel_pump.rs `deserialize_message`; thread/clone_write.rs Message
+/// mode): fresh ordinary objects and arrays, Map, Set, Date, RegExp, Error,
+/// ArrayBuffer and typed arrays, each holding the others and any primitive;
+/// never a program object, function or prototype. The same model as the
+/// main side's Worker message (`Gen::worker_host`).
+pub(crate) fn runtime_global_event(m: &mut Model, call: CallId) {
+    let Some(ev) = m.runtime_event else {
+        return;
+    };
+    m.runtime_event_born = true;
+    let mut tree = Vec::new();
+    for what in [
+        "json",
+        "Array",
+        "Map",
+        "Set",
+        "Date",
+        "RegExp",
+        "Error",
+        "ArrayBuffer",
+        "TypedArray",
+    ] {
+        tree.push(site_tmpl(m, call, what));
+    }
+    for &o in &tree {
+        let fa = m.field_any(o);
+        m.add_prim(fa, prim::ALL);
+        for &x in &tree {
+            m.add_tok(fa, x);
+        }
+    }
+    let mev = site_tmpl(m, call, "MessageEvent.prototype");
+    let da = worker_slot_atom(m, "data");
+    let data = m.field_r(mev, da);
+    m.add_prim(data, prim::ALL);
+    for &x in &tree {
+        m.add_tok(data, x);
+    }
+    m.add_tok(ev, mev);
+}
+
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
-    let t = site_tmpl_born(m, call, what, false, false);
+    site_tmpl_in(m, call, what, None)
+}
+
+/// `site_tmpl` for the object `call` returns, and nothing else holds
+/// first, whose contents come from the call operands `need`: born in
+/// `Model::birth_ctx_result`'s context (rule SINKBIRTH).
+pub(crate) fn site_tmpl_result(m: &mut Model, call: CallId, what: &'static str, need: u32) -> Tok {
+    site_tmpl_in(m, call, what, Some(need))
+}
+
+fn site_tmpl_in(m: &mut Model, call: CallId, what: &'static str, result: Option<u32>) -> Tok {
+    let born = |m: &mut Model, what: &'static str| {
+        let site = m.calls[call as usize].site;
+        let tm = site_template(m, site, what, false, false);
+        let ctx = match result {
+            Some(need) => m.birth_ctx_result(call, need),
+            None => m.birth_ctx(call),
+        };
+        m.site_tok(tm, ctx)
+    };
+    let t = born(m, what);
     // A view born without a buffer argument allocates its own
     // (23.2.5.1.1 AllocateTypedArray, 23.2.5.1.6 AllocateTypedArrayBuffer):
     // one ArrayBuffer per birth site.
     if matches!(what, "TypedArray" | "Buffer" | "DataView") {
-        let ab = site_tmpl_born(m, call, "ArrayBuffer", false, false);
+        let ab = born(m, "ArrayBuffer");
         let f = viewed_buffer(m, t);
         m.add_tok(f, ab);
     }
     t
+}
+
+/// Rule PXDEFINE: the descriptor object a `defineProperty` trap call
+/// `call` is passed (10.5.6 step 6, 6.2.6.4 FromPropertyDescriptor of the
+/// data descriptor of an ordinary [[Set]], 10.1.9.2 steps 2.d / 2.e): a new
+/// ordinary object, one per trap call, with `value` ⊇ `value`, the Boolean
+/// `writable`, `enumerable`, `configurable` (step 2.e; 2.d passes `value`
+/// alone) and no `get` / `set`.
+pub(crate) fn trap_descriptor(m: &mut Model, call: CallId, value: NodeId) -> Tok {
+    let tm = site_template(m, call, "descriptor", false, false);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
+    let va = m.atom("value");
+    let fv = m.field(t, va);
+    m.edge(value, fv);
+    for name in ["writable", "enumerable", "configurable"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::BOOL | prim::UNDEF);
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::UNDEF);
+    }
+    t
+}
+
+/// Rule PXAPPLY: the argument list Array a Proxy trap is passed
+/// (CreateArrayFromList, 7.3.16), born at `call`.
+pub(crate) fn trap_args_array(m: &mut Model, call: CallId) -> Tok {
+    site_tmpl_born(m, call, "Array", false, false)
 }
 
 /// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
@@ -1062,6 +1174,25 @@ pub(crate) enum NativeFamily {
     Declared(&'static str),
 }
 
+impl NativeFamily {
+    /// The own prototype a lookup on a value of the family passes before
+    /// `Object.prototype`, by the kind name `native_chain` takes (as
+    /// `chain_holder` names it for a receiver token).
+    pub(crate) fn chain_holder(self) -> &'static str {
+        match self {
+            NativeFamily::Str => "String",
+            NativeFamily::Array => "Array",
+            NativeFamily::Collection(w) | NativeFamily::Declared(w) => w,
+            NativeFamily::RegExp => "RegExp",
+            NativeFamily::Buffer => "Buffer",
+            NativeFamily::Num => "Number",
+            NativeFamily::Promise => "Promise",
+            NativeFamily::Bool => "Boolean",
+            NativeFamily::TypedArray => "TypedArray",
+        }
+    }
+}
+
 /// A realm prototype `what` whose declared fresh objects form a
 /// `NativeFamily::Declared` (whole-program only: a unit does not see the
 /// other units' stores onto it).
@@ -1305,8 +1436,12 @@ pub(crate) fn intrinsic_miss_on(
 /// past it (a Buffer's: `Uint8Array.prototype`, `%TypedArray%.prototype`;
 /// OrdinaryGet, ECMA-262 10.1.8.1, walks them all). A program store onto
 /// any of them is a write this lookup sees, with or without the realm held.
-fn native_chain(holder: &str) -> Vec<String> {
-    let mut out = vec![holder.to_string()];
+pub(crate) fn native_chain(holder: &str) -> Vec<String> {
+    // Each prototype under its constructor's name (`realm_proto_value`).
+    let mut out = vec![holder
+        .strip_suffix(".prototype")
+        .unwrap_or(holder)
+        .to_string()];
     let own = loads::view_chain(Some(holder)).or_else(|| match holder.ends_with(".prototype") {
         true => members::realm_entry(holder),
         false => members::realm_entry(&format!("{holder}.prototype")),
@@ -1823,6 +1958,11 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
         TokKind::Obj(tm, _) => !matches!(&m.tmpls[*tm as usize].kind,
             TmplKind::BObj { what, .. } if members::bobj_family(what) == Family::Function),
         TokKind::Proto(_) | TokKind::ObjectProto => true,
+        // A realm namespace object the realm describes with [[Prototype]]
+        // `Object.prototype` (`globalThis`, `Math`, `JSON`, `Reflect`,
+        // `process`, a node module namespace): an ordinary object, no
+        // function (`members::ns_ordinary_object`).
+        TokKind::Builtin(ns) => members::ns_ordinary_object(*ns),
         _ => false,
     }
 }
@@ -2125,6 +2265,35 @@ pub(crate) fn iterates_indices(what: &str) -> bool {
     members::bobj_family(what) == Family::Box
 }
 
+/// Rule RP2-false (`Model::array_arm_may_see`): may a builtin object of kind
+/// `what` be an Array object? A box whose creator allocates an ordinary or a
+/// null-prototype object (`members::box_chain`) is not, nor is a value of a
+/// family the model describes as no Array (a collection, an iterator, a
+/// promise, an error, a plain object); an array box, an undescribed box, a
+/// wrapper (`Object(v)` may be `v`) and an opaque kind may be.
+pub(crate) fn bobj_may_be_array(what: &str) -> bool {
+    match members::bobj_family(what) {
+        Family::Box => !matches!(
+            members::box_chain(what),
+            members::BoxChain::Object | members::BoxChain::Null
+        ),
+        fam => family_may_be_array(fam),
+    }
+}
+
+/// Rule RP2-false: may the builtin namespace value `ns` be an Array object
+/// (`members::ns_chain`: the family of its chain)?
+pub(crate) fn ns_may_be_array(ns: BuiltinNs) -> bool {
+    family_may_be_array(members::ns_chain(ns))
+}
+
+fn family_may_be_array(fam: Family) -> bool {
+    matches!(
+        fam,
+        Family::Array | Family::Box | Family::Wrapper | Family::Opaque
+    )
+}
+
 /// Does the realm give the namespace or constructor `ns` no enumerable own
 /// property, so that a copy of its own enumerable properties (`{...ns}`,
 /// `Object.assign`, `Object.values`) reads only what the program put on it
@@ -2186,10 +2355,21 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
 /// `name` are defined non-enumerable (10.2.9 SetFunctionName, 10.2.10
 /// SetFunctionLength), as is a constructor's `prototype`. Its owner decides:
 /// a function of a host object (`fs.realpath` owns an enumerable `native`)
-/// keeps its own properties out of the model.
+/// keeps its own properties out of the model, unless the realm's
+/// declaration of the function itself gives it none: the runtime makes a
+/// function object it declares with the own properties of that
+/// declaration (`RealmEntry::own`, as rule R1 reads them), so a callable
+/// declaration (`parseFloat`, 19.2.5: `length` and `name`, non-enumerable)
+/// whose own properties are all non-enumerable, string and symbol keys
+/// alike (20.1.2.1 step 3.a.ii copies both), has none to copy.
 pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
     let owner = identity.split(['.', '[']).next().unwrap_or("");
     ns_by_name(owner).is_some_and(realm_own_props_unenumerable)
+        || members::realm_entry(identity).is_some_and(|e| {
+            use perry_hir::realm_manifest::RealmKind as K;
+            matches!(e.kind, K::Function | K::Method | K::Constructor)
+                && e.own.iter().all(|p| !p.enumerable)
+        })
 }
 
 /// Does the realm create a builtin object of kind `what` with no enumerable
@@ -2591,6 +2771,12 @@ pub(super) fn family_any(
         Some(_) => {
             let n = chain_any_node(m, fam, what, key);
             m.edge(n, dst);
+            // An accessor's getter runs on the value read (`of`), as its
+            // named read does: its result depends on the receiver, so it
+            // is no part of the shared chain node.
+            for a in chain_accessors(m, fam, what, key) {
+                loads::family_member(m, of, fam, what, a, dst);
+            }
         }
         None => {
             family_ctor(m, fam, dst);
@@ -2644,14 +2830,40 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             object_method = true;
             continue;
         }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            continue;
+        }
         let a = m.atom(name);
-        loads::family_member(m, fam, what, a, n);
+        loads::family_member(m, None, fam, what, a, n);
     }
     if object_method {
         let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
         m.add_tok(n, f);
     }
     n
+}
+
+/// The accessors of family `fam`'s intrinsic chain (of a value of kind
+/// `what`) whose names computed key `key` may spell: their getters run per
+/// receiver (`family_any`), never in the shared `chain_any_node`.
+fn chain_accessors(m: &mut Model, fam: Family, what: Option<&'static str>, key: Key) -> Vec<Atom> {
+    let mut out = vec![];
+    for name in members::chain_names(fam).into_iter().flatten() {
+        if Model::proto_link(name) || !m.key_may_name_str(key, name) {
+            continue;
+        }
+        if members::own(fam, name).is_none()
+            && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+        {
+            continue;
+        }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            out.push(m.atom(name));
+        }
+    }
+    out
 }
 
 /// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the
@@ -2790,6 +3002,22 @@ pub(crate) fn native_own_load(
                 return true;
             }
         }
+        TokKind::BuiltinFn(Native::Member { identity, .. })
+            if name == "prototype" && realm_ctor_prototype(identity).is_some() =>
+        {
+            // ECMA-262 10.2.5 MakeConstructor: a realm constructor's own
+            // `prototype` is the realm prototype it declares
+            // (`EventTarget.prototype`), a value of its own whose lookups
+            // read that declaration's chain (`loads::tok_load`).
+            let born = realm_ctor_prototype(identity).expect("guarded");
+            if opaque_written(m, holder, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                let p = realm_proto_value(m, born);
+                m.add_tok(dst, p);
+            }
+            return true;
+        }
         TokKind::BuiltinFn(Native::Member { .. }) => {
             let property = m.native_property(holder, &name);
             let value = property.and_then(|p| p.native);
@@ -2817,6 +3045,226 @@ pub(crate) fn native_own_load(
         _ => {}
     }
     false
+}
+
+/// The realm prototype realm constructor `identity` holds as its own
+/// `prototype` (a reference the realm declares) when the realm declares
+/// every link of that prototype's chain (`members::realm_born`).
+pub(crate) fn realm_ctor_prototype(
+    identity: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
+    let e = members::realm_entry(identity).filter(|e| e.kind == RealmKind::Constructor)?;
+    let p = e.own.iter().find(|p| !p.symbol && p.key == "prototype")?;
+    let RealmOwnValue::Reference(r) = p.value else {
+        return None;
+    };
+    members::realm_born(r)
+}
+
+/// The token of realm prototype `born` taken as a value: a native
+/// prototype under its declaration's name. Its declared accessors run per
+/// receiver (`realm_proto_getter`), so their keys are accessor keys
+/// (`Model::add_accessor_atom`: the lookups walk their holders).
+pub(crate) fn realm_proto_value(
+    m: &mut Model,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+) -> Tok {
+    // One object, one token: the name a builtin object of the kind reads
+    // its prototype under (`loads` proto of `what`, `native_chain`), the
+    // constructor's (`URL` for `URL.prototype`).
+    let p = native_proto(m, born.name.strip_suffix(".prototype").unwrap_or(born.name));
+    let mut at = Some(born);
+    while let Some(e) = at {
+        for o in e.own.iter() {
+            if realm_chain_getter(born, o).is_some() || realm_chain_setter(born, o).is_some() {
+                let n = match (o.symbol, o.key.strip_prefix("@@")) {
+                    (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+                    (true, None) => continue,
+                    (false, _) => o.key.to_string(),
+                };
+                let a = m.atom(&n);
+                m.add_accessor_atom(a);
+            }
+        }
+        at = e.proto.and_then(members::realm_entry);
+    }
+    p
+}
+
+/// The realm declaration of native prototype token `t` when it is a
+/// realm-born prototype (`realm_proto_value`).
+pub(crate) fn realm_proto_of(
+    m: &Model,
+    t: Tok,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    match &m.toks[t as usize] {
+        TokKind::NativeProto(n, None) => realm_proto_named(n),
+        _ => None,
+    }
+}
+
+/// The realm prototype a builtin kind `what` (`URL`, or a declaration's
+/// `fresh` kind `EventTarget.prototype`) reads its chain from, when the
+/// realm declares every link of it (`members::realm_born`).
+pub(crate) fn realm_proto_named(
+    what: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let base = what.strip_suffix(".prototype").unwrap_or(what);
+    members::realm_born(&format!("{base}.prototype"))
+}
+
+/// The declared getter of own property `o` when the lookup of its key on
+/// `born`'s chain finds `o` (an accessor whose getter the realm declares
+/// effects for).
+fn realm_chain_getter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    o: &perry_hir::realm_manifest::RealmOwn,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    let RealmOwnValue::Accessor { get: Some(g), .. } = o.value else {
+        return None;
+    };
+    let name = match (o.symbol, o.key.strip_prefix("@@")) {
+        (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+        (true, None) => return None,
+        (false, _) => o.key.to_string(),
+    };
+    match members::realm_chain_find(born, &name) {
+        members::RealmFind::Own(p, _) if std::ptr::eq(p, o) => {
+            members::realm_entry(g).filter(|e| !e.effects.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// What a store through own accessor `o` of `born`'s chain runs when the
+/// lookup of its key finds `o` (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor
+/// steps 3-7): its setter. `Object.prototype`'s (`__proto__`) is not one:
+/// that object is its own token on every chain, whose accessor the Annex B
+/// lookups run (`accessor_lookup`).
+fn realm_chain_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    o: &perry_hir::realm_manifest::RealmOwn,
+) -> Option<RealmSetter> {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    let RealmOwnValue::Accessor { set, .. } = o.value else {
+        return None;
+    };
+    let name = match (o.symbol, o.key.strip_prefix("@@")) {
+        (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+        (true, None) => return None,
+        (false, _) => o.key.to_string(),
+    };
+    let members::RealmFind::Own(p, owner) = members::realm_chain_find(born, &name) else {
+        return None;
+    };
+    if !std::ptr::eq(p, o) || owner.name == "Object.prototype" {
+        return None;
+    }
+    let Some(set) = set else {
+        return Some(RealmSetter::GetterOnly);
+    };
+    Some(
+        match members::realm_entry(set)
+            .filter(|e| !e.effects.is_empty() && effects::interpretable(e.effects))
+        {
+            Some(e) => RealmSetter::Declared(e),
+            None => RealmSetter::Undeclared(format!("{}.{name}", owner.name)),
+        },
+    )
+}
+
+/// The setter a store finds on a realm prototype's chain.
+pub(crate) enum RealmSetter {
+    /// Declared effects: they run with the receiver as `this` and the
+    /// stored value as the argument (`realm_setter_store`).
+    Declared(&'static perry_hir::realm_manifest::RealmEntry),
+    /// No setter (a getter-only accessor): OrdinarySetWithOwnDescriptor
+    /// (10.1.9.2 step 7.b) returns false; strict code's PutValue throws a
+    /// TypeError (13.15.2 step 5.d), the runtime error every `catch` already
+    /// receives (`Model::thrown`), sloppy code does nothing. Either way
+    /// nothing is written and the stored value goes nowhere.
+    GetterOnly,
+    /// A setter without declared effects: the accessor's name.
+    Undeclared(String),
+}
+
+/// The setter of key `a` on the chain of realm prototype token `holder`.
+pub(crate) fn realm_proto_setter(m: &Model, holder: Tok, a: Atom) -> Option<RealmSetter> {
+    let born = realm_proto_of(m, holder)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The setter a store of key `name` finds on the chain of realm prototype
+/// `born` (`realm_chain_setter`).
+pub(crate) fn realm_born_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> Option<RealmSetter> {
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The keys of `holder`'s realm chain a store finds a realm setter under
+/// (`realm_proto_setter`), as atoms.
+pub(crate) fn realm_proto_setter_keys(m: &mut Model, holder: Tok) -> Vec<Atom> {
+    let Some(born) = realm_proto_of(m, holder) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for k in members::realm_chain_keys(born) {
+        let a = m.atom(&k);
+        if realm_proto_setter(m, holder, a).is_some() {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// Setter `e` runs on receiver `origin` with `src` as its argument.
+pub(crate) fn realm_setter_store(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    src: NodeId,
+) {
+    effects::setter_run(m, e, origin, a, src);
+}
+
+/// The getter the realm declares for key `a` on the chain of realm
+/// prototype token `holder`, which runs with each receiver of the lookup
+/// as `this` (ECMA-262 10.1.8.1 OrdinaryGet step 7), never with the
+/// prototype's shared chain value (`loads::tok_load` leaves it out).
+pub(crate) fn realm_proto_getter(
+    m: &Model,
+    holder: Tok,
+    a: Atom,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let born = realm_proto_of(m, holder)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
+        return None;
+    };
+    realm_chain_getter(born, p)
+}
+
+/// `dst` ⊇ what getter `e` returns on receiver `origin`.
+pub(crate) fn realm_getter_load(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    dst: NodeId,
+) {
+    effects::getter_load(m, e, origin, a, dst);
 }
 
 /// Constructibility is the realm declaration's object shape, independent
@@ -2933,21 +3381,28 @@ pub(crate) fn native_namespace_call(
 }
 
 /// The host object a member access on a token of `ns` under `name` reads:
-/// `console` and the stdio streams themselves, and `console` for a call of
-/// one of its methods on the global sentinel (`console.log(x)` lowers to a
-/// call on `GlobalGet(0)`).
+/// a member of `console` or a stdio stream the host owns, and `console` for
+/// a call of one of its own methods on the global sentinel (`console.log(x)`
+/// lowers to a call on `GlobalGet(0)`; the console lowering takes the names
+/// `perry_hir::method_call::console_method_name` accepts). A key the host's
+/// description places on its chain (`console.toString`, `Object.prototype`'s)
+/// or declares absent (`console[Symbol.toPrimitive]`) is no host member: it
+/// reads as on any described namespace. A stream key its description does
+/// not list may be on its undeclared TTY layout: the host's.
 pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs> {
     match ns {
         BuiltinNs::Other
             if call
-                && matches!(
-                    members::ns_member(BuiltinNs::Console, name),
-                    Some(Some(Mem::Fn))
-                ) =>
+                && perry_hir::method_call::console_method_name(name)
+                && members::ns_own_fn(BuiltinNs::Console, name) =>
         {
             Some(BuiltinNs::Console)
         }
-        ns if members::is_host(ns) => Some(ns),
+        ns if members::is_host(ns)
+            && (members::ns_own_member(ns, name) || members::ns_member(ns, name).is_none()) =>
+        {
+            Some(ns)
+        }
         _ => None,
     }
 }
@@ -3148,6 +3603,10 @@ pub(crate) fn builtin_value_sets(m: &Model, t: Tok, a: Atom) -> bool {
 /// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
 /// that reads other members of its receiver), then an unknown method of the
 /// host (`this`). A write later in the solve replays it (`NativeMiss::Call`).
+/// A write of the member's own key whose stored values every record names
+/// calls those values (one that is not callable throws: ECMA-262 7.3.14
+/// Call, its arguments reach no one), beside the native where the write did
+/// not happen (`native_protocol::answer_stored`, as the replay does).
 fn host_call(
     m: &mut Model,
     h: BuiltinNs,
@@ -3158,6 +3617,13 @@ fn host_call(
 ) {
     let t = m.tok(TokKind::Builtin(h));
     let a = m.atom(gate);
+    if gate == n
+        && host_written(m, h, a)
+        && native_protocol::answer_stored(m, t, a, NativeMiss::Call(t, call))
+    {
+        native(m);
+        return;
+    }
     if host_written(m, h, a) {
         // Census: the call hangs off the write that opened the gate, as a
         // replay does.
@@ -3178,17 +3644,38 @@ fn host_call(
 /// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
 /// perry's `process_stdout_write_stub`): it returns a boolean and hands its
 /// receiver to no one. It keeps a binary chunk and the callback in the
-/// stream's state, which the program can read back (`writableBuffer`,
-/// `_writableState`), so the arguments reach unknown code. It reads other
+/// stream's state and writes no key of them (`contract_reason`: Phase B,
+/// owner 2026-11-23); beside foreign code they reach code that may write
+/// them (`writes_any`). It reads other
 /// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     let c = m.calls[call as usize].clone();
-    let r = m.reason(&format!(
+    // The stream's contract: it keeps the chunk and the callback, and the
+    // program reads them back; no one writes them under any key.
+    let r = m.contract_reason(&format!(
         "argument of host {h:?}.write (kept by the stream)"
     ));
     for &a in c.args.iter().chain(c.spread.iter()) {
         m.sink_node(a, r);
+    }
+    // K3 (A): its invoke points, which the contract escape above no longer
+    // runs. A chunk that is no string and no binary view is converted by
+    // ToString (perry `with_write_bytes` -> `js_jsvalue_to_string`); the
+    // callback (the third argument, else the second) is queued as a tick and
+    // called with no receiver and no argument (`schedule_write_callback`),
+    // its throw reported by the host.
+    if !c.spread.is_empty() {
+        return unknown_method(m, call, "spread stream write arguments");
+    }
+    if let Some(&chunk) = c.arg(0) {
+        string_methods::to_prim(m, chunk, "stream write chunk ToString");
+    }
+    let host = m.host_report;
+    for i in [1, 2] {
+        if let Some(&cb) = c.arg(i) {
+            let _ = collections::cb_call_in(m, call, cb, ThisArg::Undef, vec![], host);
+        }
     }
     ret_prim(m, call, prim::BOOL);
 }
@@ -3206,6 +3693,13 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
 /// `args[0]` when no spread precedes it (`CallSite::first_arg_fixed`); else
 /// a spread's elements may be the first as well as later ones. Every other
 /// method keeps `Protocol::Inspect` on each argument but a lone first one.
+/// Rule R2: builtin namespace `ns` is an ordinary object (its chain ends
+/// at `Object.prototype`), which the formatter shows only within the inspect
+/// depth limit; any other is a function or of unknown kind.
+pub(crate) fn ns_is_ordinary(ns: BuiltinNs) -> bool {
+    members::ns_chain(ns) == Family::Object
+}
+
 fn console_args(m: &mut Model, call: CallId, name: &str) {
     let c = m.calls[call as usize].clone();
     let r = m.reason("console argument (formatted by the runtime)");
@@ -3217,31 +3711,22 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         elems.push(dst);
     }
     if !matches!(name, "log" | "info" | "debug" | "error" | "warn" | "trace") {
+        // Rule R2: `console.dir(x, opts)` formats under the options' depth
+        // (console.rs:1738 `decode_dir_depth_option`): any value up to
+        // Infinity, which the solver keeps no constant of, so the hard cap.
+        // Every other method sets no limit of its own (ambient).
+        let dir_opts = name == "dir" && (c.args.len() >= 2 || !c.spread.is_empty());
+        let (floor, ambient) = if dir_opts {
+            (INSPECT_HARD_CAP, false)
+        } else {
+            (INSPECT_DEFAULT_LIMIT, true)
+        };
         for (i, &a) in c.args.iter().enumerate() {
             let first = i == 0 && c.spread.is_empty();
-            let proto = if first {
-                Protocol::InspectShown
-            } else {
-                Protocol::Inspect
-            };
-            m.cons(
-                a,
-                Cons::Implicit {
-                    reason: r,
-                    proto,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(a, r, first, c.region, floor, ambient);
         }
         for &d in &elems {
-            m.cons(
-                d,
-                Cons::Implicit {
-                    reason: r,
-                    proto: Protocol::Inspect,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(d, r, false, c.region, floor, ambient);
         }
         ret_prim(m, call, prim::UNDEF);
         return;
@@ -3282,14 +3767,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         later.push(d);
     }
     for &a in c.args.iter().chain(&elems) {
-        m.cons(
-            a,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::InspectShown,
-                region: c.region,
-            },
-        );
+        m.console_inspect(a, r, true, c.region, INSPECT_DEFAULT_LIMIT, true);
     }
     if !later.is_empty() {
         let agg = m.node_l("console-consumable");
@@ -3392,6 +3870,21 @@ fn ns_method_inner(
         {
             m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
         }
+    }
+    // A solved call through the `node:vm` module object (`const vm =
+    // require("vm"); (0, vm.runInNewContext)(src, ctx)`): its functions
+    // compile and run source text, so interpreted code runs where this call
+    // runs (DECISIONS 225/235), as at the HIR's direct `node:vm` call
+    // (`gen_rest.rs`). Only a member the realm declares on `node:vm` is one
+    // of them: a key it does not declare (`platform`, read through a
+    // computed `require` that holds every builtin module object) is no vm
+    // function. The realm does not say which of its members take a source,
+    // so every declared member counts (`createContext` and `isContext`
+    // too). A computed key may name any of them.
+    if matches!(ns, BuiltinNs::Module(n) if same_builtin(n, "vm"))
+        && name.is_none_or(|k| vm_member(m, k))
+    {
+        set_dyn_eval(m, "E14 node:vm");
     }
 
     // R-HOSTREPORT: a process listener ("uncaughtException",
@@ -3664,12 +4157,14 @@ fn ns_method_inner(
             match (name, arg(m, call, 0)) {
                 // Rule PK: the own names of the argument.
                 ("getOwnPropertyNames", Some(o)) => m.cons(o, Cons::OwnNames { dst: fa }),
+                // Rule EK: its own enumerable String keys (7.3.23).
+                ("keys", Some(o)) => m.cons(o, Cons::OwnKeys { dst: fa }),
                 ("getOwnPropertySymbols", _) => m.add_prim(fa, prim::SYMBOL),
                 _ => m.add_prim(fa, prim::STR),
             }
             ret_tok(m, call, pb);
         }
-        (BuiltinNs::Object, "values" | "entries") => {
+        (BuiltinNs::Object, "values") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             // Own enumerable values only (EnumerableOwnProperties): no
@@ -3678,21 +4173,41 @@ fn ns_method_inner(
                 m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
-            if name == "entries" {
-                m.add_tok(fa, arr);
+            ret_tok(m, call, arr);
+        }
+        // Each entry is CreateArrayFromList(« key, value ») (ECMA-262 7.3.23
+        // step 4.a.ii.2.b), a new ordinary Array: index 0 the key (rule EK,
+        // `Cons::OwnKeys`), index 1 the value, each its own slot, as
+        // `Gen` models a direct `Object.entries` call.
+        (BuiltinNs::Object, "entries") => {
+            let arr = site_tmpl(m, call, "Array");
+            let fa = m.field_any(arr);
+            if let Some(o) = arg(m, call, 0) {
+                let pair = site_tmpl_born(m, call, "entry", true, false);
+                if let Some(tm) = m.tmpl_of(pair) {
+                    m.ordinary_arrays.insert(tm);
+                }
+                let ks = m.node_l("ownkeys");
+                m.cons(o, Cons::OwnKeys { dst: ks });
+                let k0 = m.index_slot(pair, 0);
+                m.edge(ks, k0);
+                let vs = m.node_l("ownvalues");
+                m.cons(o, Cons::OwnValues { dst: vs });
+                let v1 = m.index_slot(pair, 1);
+                m.edge(vs, v1);
+                m.add_tok(fa, pair);
             }
             ret_tok(m, call, arr);
         }
         (BuiltinNs::Object, "freeze" | "seal" | "preventExtensions") => {
             if let Some(o) = arg(m, call, 0) {
                 let r = m.reason("E8 Object.freeze (as a value call)");
-                m.cons(
-                    o,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match name {
+                    "freeze" => Hard::E8Freeze,
+                    "seal" => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                m.cons(o, Cons::Hard { kind, reason: r });
                 let ret = m.calls[call as usize].ret;
                 m.edge(o, ret);
             }
@@ -3706,6 +4221,9 @@ fn ns_method_inner(
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible") => {
+            if let Some(o) = arg(m, call, 0) {
+                is_extensible_ops(m, o, name != "isExtensible");
+            }
             ret_prim(m, call, prim::BOOL);
         }
         // 20.1.2.13: ToObject(O), ToPropertyKey(P), then O.[[GetOwnProperty]](P):
@@ -4172,6 +4690,22 @@ fn ns_method_inner(
         // runs, nothing is handed on, the realm is not held.
         (BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_), "from" | "of")
             if this_no_constructor(m, call) => {}
+        // A host object no namespace model describes (`ns_statics` lists no
+        // members: the global object, `process`, `require`, a host namespace
+        // or node module object such as `Atomics`, `Intl`, `node:fs`), under
+        // a key no arm above models: a method call on it (a program call, a
+        // protocol's lookup such as SerializeJSONProperty's `toJSON`,
+        // ECMA-262 25.5.2.2 step 2) is EvaluateCall's GetV then Call
+        // (13.3.6.1, 7.3.20): it calls what [[Get]] of the key reads, which
+        // the realm declaration answers for every key in whole-program mode
+        // (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or
+        // what a write stored). A call of the member's own value
+        // (`identified`) is that value's call, not a lookup.
+        (_, n) if !identified && declaration_answers_keys(m, ns) => {
+            let t = m.tok(TokKind::Builtin(ns));
+            let a = m.atom(n);
+            m.call_read_member(t, Key::Named(a), call)
+        }
         (_, n) => {
             let recv = if statics_ignore_this(ns) && members::ns_own_fn(ns, n) {
                 Recv::Ignored
@@ -4186,6 +4720,47 @@ fn ns_method_inner(
                 recv,
             )
         }
+    }
+}
+
+/// A host object no namespace model describes (`ns_statics` lists no
+/// members: the global object, `process`, `require`, a realm host namespace
+/// or node module object such as `Atomics`, `Intl`, `node:fs`; not `Other`,
+/// the HIR global sentinel): in whole-program mode the realm declaration
+/// answers [[Get]] of every key on it, a well-known symbol key included
+/// (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or what
+/// a write stored).
+pub(super) fn declaration_answers_keys(m: &Model, ns: BuiltinNs) -> bool {
+    !m.unit_mode && ns != BuiltinNs::Other && members::ns_statics(ns).members.is_none()
+}
+
+/// A call of the Worker global's own native `n` (`%WorkerGlobal%.<n>`,
+/// perry-stdlib worker_threads/worker_surface.rs; S8 binds a bare call in a
+/// module a Worker may run to it, `loads::worker_global_member`). Each
+/// ignores `this`:
+/// - `postMessage(v, transfer)` is Worker.postMessage's structured clone
+///   (`js_worker_threads_post_message`): its model (`worker_post_message`).
+/// - `removeEventListener(type, cb)` compares `cb` with the parent port's
+///   listeners (message_port.rs `remove_event_listener`; a string `type`
+///   only, no conversion): calls nothing, `undefined`.
+/// - `close()` sets the thread's close flag: calls nothing, `undefined`.
+/// - `addEventListener(type, cb)` registers `cb` on the parent port, which
+///   calls it with a message event of what the parent posts: the
+///   worker-side message input, which no model describes (as a handler
+///   stored under `onmessage`, `members::global_runtime_reads`): `cb` is
+///   handed to code the model does not see.
+pub(crate) fn worker_global_call(m: &mut Model, n: &str, call: CallId) {
+    match n {
+        "postMessage" => collections::worker_post_message(m, call),
+        "removeEventListener" | "close" => ret_prim(m, call, prim::UNDEF),
+        "addEventListener" => unknown_method_at(
+            m,
+            call,
+            "argument of Worker global addEventListener (worker-side message input)",
+            None,
+            Recv::Ignored,
+        ),
+        _ => unreachable!("REALMVAL: Worker global native {n} has no model"),
     }
 }
 
@@ -4487,5 +5062,37 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// per-primitive Mesh holds 10,942 objects instead of 278, work 103M ->
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
-    std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+    crate::provenance::env("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Some("1")
+}
+
+/// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,
+/// `Reflect.isExtensible`), and with `integrity` TestIntegrityLevel's
+/// (7.3.16) O.[[OwnPropertyKeys]]() and O.[[GetOwnProperty]](k) of each key
+/// (`Object.isFrozen` / `isSealed`). An ordinary object runs no code there;
+/// a Proxy runs its traps (`Cons::Meta`, `Cons::OwnProp`).
+pub(crate) fn is_extensible_ops(m: &mut Model, o: NodeId, integrity: bool) {
+    let reason = m.reason("[[IsExtensible]] / TestIntegrityLevel");
+    m.cons(
+        o,
+        Cons::Meta {
+            op: MetaOp::IsExtensible,
+            reason,
+        },
+    );
+    if integrity {
+        m.cons(
+            o,
+            Cons::Meta {
+                op: MetaOp::OwnKeys,
+                reason,
+            },
+        );
+        m.cons(
+            o,
+            Cons::OwnProp {
+                key: Key::any(),
+                idx: NO_NODE,
+            },
+        );
+    }
 }

@@ -22,7 +22,7 @@ use super::*;
 fn escapes(body: &str) -> bool {
     let src = format!(
         r#"
-        (globalThis as any).hostTake = (_x: any) => {{}};
+        declare function external(x?: unknown): any;
         class Svc {{ marker = 3; }}
         function g(a: any) {{ return a.marker; }}
         function pick(x: any) {{ return x; }}
@@ -85,10 +85,10 @@ fn a_new_only_constructor_called_without_new_uses_no_argument() {
 fn thenables(k: &str) -> Vec<String> {
     let t = format!("const t: any = {{ then: pick({k}), v: o }};");
     vec![
-        format!("{t} Promise.resolve(t).then((x: any) => (globalThis as any).hostTake(x), (e: any) => 0);"),
-        format!("{t} Promise.resolve(1).then(() => t).then((x: any) => (globalThis as any).hostTake(x), (e: any) => 0);"),
-        format!("{t} Promise.all([t, 1]).then((x: any) => (globalThis as any).hostTake(x), (e: any) => 0);"),
-        format!("{t} new Promise((r: any) => r(t)).then((x: any) => (globalThis as any).hostTake(x), (e: any) => 0);"),
+        format!("{t} Promise.resolve(t).then((x: any) => external(x), (e: any) => 0);"),
+        format!("{t} Promise.resolve(1).then(() => t).then((x: any) => external(x), (e: any) => 0);"),
+        format!("{t} Promise.all([t, 1]).then((x: any) => external(x), (e: any) => 0);"),
+        format!("{t} new Promise((r: any) => r(t)).then((x: any) => external(x), (e: any) => 0);"),
         format!("{t} (async () => {{ try {{ await t; }} catch (e) {{}} }})();"),
     ]
 }
@@ -121,10 +121,10 @@ fn a_new_only_constructor_as_then_rejects_and_uses_nothing() {
 #[test]
 fn new_on_the_constructor_value_still_constructs() {
     for b in [
-        "const f: any = pick(Map); const m = new f([[1, o]]); (globalThis as any).hostTake(m);",
-        "const f: any = pick(Set); const s = new f([o]); (globalThis as any).hostTake(s);",
-        "const f: any = pick(Promise); const p = new f((r: any) => r(o)); p.then((x: any) => (globalThis as any).hostTake(x));",
-        "const f: any = pick(WeakMap); const m = new f([[o, 1]]); (globalThis as any).hostTake(m);",
+        "const f: any = pick(Map); const m = new f([[1, o]]); external(m);",
+        "const f: any = pick(Set); const s = new f([o]); external(s);",
+        "const f: any = pick(Promise); const p = new f((r: any) => r(o)); p.then((x: any) => external(x));",
+        "const f: any = pick(WeakMap); const m = new f([[o, 1]]); external(m);",
     ] {
         assert!(escapes(b), "{b}");
     }
@@ -134,16 +134,16 @@ fn new_on_the_constructor_value_still_constructs() {
 /// functions; a host `then` still receives them and the thenable.
 #[test]
 fn a_program_or_host_then_is_still_called() {
-    let b = "const t: any = { then(res: any) { res(o); } }; Promise.resolve(t).then((x: any) => (globalThis as any).hostTake(x));";
+    let b = "const t: any = { then(res: any) { res(o); } }; Promise.resolve(t).then((x: any) => external(x));";
     assert!(escapes(b), "{b}");
-    let b = "const t: any = { then: (globalThis as any).hostGet(), v: o }; Promise.resolve(t);";
+    let b = "const t: any = { then: external(), v: o }; Promise.resolve(t);";
     assert!(escapes(b), "{b}");
 }
 
 /// (v) Control: an unknown value beside the constructor keeps the unknown call.
 #[test]
 fn an_unknown_value_beside_the_constructor_keeps_the_unknown_call() {
-    for b in plain_calls("(Math.random() < 2 ? Int8Array : (globalThis as any).hostGet())")
+    for b in plain_calls("(Math.random() < 2 ? Int8Array : external())")
         .iter()
         .skip(1)
     {
@@ -156,8 +156,8 @@ fn an_unknown_value_beside_the_constructor_keeps_the_unknown_call() {
 #[test]
 fn callable_constructors_keep_their_model() {
     let got: Vec<(String, bool)> = [
-        "const a: any = Array(o); (globalThis as any).hostTake(a);",
-        "const a: any = Object(o); (globalThis as any).hostTake(a);",
+        "const a: any = Array(o); external(a);",
+        "const a: any = Object(o); external(a);",
         "String(o);",
         "Number(o);",
         "Boolean(o);",

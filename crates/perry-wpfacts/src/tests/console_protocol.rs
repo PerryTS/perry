@@ -70,8 +70,9 @@ fn console_log_of_an_instance_and_an_array() {
 fn a_class_inspect_hook_runs() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            [inspect.custom]() { (globalThis as any).hostTake(this); return "L"; }
+            [inspect.custom]() { external(this); return "L"; }
         }
         const s = new Leak();
         console.error("m", ...[s]);
@@ -87,9 +88,10 @@ fn a_class_inspect_hook_runs() {
 fn a_nested_object_hook_runs() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         const s = new Svc();
         const o: any = { [Symbol.for("nodejs.util.inspect.custom")]() {
-            (globalThis as any).hostTake(s); return "O"; } };
+            external(s); return "O"; } };
         console.log({ inner: [o] });
         console.log(g(s));
         "#,
@@ -102,8 +104,9 @@ fn a_nested_object_hook_runs() {
 fn a_hook_on_a_map_value_runs() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            [inspect.custom]() { (globalThis as any).hostTake(this); return "L"; }
+            [inspect.custom]() { external(this); return "L"; }
         }
         const s = new Leak();
         console.log(new Map<number, any>([[1, s]]));
@@ -118,8 +121,9 @@ fn a_hook_on_a_map_value_runs() {
 fn format_s_runs_to_string() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            toString() { (globalThis as any).hostTake(this); return "L"; }
+            toString() { external(this); return "L"; }
         }
         const s = new Leak();
         console.log("%s", s);
@@ -134,8 +138,9 @@ fn format_s_runs_to_string() {
 fn format_d_runs_value_of() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            valueOf() { (globalThis as any).hostTake(this); return 1; }
+            valueOf() { external(this); return 1; }
         }
         const s = new Leak();
         console.warn("%d", s);
@@ -150,8 +155,9 @@ fn format_d_runs_value_of() {
 fn format_j_runs_to_json() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            toJSON() { (globalThis as any).hostTake(this); return 1; }
+            toJSON() { external(this); return 1; }
         }
         const s = new Leak();
         console.info("%j", s);
@@ -166,8 +172,9 @@ fn format_j_runs_to_json() {
 fn a_getter_may_run() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         class Leak extends Svc {
-            get leak() { (globalThis as any).hostTake(this); return 1; }
+            get leak() { external(this); return 1; }
         }
         const s = new Leak();
         console.dir(s, { getters: true });
@@ -183,9 +190,10 @@ fn a_getter_may_run() {
 fn a_spread_runs_an_overridden_iterator() {
     let pf = facts_of(
         r#"
+        declare function external(x?: unknown): any;
         function error(...params: any[]) {
             (params as any)[Symbol.iterator] = function (this: any) {
-                (globalThis as any).hostTake(this); return [][Symbol.iterator]();
+                external(this); return [][Symbol.iterator]();
             };
             console.error("m", ...params);
         }

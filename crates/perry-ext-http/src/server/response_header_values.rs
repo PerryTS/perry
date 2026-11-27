@@ -21,21 +21,38 @@ struct HeaderName {
 pub(crate) struct HeaderFields {
     entries: Vec<HeaderName>,
     positions: HashMap<String, u32>,
+    /// The heap bytes of the name strings (`entries`' two names and the
+    /// `positions` key of each), kept as they change so the response's
+    /// retained-byte report is O(1) per `setHeader`, not a walk.
+    name_bytes: usize,
 }
 impl HeaderFields {
     pub(crate) fn retained_bytes(&self) -> usize {
         self.entries.capacity() * std::mem::size_of::<HeaderName>()
-            + self
-                .entries
-                .iter()
-                .map(|n| n.lower.capacity() + n.original.capacity())
-                .sum::<usize>()
             + self.positions.capacity() * std::mem::size_of::<(String, u32)>()
-            + self.positions.keys().map(String::capacity).sum::<usize>()
+            + self.name_bytes
+    }
+    fn push(&mut self, lower: String, original: String, slot: u32) {
+        let key = lower.clone();
+        self.name_bytes += key.capacity() + lower.capacity() + original.capacity();
+        self.positions.insert(key, slot);
+        self.entries.push(HeaderName { lower, original });
+    }
+    /// Keep the casing of the latest `setHeader` (node keeps the last name).
+    fn set_original(&mut self, slot: u32, name: &str) {
+        let entry = &mut self.entries[slot as usize];
+        if entry.original != name {
+            self.name_bytes -= entry.original.capacity();
+            entry.original = name.to_string();
+            self.name_bytes += entry.original.capacity();
+        }
     }
     fn remove(&mut self, index: u32) {
         let removed = self.entries.remove(index as usize);
-        self.positions.remove(&removed.lower);
+        if let Some((key, _)) = self.positions.remove_entry(&removed.lower) {
+            self.name_bytes -= key.capacity();
+        }
+        self.name_bytes -= removed.lower.capacity() + removed.original.capacity();
         for (i, name) in self.entries.iter().enumerate().skip(index as usize) {
             *self.positions.get_mut(&name.lower).unwrap() = i as u32;
         }
@@ -178,12 +195,25 @@ pub(crate) fn set(handle: i64, name: &str, value: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     let value = scope.root_nanbox(value);
-    let lower = name.to_ascii_lowercase();
+    // The lowercase name on the stack for the lookup; a `String` only for
+    // a new name.
+    let mut buf = [0u8; 64];
+    let lower_owned;
+    let lower: &str = if name.len() <= buf.len() {
+        let b = &mut buf[..name.len()];
+        b.copy_from_slice(name.as_bytes());
+        b.make_ascii_lowercase();
+        // SAFETY: ASCII lowercasing keeps valid UTF-8 valid.
+        unsafe { std::str::from_utf8_unchecked(b) }
+    } else {
+        lower_owned = name.to_ascii_lowercase();
+        &lower_owned
+    };
     let (state, old) = data(owner.get());
     let open_slot = state.map(|s| {
         s.header_fields
             .as_ref()
-            .and_then(|f| f.positions.get(&lower).copied())
+            .and_then(|f| f.positions.get(lower).copied())
     });
     let start = offset(owner.get());
     let values = scope.root_nanbox(if old.to_bits() == TAG_UNDEFINED {
@@ -208,21 +238,20 @@ pub(crate) fn set(handle: i64, name: &str, value: f64) {
                 );
             }
             if let Some(state) = response_state_mut(owner.get()) {
-                state.header_fields.as_mut().unwrap().entries[slot as usize].original =
-                    name.to_string();
+                state
+                    .header_fields
+                    .as_mut()
+                    .unwrap()
+                    .set_original(slot, name);
             }
         } else {
             let slot = array_len(values.get()) - start;
             push_record(owner, values, value);
             if let Some(state) = response_state_mut(owner.get()) {
-                let fields = state
+                state
                     .header_fields
-                    .get_or_insert_with(HeaderFields::default);
-                fields.positions.insert(lower.clone(), slot);
-                fields.entries.push(HeaderName {
-                    lower,
-                    original: name.to_string(),
-                });
+                    .get_or_insert_with(HeaderFields::default)
+                    .push(lower.to_string(), name.to_string(), slot);
             }
         }
         heap::restate(owner.get());
@@ -236,7 +265,7 @@ pub(crate) fn set(handle: i64, name: &str, value: f64) {
         if old_names.to_bits() == TAG_UNDEFINED {
             heap::set(owner.get(), Key::HeaderNames, names.get());
         }
-        if let Some(slot) = closed_position(names.get(), &lower) {
+        if let Some(slot) = closed_position(names.get(), lower) {
             unsafe {
                 perry_ffi::js_array_set(
                     ptr(values.get()),
@@ -245,7 +274,7 @@ pub(crate) fn set(handle: i64, name: &str, value: f64) {
                 );
             }
         } else {
-            let key = scope.root_nanbox(string_value(&lower));
+            let key = scope.root_nanbox(string_value(lower));
             let updated = boxed(unsafe {
                 perry_ffi::js_array_push(ptr(names.get()), JsValue::from_bits(key.get().to_bits()))
             });
@@ -619,15 +648,66 @@ pub(crate) fn validate(name: &str, value: f64) {
     if v.is_number() || v.is_bool() || v.is_null() {
         return;
     }
-    let rendered = v.to_owned_string().unwrap_or_else(|| string(value));
-    if rendered
-        .chars()
-        .any(|c| c != '\t' && (c < ' ' || c == '\u{7f}' || c > '\u{ff}'))
-    {
+    // A string is checked in place, on its own bytes; any other value
+    // through its string form.
+    let valid = if v.is_short_string() {
+        let mut buf = [0u8; perry_ffi::SHORT_STRING_MAX_LEN];
+        let len = v.short_string_to_buf(&mut buf).unwrap_or(0);
+        header_value_bytes_valid(&buf[..len])
+    } else if v.is_string() {
+        // SAFETY: a STRING_TAG value carries a live `StringHeader`; nothing
+        // allocates while its bytes are read.
+        let handle =
+            unsafe { perry_ffi::JsString::from_raw(v.as_string_ptr() as *mut StringHeader) };
+        perry_ffi::read_bytes(handle).is_some_and(header_value_bytes_valid)
+    } else {
+        header_value_bytes_valid(string(value).as_bytes())
+    };
+    if !valid {
         perry_ffi::throw_with_code(
             &format!("Invalid character in header content [\"{name}\"]"),
             "ERR_INVALID_CHAR",
             perry_ffi::ErrorKind::TypeError,
         );
+    }
+}
+
+/// node's `checkInvalidHeaderChar` on a value's UTF-8 bytes: every character
+/// is a tab or in `' '..='\u{ff}'` except DEL. A character above U+00FF
+/// (lead byte `0xC4` and up) or a malformed sequence (which the lossy
+/// decoding renders U+FFFD) is invalid.
+fn header_value_bytes_valid(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c < 0x80 {
+            if (c < b' ' && c != b'\t') || c == 0x7f {
+                return false;
+            }
+            i += 1;
+        } else if (c == 0xc2 || c == 0xc3) && bytes.get(i + 1).is_some_and(|b| b & 0xc0 == 0x80) {
+            i += 2;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod header_value_bytes_tests {
+    use super::header_value_bytes_valid as ok;
+
+    #[test]
+    fn matches_the_character_rule() {
+        assert!(ok(b"text/plain; charset=utf-8\tx"));
+        assert!(ok("caf\u{e9} \u{ff}".as_bytes()));
+        assert!(!ok(b"a\nb"));
+        assert!(!ok(b"a\x7fb"));
+        assert!(!ok("\u{100}".as_bytes()));
+        assert!(!ok("\u{20ac}".as_bytes()));
+        assert!(!ok(b"\xc3"));
+        assert!(!ok(b"\xc3a"));
+        assert!(!ok(b"\x80"));
     }
 }

@@ -176,7 +176,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     let body = |hand: &str, w: &str, other: &str| {
         format!(
             "{CLASSES}{M}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare function hostValue(): any; const unknown: any = hostValue;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             const t: any = unknown.reach({hand});
             {w}
@@ -352,7 +352,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
     let body = |before: &str, after: &str| {
         format!(
             "{CLASSES}{M}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare function hostValue(): any; const unknown: any = hostValue;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             {before}
             const v: any = k > 1 ? new N() : Object;
@@ -448,7 +448,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     let body = |hand: &str, w: &str| {
         format!(
             "{CLASSES}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare function hostValue(): any; const unknown: any = hostValue;
             class Q {{ x = 5; b = 1; }}
             const t: any = unknown.reach({hand});
             {w}
@@ -480,7 +480,11 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             false,
         ),
         ("Map", computed.to_string(), false, false),
-        ("Map, globalThis", computed.to_string(), false, true),
+        // P-N1 (owner 2026-11-23): a value the analysis does not model is
+        // never the global object, so a store into ⊤ replaces no global
+        // even once unknown code was handed it (the dynamic-code arms
+        // below stay the open control).
+        ("Map, globalThis", computed.to_string(), false, false),
         // `Function('return this')()` folds to the global object (HIR,
         // `bare_builtins`): compiled code holds it; unknown code holds it
         // once it is handed over.
@@ -494,7 +498,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             "Map",
             format!("unknown.take(Function('return this')()); {computed}"),
             false,
-            true,
+            false,
         ),
     ]
     .into_iter()

@@ -306,53 +306,54 @@ unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
     let mut getter_ran = false;
     let mut by_name = false;
     for position in 0..count {
-        let keys = keys_h.get_raw_mut_ptr::<ArrayHeader>();
-        let key = *crate::array::array_elements_ptr(keys).add(position as usize);
+        let key = keys_h.with_mut_ptr::<ArrayHeader, _>(|keys| {
+            *crate::array::array_elements_ptr(keys).add(position as usize)
+        });
         if !JSValue::from_bits(key).is_any_string() {
             continue;
         }
-        let src = src_h.get_raw_const_ptr::<ObjectHeader>();
-        if (*src).class_id != 0 {
-            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            if crate::string::js_string_key_bytes(JSValue::from_bits(key), &mut buf)
-                .is_some_and(field_get_set::is_internal_runtime_key_bytes)
-            {
-                continue;
+        let value = src_h.with_const_ptr::<ObjectHeader, _>(|src| {
+            if (*src).class_id != 0 {
+                let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if crate::string::js_string_key_bytes(JSValue::from_bits(key), &mut buf)
+                    .is_some_and(field_get_set::is_internal_runtime_key_bytes)
+                {
+                    return None;
+                }
             }
-        }
-        // CopyDataProperties step 4.c's re-check, after any getter.
-        by_name = by_name || (*src).shape_word() != word;
-        let value = if by_name {
-            getter_ran = true;
-            match super::assign::own_enumerable_value_by_name(src, key) {
-                Some(value) => value.to_bits(),
-                None => continue,
+            // CopyDataProperties step 4.c's re-check, after any getter.
+            by_name = by_name || (*src).shape_word() != word;
+            if by_name {
+                getter_ran = true;
+                return super::assign::own_enumerable_value_by_name(src, key).map(|v| v.to_bits());
             }
-        } else {
-            let entry = key_attrs::keys_entry(keys, position);
-            if entry & key_attrs::ENTRY_NON_ENUMERABLE != 0 {
-                continue;
-            }
-            let slot = if slots_keyed {
-                key_attrs::key_storage_slot(keys, position)
-            } else {
-                position
-            };
-            let bits = field_get_set::object_field_at_with_live(src, slot, inline).bits();
-            if entry & key_attrs::ENTRY_ACCESSOR == 0 {
-                bits
-            } else {
+            keys_h.with_mut_ptr::<ArrayHeader, _>(|keys| {
+                let entry = key_attrs::keys_entry(keys, position);
+                if entry & key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                    return None;
+                }
+                let slot = if slots_keyed {
+                    key_attrs::key_storage_slot(keys, position)
+                } else {
+                    position
+                };
+                let bits = field_get_set::object_field_at_with_live(src, slot, inline).bits();
+                if entry & key_attrs::ENTRY_ACCESSOR == 0 {
+                    return Some(bits);
+                }
                 getter_ran = true;
                 let acc = super::accessor_pair::getter_half_of_value(bits);
                 match field_get_set::call_getter(src, acc) {
-                    Some(value) => value.to_bits(),
+                    Some(value) => Some(value.to_bits()),
                     // A static class entry: the complete read calls it.
-                    None => match super::assign::own_enumerable_value_by_name(src, key) {
-                        Some(value) => value.to_bits(),
-                        None => continue,
-                    },
+                    None => {
+                        super::assign::own_enumerable_value_by_name(src, key).map(|v| v.to_bits())
+                    }
                 }
-            }
+            })
+        });
+        let Some(value) = value else {
+            continue;
         };
         taken.push(position);
         values.push(scope.root_nanbox_u64(value));
@@ -364,12 +365,14 @@ unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
         let census = crate::snap_census::first_use();
         let n = taken.len() as u32;
         let list = key_attrs::alloc_key_list(n, true, false);
-        let words = crate::array::array_elements_ptr(keys_h.get_raw_mut_ptr::<ArrayHeader>());
         let dst = crate::array::array_elements_ptr(list);
-        for (at, &position) in taken.iter().enumerate() {
-            // GC_STORE_AUDIT(INIT): unpublished key list under suppression.
-            *dst.add(at) = *words.add(position as usize);
-        }
+        keys_h.with_mut_ptr::<ArrayHeader, _>(|keys| {
+            let words = crate::array::array_elements_ptr(keys);
+            for (at, &position) in taken.iter().enumerate() {
+                // GC_STORE_AUDIT(INIT): unpublished key list under suppression.
+                *dst.add(at) = *words.add(position as usize);
+            }
+        });
         (*list).length = n;
         super::rebuild_array_layout_from_slots(list);
         let result_keys = canonical_keys::canonicalize(&proof, list, n).view();

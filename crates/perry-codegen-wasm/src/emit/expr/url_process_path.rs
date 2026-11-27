@@ -154,17 +154,18 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             // --- Path ---
-            Expr::PathJoin(a, b) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, a);
-                self.emit_store_arg(func, 1, b);
-                self.emit_memcall(func, "path_join", 2);
-            }
-            Expr::PathWin32Join(a, b) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, a);
-                self.emit_store_arg(func, 1, b);
-                self.emit_memcall(func, "path_win32_join", 2);
+            Expr::PathJoin(args) | Expr::PathWin32Join(args) => {
+                let name = if matches!(expr, Expr::PathJoin(_)) {
+                    "path_join"
+                } else {
+                    "path_win32_join"
+                };
+                let n = args.len() as u32;
+                self.emit_frame_begin(func, n);
+                for (i, a) in args.iter().enumerate() {
+                    self.emit_store_arg(func, i as u32, a);
+                }
+                self.emit_memcall(func, name, n);
             }
             Expr::PathWin32 { method, args } => {
                 use perry_hir::PathWin32Method;

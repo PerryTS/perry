@@ -27,6 +27,24 @@
 
 use super::*;
 
+/// The i1 "the default typed-view metadata accessors still hold" test
+/// (`PERRY_TYPED_NAMED_PROPS_INVALIDATED` clear). GUARDS1: when the whole
+/// program never writes those accessors on a typed-array or Buffer prototype
+/// nor relinks one (wpfacts `typed_metadata_written`, no interpreted code),
+/// the runtime never sets the word and the answer is the constant `true`: no
+/// load is emitted.
+pub(crate) fn emit_named_props_pristine(ctx: &mut FnCtx<'_>) -> String {
+    if ctx.wpfacts.typed_metadata_unwritten {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::IndexedMetadata, || {
+            serde_json::json!({"typed_metadata":"unwritten"})
+        });
+        return "true".to_string();
+    }
+    let blk = ctx.block();
+    let invalidated = blk.load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+    blk.icmp_eq(I8, &invalidated, "0")
+}
+
 /// The names this arm answers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TypedNamed {
@@ -144,10 +162,8 @@ pub(crate) fn emit_typed_named_arm(
     if which.is_accessor() {
         let hit_idx = ctx.new_block("tnamed.hit");
         let hit_label = ctx.block_label(hit_idx);
-        let blk = ctx.block();
-        let invalidated = blk.load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-        let pristine = blk.icmp_eq(I8, &invalidated, "0");
-        blk.cond_br(&pristine, &hit_label, miss_label);
+        let pristine = emit_named_props_pristine(ctx);
+        ctx.block().cond_br(&pristine, &hit_label, miss_label);
         ctx.current_block = hit_idx;
     }
     // log2(BYTES_PER_ELEMENT): nibble `brand` of `shift_nibbles()`.

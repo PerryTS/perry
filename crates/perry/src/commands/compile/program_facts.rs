@@ -164,11 +164,65 @@ pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::
     out
 }
 
+/// The count a bound variable sets (`PERRY_FACTS_MAX_WORK` ...): `None`
+/// when unset or empty. A value that is no count stops the compile with an
+/// error: a bound that silently falls back to its default measures
+/// something else than was asked for.
+fn env_count(name: &str) -> Option<u64> {
+    let v = std::env::var(name).ok().filter(|v| !v.trim().is_empty())?;
+    match parse_count(&v) {
+        Some(n) => Some(n),
+        None => {
+            eprintln!(
+                "error: {name}={v} is not a count (a non-negative integer: 1000000000, 1_000_000_000 or 1e9)"
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// A non-negative integer written as digits (`_` separators allowed) or in
+/// scientific notation (`1e10`, `2.5E9`) whose value is a whole number that
+/// fits in a `u64`.
+fn parse_count(v: &str) -> Option<u64> {
+    let v = v.trim().replace('_', "");
+    if let Ok(n) = v.parse::<u64>() {
+        return Some(n);
+    }
+    let (m, e) = v.split_once(['e', 'E'])?;
+    let e: u32 = e.strip_prefix('+').unwrap_or(e).parse().ok()?;
+    let (int, frac) = m.split_once('.').unwrap_or((m, ""));
+    if int.is_empty() && frac.is_empty()
+        || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    // mantissa digits x 10^(e - fraction digits), exactly.
+    let digits = format!("{int}{frac}");
+    let shift = e.checked_sub(frac.len() as u32);
+    let digits = match shift {
+        Some(k) => format!("{digits}{}", "0".repeat(k as usize)),
+        None => {
+            let cut = (frac.len() as u32 - e) as usize;
+            let (keep, rest) = digits.split_at(digits.len() - cut);
+            if rest.bytes().any(|b| b != b'0') {
+                return None;
+            }
+            keep.to_string()
+        }
+    };
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    digits.parse::<u64>().ok()
+}
+
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
-    interpreted_sources: bool,
+    data_url_import: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
@@ -256,29 +310,16 @@ pub(crate) fn run(
             .ok()
             .filter(|s| !s.is_empty()),
         // Past either bound the program simply gets no facts (sound).
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
-        max_work: Some(
-            std::env::var("PERRY_FACTS_MAX_WORK")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_MAX_WORK),
-        ),
+        budget_secs: env_count("PERRY_FACTS_BUDGET_SECS").filter(|&s| s != 0),
+        max_work: Some(env_count("PERRY_FACTS_MAX_WORK").unwrap_or(DEFAULT_MAX_WORK)),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
         // Points-to entries bound (memory); past it the program gets no facts.
-        max_pts: Some(
-            std::env::var("PERRY_FACTS_MAX_PTS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2_000_000_000),
-        ),
+        max_pts: Some(env_count("PERRY_FACTS_MAX_PTS").unwrap_or(2_000_000_000)),
         export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
-        interpreted_sources,
+        data_url_import,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
@@ -369,6 +410,15 @@ pub(crate) fn run(
         eprintln!(
             "perry: wpfacts: Function.prototype.bind {}",
             pf.fnproto_bind_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
+        eprintln!(
+            "perry: wpfacts: typed-array metadata {}; Array/Object.prototype {}",
+            pf.typed_metadata_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}")),
+            pf.array_methods_written
                 .as_deref()
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
@@ -692,6 +742,13 @@ fn elision_for(
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
     out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
+    // GUARDS1 class 3. `PERRY_FACTS_SABOTAGE=typed-metadata-unwritten`:
+    // claim it for every program (the gap tests that redefine a typed-array
+    // prototype's `length` must fail).
+    out.typed_metadata_unwritten = pf.sabotage.as_deref() == Some("typed-metadata-unwritten")
+        || (!pf.stats.aborted
+            && pf.interp_guard.is_none()
+            && pf.typed_metadata_written.is_none());
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
@@ -1389,6 +1446,65 @@ pub(crate) fn namespace_pair_inactive(
 /// MATHC1: with the whole-program facts on every
 /// direct builtin namespace call is lowered as the pair whose one arm the
 /// call site's verdict picks; `PERRY_NS_PAIRS=0` keeps the old lowering.
+/// GUARDS3: per class id, what a program write may give its instances or
+/// its prototype (wpfacts `shadow_writes`), for codegen's prototype-census
+/// binding sites: a chain none of them reaches needs no shadow-bit test.
+/// `None` (every site keeps its tests) without whole-program facts, with
+/// interpreted code, or with elision off. `PERRY_FACTS_SABOTAGE=
+/// shadow-unwritten` claims every class the solver saw unwritten.
+pub(crate) fn shadow_writes(
+    pf: Option<&perry_wpfacts::ProgramFacts>,
+) -> Option<std::collections::BTreeMap<u32, perry_codegen::ClassShadowWrites>> {
+    let pf = pf?;
+    if !elide_enabled() || pf.stats.aborted {
+        return None;
+    }
+    let sabotage = pf.sabotage.as_deref() == Some("shadow-unwritten");
+    if !sabotage && pf.interp_guard.is_some() {
+        return None;
+    }
+    Some(
+        pf.shadow_writes
+            .iter()
+            .map(|(&cid, w)| {
+                let w = match sabotage {
+                    true => perry_codegen::ClassShadowWrites::default(),
+                    false => perry_codegen::ClassShadowWrites {
+                        inst_names: w.inst_names.clone(),
+                        inst_any: w.inst_any.clone(),
+                        proto_names: w.proto_names.clone(),
+                        proto_any: w.proto_any.clone(),
+                        proto_relinked: w.proto_relinked.clone(),
+                    },
+                };
+                (cid, w)
+            })
+            .collect(),
+    )
+}
+
+/// GUARDS1 class 2: the program-wide array chain facts codegen's inline
+/// element and method guards read (`perry_codegen::
+/// set_program_array_chain_facts`): `.0` the default chain's index bit
+/// needs no test (DEC 250 locks index adds and relinks of
+/// `%Array.prototype%`/`%Object.prototype%`; a relinked array carries its own
+/// `GC_ARRAY_CUSTOM_PROTO` bit, which stays tested), claimed for a
+/// whole-program facts build; `.1` neither prototype is ever modified
+/// (wpfacts `array_methods_written`, no interpreted code), so the
+/// `ARRAY_METHODS_MODIFIED` bit needs no test either.
+/// `PERRY_FACTS_SABOTAGE=array-chain-unwritten` claims both.
+pub(crate) fn array_chain_facts(pf: Option<&perry_wpfacts::ProgramFacts>) -> (bool, bool) {
+    let Some(pf) = pf else {
+        return (false, false);
+    };
+    if pf.sabotage.as_deref() == Some("array-chain-unwritten") {
+        return (true, true);
+    }
+    let index = !pf.stats.aborted;
+    let methods = index && pf.interp_guard.is_none() && pf.array_methods_written.is_none();
+    (index, methods)
+}
+
 pub(crate) fn namespace_pairs_on() -> bool {
     perry_wpfacts::enabled_from_env() && std::env::var("PERRY_NS_PAIRS").as_deref() != Ok("0")
 }
@@ -1457,6 +1573,28 @@ impl<W: std::io::Write> std::io::Write for StableDump<'_, W> {
 }
 
 #[cfg(test)]
+mod count_tests {
+    use super::parse_count;
+
+    #[test]
+    fn a_bound_parses_digits_and_scientific_notation_or_is_refused() {
+        assert_eq!(parse_count("1000000000"), Some(1_000_000_000));
+        assert_eq!(parse_count("1_000_000_000"), Some(1_000_000_000));
+        assert_eq!(parse_count("1e10"), Some(10_000_000_000));
+        assert_eq!(parse_count("2.5E9"), Some(2_500_000_000));
+        assert_eq!(parse_count("1e+3"), Some(1000));
+        assert_eq!(parse_count("0"), Some(0));
+        assert_eq!(parse_count("1.50e1"), Some(15));
+        assert_eq!(parse_count("1.5e0"), None);
+        assert_eq!(parse_count("1e-3"), None);
+        assert_eq!(parse_count("-5"), None);
+        assert_eq!(parse_count("1e30"), None);
+        assert_eq!(parse_count("ten"), None);
+        assert_eq!(parse_count("e9"), None);
+    }
+}
+
+#[cfg(test)]
 mod stable_dump_tests {
     use super::*;
 
@@ -1491,7 +1629,7 @@ pub(crate) fn activation(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
-    interpreted_sources: bool,
+    data_url_import: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
 ) -> Option<perry_wpfacts::Activation> {
@@ -1566,10 +1704,7 @@ pub(crate) fn activation(
             .ok()
             .filter(|s| !s.is_empty()),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s != 0),
+        budget_secs: env_count("PERRY_FACTS_BUDGET_SECS").filter(|&s| s != 0),
         // The activation pass alone, over the whole program: a larger bound
         // than the per-unit facts' (the Supabase CLI needs ~20x the default).
         max_work: Some(
@@ -1588,7 +1723,7 @@ pub(crate) fn activation(
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
-        interpreted_sources,
+        data_url_import,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()

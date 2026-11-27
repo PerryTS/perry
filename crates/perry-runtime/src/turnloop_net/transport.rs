@@ -493,14 +493,14 @@ pub unsafe fn set_route(core: *mut TransportCore, link: OwnerLink, route: u8) ->
     Ok(())
 }
 
-/// Install a handle the driver just created for this core (+1 ref).
+/// Install a handle the driver just created, referenced, for this core (+1 ref).
 unsafe fn install(
     driver: &mut turnloop::Loop,
     c: &mut TransportCore,
     link: OwnerLink,
     mut entry: Entry,
 ) {
-    if !c.referenced {
+    if !holds_loop(&entry, &c.backlog, c.referenced) {
         let _ = driver.set_ref(entry.handle, false);
         entry.referenced = false;
     }
@@ -1057,14 +1057,13 @@ pub unsafe fn read_start(core: *mut TransportCore, link: OwnerLink) -> NetResult
     let (c, name) = bind(core, link, "read")?;
     with_driver(|driver| {
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
-        if entry.read_op.is_some() || entry.closing || entry.read_halt == ReadHalt::Eof {
+        if entry.read_op.is_some() || entry.closing || entry.eof {
             return Ok(());
         }
         let op = driver
             .read_start(entry.handle, name.token(OP_READ))
             .map_err(|e| map_error(e, "read"))?;
         entry.read_op = Some(op);
-        entry.read_halt = ReadHalt::Running;
         census::note_submit(OP_READ);
         settle_ref(driver, c);
         Ok(())
@@ -1085,7 +1084,6 @@ pub unsafe fn read_stop(core: *mut TransportCore, link: OwnerLink) -> NetResult<
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
         let op = entry.read_op.take().ok_or_else(|| not_found("read"))?;
         driver.stop(op);
-        entry.read_halt = ReadHalt::Stopped;
         settle_ref(driver, c);
         Ok(())
     })
@@ -1185,8 +1183,8 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             return Ok(true);
         }
         census::note_submit(OP_CLOSE);
-        if c.referenced && !entry.referenced {
-            // An ended socket's close is work again: its `Closed` is owed.
+        if !entry.referenced {
+            // A close is owed whatever the handle's ref, as libuv's closing handle.
             if driver.set_ref(entry.handle, true).is_ok() {
                 entry.referenced = true;
             }
@@ -1224,7 +1222,7 @@ pub unsafe fn set_ref(
     let Some(entry) = c.entry.as_mut() else {
         return Ok(());
     };
-    let wanted = referenced && holds_loop(entry, &c.backlog);
+    let wanted = holds_loop(entry, &c.backlog, referenced);
     if entry.referenced == wanted {
         return Ok(());
     }
@@ -1234,16 +1232,20 @@ pub unsafe fn set_ref(
         .unwrap_or_else(|| Err(no_loop()))
 }
 
-/// libuv's active handle: a stream that is ended or stopped reading keeps the
-/// loop alive only while a write, a shutdown or a close is owed. The driver
-/// counts an open socket itself, so the core's reference is withdrawn in
-/// between.
-fn holds_loop(entry: &Entry, backlog: &Backlog) -> bool {
+/// libuv's loop liveness for one stream: its handle is active while it reads
+/// or listens, which `unref()` gives up; a connect, write, shutdown or close
+/// request keeps the loop alive whatever the handle's ref. The driver counts
+/// an open socket itself, so the core's reference is withdrawn otherwise.
+fn holds_loop(entry: &Entry, backlog: &Backlog, referenced: bool) -> bool {
+    owes_request(entry, backlog) || (referenced && (entry.read_op.is_some() || entry.listener))
+}
+
+fn owes_request(entry: &Entry, backlog: &Backlog) -> bool {
     #[cfg(windows)]
     if entry.pipe_drain.is_some() || entry.pipe_eof_timer.is_some() {
         return true;
     }
-    !(entry.ended || entry.read_halt == ReadHalt::Stopped)
+    entry.connecting
         || entry.closing
         || entry.posted
         || entry.inflight > 0
@@ -1256,20 +1258,9 @@ fn settle_ref(driver: &mut turnloop::Loop, c: &mut TransportCore) {
     let Some(entry) = c.entry.as_mut() else {
         return;
     };
-    let wanted = c.referenced && holds_loop(entry, &c.backlog);
+    let wanted = holds_loop(entry, &c.backlog, c.referenced);
     if entry.referenced != wanted && driver.set_ref(entry.handle, wanted).is_ok() {
         entry.referenced = wanted;
-    }
-}
-
-/// The EOF of `handle` reached its sink. The sink may have closed or replaced
-/// the core's handle.
-unsafe fn note_ended(link: OwnerLink, handle: Option<Handle>) {
-    if let Some(c) = current(link, handle) {
-        if let Some(entry) = c.entry.as_mut() {
-            entry.ended = true;
-        }
-        with_driver(|driver| settle_ref(driver, c));
     }
 }
 
@@ -1743,19 +1734,12 @@ pub(super) fn dispatch(completion: Completion) {
             #[cfg(windows)]
             OP_PIPE_DRAIN => dispatch_pipe_drain(link, op_id, terminal, result),
             _ => {
-                let idle = core_of(link)
-                    .and_then(|c| c.entry.as_ref())
-                    .is_some_and(|entry| entry.ended || entry.read_halt == ReadHalt::Stopped);
-                if idle {
-                    hold(link);
-                }
+                hold(link);
                 dispatch_stream(route, op, op_id, link, handle, terminal, result);
-                if idle {
-                    if let Some(c) = core_of(link) {
-                        with_driver(|driver| settle_ref(driver, c));
-                    }
-                    release(link);
+                if let Some(c) = core_of(link) {
+                    with_driver(|driver| settle_ref(driver, c));
                 }
+                release(link);
             }
         }
     }
@@ -2145,7 +2129,7 @@ unsafe fn dispatch_stream(
                     };
                     let _ = with_driver(|driver| windows_pipe::cancel_eof(driver, name, entry));
                 }
-                entry.read_halt = ReadHalt::Eof;
+                entry.eof = true;
                 // A stopped read's EOF ends a read restarted behind it.
                 if let Some(restarted) = entry.read_op.take().filter(|&id| Some(id) != op_id) {
                     let _ = with_driver(|driver| driver.cancel(restarted));
@@ -2155,10 +2139,7 @@ unsafe fn dispatch_stream(
                 // Pins the cell until the parked EOF is delivered or dropped.
                 hold(link);
             } else {
-                hold(link);
                 sink::emit(route, NetCompletion::eof(id).linked());
-                note_ended(link, handle);
-                release(link);
             }
         }
         OpResult::Wrote(n) => {
@@ -2241,7 +2222,6 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
         if let Some(c) = current(link, handle) {
             let route = c.route;
             sink::emit(route, NetCompletion::eof(link.0 as i64).linked());
-            note_ended(link, handle);
         }
     }
     release(link);

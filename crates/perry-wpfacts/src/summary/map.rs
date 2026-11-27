@@ -35,11 +35,15 @@ pub fn map_cons(
         OwnValues { dst } => OwnValues { dst: n(dst) },
         OwnKeys { dst } => OwnKeys { dst: n(dst) },
         OwnNames { dst } => OwnNames { dst: n(dst) },
-        OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
+        OwnDescValues { dst, key } => OwnDescValues {
+            dst: n(dst),
+            key: if key == NO_NODE { NO_NODE } else { n(key) },
+        },
         IndexHole => IndexHole,
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
+        Detached => Detached,
         HasProp { key, idx } => HasProp {
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
@@ -48,6 +52,8 @@ pub fn map_cons(
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
         },
+        DeleteIdx { idx, reason } => DeleteIdx { idx: n(idx), reason },
+        Meta { op, reason } => Meta { op, reason },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -89,7 +95,9 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        InterpRuns { reason } => InterpRuns { reason },
         Raise { region } => Raise { region: n(region) },
+        HandRaise { region } => HandRaise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
@@ -145,6 +153,7 @@ pub fn map_cons(
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         NotNull { dst } => NotNull { dst: n(dst) },
         RecordEntry { dst } => RecordEntry { dst: n(dst) },
+        ArrayRecordEntry { dst } => ArrayRecordEntry { dst: n(dst) },
         TypeIs { mask, dst } => TypeIs { mask, dst: n(dst) },
         ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
         NotRegExp { dst } => NotRegExp { dst: n(dst) },
@@ -153,6 +162,10 @@ pub fn map_cons(
             dst: n(dst),
         },
         NotObjectProto { dst } => NotObjectProto { dst: n(dst) },
+        NotError { hook, dst } => NotError {
+            hook: n(hook),
+            dst: n(dst),
+        },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -226,11 +239,12 @@ pub fn map_cons(
             key,
             call: k(call),
         },
-        AnyAccessors { origin, act } => AnyAccessors {
+        AnyAccessors { origin, key, act } => AnyAccessors {
             origin,
+            key,
             act: act_map(act, &mut n, &mut k),
         },
-        UnnamedSet { target } => UnnamedSet { target },
+        UnnamedSet { target, site } => UnnamedSet { target, site },
         PlainKey { origin, act } => PlainKey {
             origin,
             act: act_map(act, &mut n, &mut k),
@@ -238,6 +252,47 @@ pub fn map_cons(
         StoreTopProto { origin, src } => StoreTopProto {
             origin,
             src: n(src),
+        },
+        ChainSet {
+            origin,
+            key,
+            src,
+            region,
+        } => ChainSet {
+            origin,
+            key,
+            src: n(src),
+            region: n(region),
+        },
+        ChainRecv { origin } => ChainRecv { origin },
+        FwdLoad {
+            key,
+            idx,
+            dst,
+            recv,
+        } => FwdLoad {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+            dst: n(dst),
+            recv,
+        },
+        FwdStore {
+            key,
+            src,
+            site,
+            region,
+            recv,
+        } => FwdStore {
+            key,
+            src: n(src),
+            site,
+            region: n(region),
+            recv,
+        },
+        DefineOwn { key, value, region } => DefineOwn {
+            key,
+            value: n(value),
+            region: n(region),
         },
         Super { start, key, act } => Super {
             start,
@@ -263,7 +318,11 @@ pub fn map_cons(
             origin,
         },
         ThisFrom { recv } => ThisFrom { recv: n(recv) },
-        BirthField { key, src } => BirthField { key, src: n(src) },
+        BirthField { key, src, tm } => BirthField {
+            key,
+            src: n(src),
+            tm,
+        },
         Accessor {
             holder,
             key,
@@ -342,11 +401,13 @@ pub fn map_cons(
         },
         IdxKey {
             obj,
+            origin,
             prim,
             dst,
             shape,
         } => IdxKey {
             obj,
+            origin,
             prim,
             dst: n(dst),
             shape,
@@ -402,11 +463,16 @@ pub fn map_cons(
             call: k(call),
             shape,
         },
-        ForInBody { obj, call } => ForInBody {
+        ForInBody { obj, call, list } => ForInBody {
             obj: n(obj),
             call: k(call),
+            list,
         },
-        ForInKeys { ft, call } => ForInKeys { ft, call: k(call) },
+        ForInKeys { ft, call, list } => ForInKeys {
+            ft,
+            call: k(call),
+            list,
+        },
         DefineKeyed {
             o,
             reason,
@@ -572,6 +638,12 @@ pub fn map_cons(
             into: n(into),
             site,
         },
+        JsonCopy { dst, site, arr, at } => JsonCopy {
+            dst: n(dst),
+            site,
+            arr,
+            at,
+        },
         SpreadFrom { src, site, from } => SpreadFrom {
             src,
             site,
@@ -665,6 +737,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | OwnDescValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
+            | JsonCopy { .. }
             | Store { .. }
             | Call { .. }
             | New { .. }
@@ -690,10 +763,12 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Falsy { .. }
             | NotBuffer { .. }
             | NotObjectProto { .. }
+            | NotError { .. }
             | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }
             | RecordEntry { .. }
+            | ArrayRecordEntry { .. }
             | TypeIs { .. }
             | Objects { .. }
             | NotUndefined { .. }
@@ -733,6 +808,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
+            | SuperFrom { .. }
             | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }
@@ -765,7 +841,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | OwnValues { dst }
         | OwnKeys { dst }
         | OwnNames { dst }
-        | OwnDescValues { dst }
+        | OwnDescValues { dst, .. }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }

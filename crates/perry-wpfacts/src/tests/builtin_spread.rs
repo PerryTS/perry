@@ -21,6 +21,7 @@ const TEXT: &str = r#"'{"b":{"c":[1,"s",null]},"n":2}'"#;
 fn fixture(source: &str, copy: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
 class V {{ k = 1; len() {{ return this.k; }} }}
 const obj = new V();
 const src: any = {source};
@@ -92,7 +93,7 @@ fn a_spread_of_an_object_born_without_own_props_adds_no_key() {
 /// and is copied: the host function stored under `cb` is called with `obj`.
 #[test]
 fn a_program_store_on_an_object_born_without_own_props_is_copied() {
-    let d = "(() => { const d: any = new Date(); d.cb = (x: any) => (globalThis as any).hostTake(x); return d; })()";
+    let d = "(() => { const d: any = new Date(); d.cb = (x: any) => external(x); return d; })()";
     assert!(!verdicts(d, "{ a: obj, ...src }").1);
     assert!(!verdicts(d, "Object.assign({ a: obj }, src)").1);
 }
@@ -110,7 +111,7 @@ fn a_spread_of_an_unknown_value_stays_unproven() {
 #[test]
 fn json_data_handed_to_unknown_code_stays_unproven() {
     let source = format!(
-        "((x: any) => {{ (globalThis as any).hook(x); return x; }})({})",
+        "((x: any) => {{ external(x); return x; }})({})",
         json()
     );
     assert!(!verdicts(&source, "{ a: obj, ...src }").1);

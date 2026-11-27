@@ -191,14 +191,16 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 self.to_property_key(kn);
-                let d = self.descriptor_of(mi, on);
+                // A for-in run's key is the one property described.
+                let key = self.for_in_key_of(mi, k).unwrap_or(NO_NODE);
+                let d = self.descriptor_of(mi, on, key);
                 // 20.1.2.8 / 28.1.7: an absent property gives `undefined`.
                 self.m.add_prim(d, prim::UNDEF);
                 d
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
-                let d = self.descriptor_of(mi, on);
+                let d = self.descriptor_of(mi, on, NO_NODE);
                 let (t, n) = self.bobj(mi, "descriptors");
                 let fa = self.m.field_any(t);
                 self.m.edge(d, fa);
@@ -250,13 +252,12 @@ impl<'a> Gen<'a> {
             Expr::ObjectFreeze(o) | Expr::ObjectSeal(o) | Expr::ObjectPreventExtensions(o) => {
                 let on = self.expr(fx, o);
                 let r = self.m.reason("E8 freeze/seal/preventExtensions");
-                self.m.cons(
-                    on,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match e {
+                    Expr::ObjectFreeze(_) => Hard::E8Freeze,
+                    Expr::ObjectSeal(_) => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                self.m.cons(on, Cons::Hard { kind, reason: r });
                 on
             }
             Expr::ReflectPreventExtensions(o) => {
@@ -265,7 +266,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     on,
                     Cons::Hard {
-                        kind: Hard::E8Freeze,
+                        kind: Hard::E8PreventExtensions,
                         reason: r,
                     },
                 );
@@ -295,6 +296,45 @@ impl<'a> Gen<'a> {
                 }
                 on
             }
+            // JSON-RT (`solve::json_rt`): the parse of `JSON.stringify(x)`
+            // with no replacer function is a fresh tree mirroring `x`.
+            Expr::JsonParse(text) | Expr::JsonParseTyped { text, .. }
+                if json_rt_operands(text).is_some() =>
+            {
+                let (x, rest) = json_rt_operands(text).unwrap();
+                // The stringify itself, as its own arm makes it.
+                let r = self.m.reason("JSON.stringify value");
+                let v = self.expr(fx, x);
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::Json,
+                        region: self.m.thrown,
+                    },
+                );
+                let _ = self.prim_op(
+                    fx,
+                    &rest,
+                    prim::ALL,
+                    "JSON.stringify replacer",
+                    Protocol::Any,
+                );
+                let (obj, _) = self.bobj(mi, "json");
+                let arr = self.new_arr_template(mi, "json");
+                let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+                let out = self.tmp("json-rt");
+                self.m.cons(
+                    v,
+                    Cons::JsonCopy {
+                        dst: out,
+                        site: obj,
+                        arr: at,
+                        at: crate::solve::json_rt::JSON_AT_ROOT,
+                    },
+                );
+                out
+            }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
                 let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
                 {
@@ -323,7 +363,7 @@ impl<'a> Gen<'a> {
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
                 // Stored under its key (`json_reviver_calls`).
-                self.json_reviver_calls(v, ret);
+                self.json_reviver_calls(v, ret, born);
                 // The reviver's results replace values in the parsed tree.
                 let tmp = self.tmp("revived");
                 self.m.edge(ret, tmp);
@@ -795,8 +835,6 @@ impl<'a> Gen<'a> {
             | Expr::ProxySet { .. }
             | Expr::ProxyHas { .. }
             | Expr::ProxyDelete { .. }
-            | Expr::ProxyApply { .. }
-            | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
             | Expr::ReflectGetMetadata { .. }
             | Expr::ReflectGetOwnMetadata { .. }
@@ -1125,6 +1163,97 @@ impl<'a> Gen<'a> {
 }
 
 impl<'a> Gen<'a> {
+    /// W-HOST: the structured clone a message carries (thread/clone_write.rs,
+    /// Message mode; StructuredDeserialize): fresh ordinary objects and
+    /// arrays, Map, Set, Date, RegExp, Error, ArrayBuffer and typed arrays,
+    /// each holding the others and any primitive; never a program object,
+    /// function or program prototype. The tokens of the tree.
+    fn message_clone_tree(&mut self, mi: u32) -> Vec<Tok> {
+        let (obj, _) = self.bobj(mi, "json");
+        let arr = self.new_arr_template(mi, "json");
+        let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        let mut tree = vec![obj, arr];
+        for what in [
+            "Map",
+            "Set",
+            "Date",
+            "RegExp",
+            "Error",
+            "ArrayBuffer",
+            "TypedArray",
+        ] {
+            let (x, _) = self.bobj(mi, what);
+            tree.push(x);
+        }
+        for &o in &tree {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, prim::ALL);
+            for &x in &tree {
+                self.m.add_tok(fa, x);
+            }
+        }
+        tree
+    }
+
+    /// W-HOST: a message's event: a MessageEvent (perry-runtime
+    /// event_target/message_event.rs `delivery`, `delivery_with_ports`),
+    /// [[Prototype]] %MessageEvent.prototype% -> %Event.prototype%, no own
+    /// property; its `data` getter returns its [[data]] slot, the clone
+    /// `tree`. Its `ports` stay the generic MessagePort path.
+    fn message_event(&mut self, mi: u32, tree: &[Tok]) -> Tok {
+        let (mev, _) = self.bobj(mi, "MessageEvent.prototype");
+        let da = crate::builtins::worker_slot_atom(&mut self.m, "data");
+        let data = self.m.field_r(mev, da);
+        self.m.add_prim(data, prim::ALL);
+        for &x in tree {
+            self.m.add_tok(data, x);
+        }
+        mev
+    }
+
+    /// RTREAD14 (owner 2026-11-23 Phase B, 2026-11-24 RUNTIME_GLOBAL_READS):
+    /// what the runtime does with a value it reads from the global object by
+    /// name. Every such read is the Worker global's handler
+    /// `%WorkerGlobal%.<name>` (perry-stdlib worker_threads/worker_surface.rs
+    /// `web_worker_global_handler`), and its one consumer
+    /// (channel_pump.rs, the parent port's message) calls a callable value
+    /// with `this` = the global object and one argument, the MessageEvent
+    /// (`message_event_with_ports`) of the structured clone the parent
+    /// posted; the host reports its throw. A value that is not callable is
+    /// never touched (`callback_bits_from_value`). So the store under such a
+    /// name is the program's field and this call its whole run-time use: no
+    /// escape. One event node per program, one call per name, on the name's
+    /// global field and every any-key global field that can spell it
+    /// (`builtins::runtime_global_call`). The event and its clone are born
+    /// when a value first reaches such a field (`runtime_global_event`), so
+    /// a program that stores no handler births none of their families.
+    pub(crate) fn runtime_global_handlers(&mut self) {
+        let names = perry_realm_table::RUNTIME_GLOBAL_READS;
+        if self.m.unit_mode || self.modules.is_empty() || names.is_empty() {
+            return;
+        }
+        let ev = self.m.node_l("runtime-message-event");
+        self.m.runtime_event = Some(ev);
+        let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        for &name in names {
+            if crate::builtins::members::realm_entry(&format!(
+                "{}{name}",
+                crate::builtins::WORKER_GLOBAL_PREFIX
+            ))
+            .is_none()
+            {
+                unreachable!(
+                    "REALMVAL: the runtime reads global {name} by name, but no \
+                     %WorkerGlobal%.{name} handler declares what it does with it"
+                );
+            }
+            let gn = self.tok_node(g);
+            let (id, _) = self.new_call(ThisArg::Node(gn), vec![ev], vec![]);
+            self.m.calls[id as usize].region = self.m.host_report;
+            crate::builtins::runtime_global_call(&mut self.m, name, id);
+        }
+    }
+
     /// W-HOST (LADDER18): what the runtime does with the host Worker `t`
     /// (node `n`) made at this site (perry-stdlib worker_threads
     /// worker_pump.rs `dispatch_worker_event_with_ports`, worker_threads.rs
@@ -1155,46 +1284,14 @@ impl<'a> Gen<'a> {
     /// Listener registration and `postMessage` are the Worker methods of
     /// `bobj_method` (builtins/collections.rs `worker_method`).
     fn worker_host(&mut self, mi: u32, t: Tok, n: NodeId) {
-        let (obj, _) = self.bobj(mi, "json");
-        let arr = self.new_arr_template(mi, "json");
-        let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
-        let mut tree = vec![obj, arr];
-        for what in [
-            "Map",
-            "Set",
-            "Date",
-            "RegExp",
-            "Error",
-            "ArrayBuffer",
-            "TypedArray",
-        ] {
-            let (x, _) = self.bobj(mi, what);
-            tree.push(x);
-        }
-        for &o in &tree {
-            let fa = self.m.field_any(o);
-            self.m.add_prim(fa, prim::ALL);
-            for &x in &tree {
-                self.m.add_tok(fa, x);
-            }
-        }
+        let tree = self.message_clone_tree(mi);
         let pa = crate::builtins::worker_slot_atom(&mut self.m, "WorkerPayload");
         let payload = self.m.field_r(t, pa);
         self.m.add_prim(payload, prim::ALL);
         for &x in &tree {
             self.m.add_tok(payload, x);
         }
-        // A message's event: a MessageEvent (message_event.rs `delivery`),
-        // [[Prototype]] %MessageEvent.prototype% -> %Event.prototype%, no
-        // own property; its `data` getter returns its [[data]] slot, the
-        // clone tree. Its `ports` stay the generic MessagePort path.
-        let (mev, _) = self.bobj(mi, "MessageEvent.prototype");
-        let da = crate::builtins::worker_slot_atom(&mut self.m, "data");
-        let data = self.m.field_r(mev, da);
-        self.m.add_prim(data, prim::ALL);
-        for &x in &tree {
-            self.m.add_tok(data, x);
-        }
+        let mev = self.message_event(mi, &tree);
         // HOSTEV: any other event (`error`, `messageerror`, `exit`) is the
         // plain object of perry-stdlib worker_threads.rs `event_object`
         // (Object.prototype): exactly the own data fields `type` (the event
@@ -1248,5 +1345,26 @@ impl<'a> Gen<'a> {
         self.m.calls[emit as usize].region = host;
         self.m.calls[tick as usize].region = host;
         crate::builtins::process_worker_event(&mut self.m, n, emit, tick);
+    }
+}
+
+/// JSON-RT: the value and the other operands of a `JSON.stringify` text
+/// with no replacer function (absent, `null` or `undefined`: 25.5.2.1
+/// step 4 then keeps every key); `None` for a text of any other origin.
+fn json_rt_operands(text: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+    let nullish = |r: &Expr| matches!(r, Expr::Null | Expr::Undefined);
+    match text {
+        Expr::JsonStringify(x) => Some((x, vec![])),
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } if replacer.as_deref().is_none_or(nullish) => {
+            let mut rest: Vec<&Expr> = replacer.as_deref().into_iter().collect();
+            rest.push(space);
+            Some((value, rest))
+        }
+        Expr::JsonStringifyFull(x, r, s) if nullish(r) => Some((x, vec![&**r, &**s])),
+        _ => None,
     }
 }

@@ -63,7 +63,7 @@ fn a_string_method_on_an_object_receiver_hands_it_to_no_one() {
 #[test]
 fn a_maybe_unknown_callee_still_hands_the_receiver_over() {
     let src = unseen(&program(
-        "process.argv.length > 8 ? String.prototype.replace : (globalThis as any).hostReplace",
+        "process.argv.length > 8 ? String.prototype.replace : external()",
     ));
     let pf = facts(&src);
     assert!(

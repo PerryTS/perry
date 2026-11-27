@@ -1,0 +1,1 @@
+An `Object.defineProperty(globalThis, "navigator", { value })` data define (a key the realm declares as a getter-only accessor) no longer hands its value to unknown code: the runtime never reads that key by name, so the value goes into the global field, reads of `navigator` see it, and the program sites behind it stay proven.

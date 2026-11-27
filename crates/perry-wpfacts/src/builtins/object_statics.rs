@@ -117,8 +117,10 @@ pub(crate) fn define_all(
 /// has the other kind) and the booleans `writable`, `enumerable`,
 /// `configurable`. The caller adds `undefined` to the result when the
 /// property may be absent (20.1.2.8 step 4).
-pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
-    m.cons(o, Cons::OwnDescValues { dst: vals });
+/// `key`: the key node when it decides the one property (a for-in run's
+/// key, `Cons::OwnDescValues`), else `NO_NODE`.
+pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, key: NodeId, vals: NodeId, t: Tok) {
+    m.cons(o, Cons::OwnDescValues { dst: vals, key });
     let value = m.atom("value");
     let fv = m.field(t, value);
     m.edge(vals, fv);
@@ -397,7 +399,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             );
             let t = site_tmpl(m, call, "descriptor");
             let vals = node(m, call, "b-load");
-            own_descriptor(m, o, vals, t);
+            own_descriptor(m, o, NO_NODE, vals, t);
             ret_tok(m, call, t);
             // 20.1.2.8 step 4: an absent property gives `undefined`.
             ret_prim(m, call, prim::UNDEF);
@@ -408,7 +410,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             };
             let td = site_tmpl(m, call, "descriptor");
             let vals = node(m, call, "b-load");
-            own_descriptor(m, o, vals, td);
+            own_descriptor(m, o, NO_NODE, vals, td);
             let t = site_tmpl(m, call, "descriptors");
             let fa = m.field_any(t);
             m.add_tok(fa, td);

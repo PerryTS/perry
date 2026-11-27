@@ -11,6 +11,7 @@ use super::*;
 fn escapes(copy: &str, ctor: &str, key: &str) -> bool {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         const svc: any = new Svc();
         class V {{ constructor() {{ {ctor} }} copy() {{ {copy} return 1; }} }}
@@ -21,7 +22,7 @@ fn escapes(copy: &str, ctor: &str, key: &str) -> bool {
         }}
         const b = new B(Math.random() < 0.5 ? V.prototype : {{ a: 1 }}, {key});
         const r = b.get();
-        (globalThis as any).hostTake(r);
+        external(r);
         function g(a: any) {{ return a.size; }}
         console.log(g(svc));
         "#
@@ -30,7 +31,7 @@ fn escapes(copy: &str, ctor: &str, key: &str) -> bool {
     matches!(v, Verdict::No(_))
 }
 
-const LEAK: &str = "(globalThis as any).hostTake(svc);";
+const LEAK: &str = "external(svc);";
 const AB: &str = r#"Math.random() < 0.5 ? "a" : "b""#;
 const UNKNOWN: &str = "process.argv[2]";
 

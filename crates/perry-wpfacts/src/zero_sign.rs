@@ -126,10 +126,12 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Falsy { dst }
         | Cons::NotBuffer { dst, .. }
         | Cons::NotObjectProto { dst }
+        | Cons::NotError { dst, .. }
         | Cons::NotRegExp { dst }
         | Cons::ProtoObjects { dst }
         | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
+ | Cons::ArrayRecordEntry { dst }
         | Cons::TypeIs { dst, .. }
         | Cons::Objects { dst }
         | Cons::NotUndefined { dst } => Use::To(dst),
@@ -163,14 +165,19 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ArrayLenArg { .. }
         | Cons::CaseMap { .. }
         | Cons::ConsoleFormat { .. }
-        | Cons::Raise { .. }
+        | Cons::Raise { .. } | Cons::HandRaise { .. }
         | Cons::Identity { .. }
+        | Cons::Detached
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }
+        | Cons::DeleteIdx { .. }
+        | Cons::Meta { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
-        | Cons::OwnGate { .. } => Use::Absorb,
+        | Cons::OwnGate { .. }
+        // JSON-RT: `-0` serializes as `0` (25.5.2.2 step 9, Number::toString).
+        | Cons::JsonCopy { .. } => Use::Absorb,
         // Constraints of objects: a store's value reaches its slot by an
         // edge (`Store`, `BirthField`, spreads, iteration, `Array.from`);
         // calling, constructing or defining on a Number throws or does
@@ -210,6 +217,11 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::AnyAccessors { .. }
         | Cons::UnnamedSet { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }
@@ -270,6 +282,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::BoundCall { .. }
         | Cons::Miss { .. }
         | Cons::TopSink { .. }
+        | Cons::InterpRuns { .. }
         | Cons::RuntimeStore { .. }
         | Cons::HandOver { .. }
         | Cons::StoreOut { .. }

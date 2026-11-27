@@ -160,11 +160,16 @@ fn r9read11_s8_reads_through_value_see_writes() {
 }
 
 /// KEEP s9: `Array.prototype` stored on as an Array exotic object under an
-/// index name and its `slice` replaced through a computed key.
+/// index name and under a computed key that may be `slice`. DEC 250: `slice`
+/// is an image member of `%Array.prototype%`, whose replacement the
+/// runtime's lock refuses (perry-abi `lock::refuses(_, Image, _)`), so the
+/// read is the intrinsic. Owner 11-24 (the E20 realm hold dropped): it is
+/// the native member.
 #[test]
 fn r9read11_s9_computed_store_kept() {
     let pf = facts(&format!("{SLICE}(Array.prototype as any)[process.argv[3] ?? \"q\"] = function () {{ return [n]; }};\n{USE}"));
-    assert!(!proven(&sites(&pf, "slice")), "slice");
+    let v = sites(&pf, "slice");
+    assert!(v.iter().any(|x| x.contains("native:Array")), "slice {v:?}");
 }
 
 /// KEEP s10: a method value called through `.call` after `F.call = g` on it.

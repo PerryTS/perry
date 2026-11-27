@@ -93,13 +93,16 @@ fn method_getter_on_the_debug_namespace_keeps_its_members() {
     check(&debug_cache("", "Object.prototype.toString"), true);
 }
 
-/// Control: an unknown function value stays an opaque accessor (its result
-/// is ⊤ and `Debug` escapes).
+/// The for-in over `assertionCache` runs per own key (cliff 78787d3bd2 /
+/// 1d89670812, rule EK e390941ff7): its only key is `assertNode`, so no
+/// enumerated key names an Object.prototype method, `Debug.assertNode` is
+/// never `__defineGetter__`, and the unknown function is never an accessor:
+/// `Debug` does not escape. (`unknown_setter_stays_opaque` stays the control.)
 #[test]
-fn unknown_getter_on_the_debug_namespace_stays_opaque() {
+fn unknown_getter_on_the_debug_namespace_runs_only_where_its_key_is_read() {
     check(
         &debug_cache("declare function unknown(): any;", "unknown()"),
-        false,
+        true,
     );
 }
 

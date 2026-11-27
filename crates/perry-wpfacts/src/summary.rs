@@ -102,7 +102,7 @@ pub enum Deferred {
     ReflectConstruct(CallId, Tok, Tok),
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
-    ForIn(CallId, Tok, Tok),
+    ForIn(CallId, Tok, Tok, KeyList),
     /// A native method run at a call (`builtins::own_method`,
     /// `proto_method`, `prim_method`): like a birth, it waits for summaries,
     /// so what the method births and calls at a summary's call is per
@@ -185,6 +185,10 @@ pub struct Summary {
     pub edge_reach: FxHashMap<(NodeId, NodeId), u64>,
     pub cons_reach: Vec<u64>,
     pub call_reach: Vec<u64>,
+    /// Under `PERRY_FACTS_STOP_ON_TOP`: the program position of each rule
+    /// (parallel to `cons`; empty when off): an instance's copy of a rule
+    /// stands where the body's rule does.
+    pub cons_pos: Vec<(u32, u32)>,
 }
 
 /// Every run reaches it (a reach mask).
@@ -242,6 +246,9 @@ pub struct SumState {
     /// Summaries exist: bindings run directly instead of being queued.
     pub ready: bool,
     pub deferred: Vec<Deferred>,
+    /// Under `PERRY_FACTS_STOP_ON_TOP`: the program position of each
+    /// deferred step (parallel to `deferred`; empty when off).
+    pub deferred_pos: Vec<(u32, u32)>,
     pub of: FxHashMap<FnIdx, Rc<Summary>>,
     pub insts: Vec<Inst>,
     /// (kind, layout/site/node, function token) -> instance. Kinds: 0 a
@@ -256,6 +263,9 @@ pub struct SumState {
     /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
     /// the call's template, so one run per site of the program text).
     /// 8 a Proxy trap's run for one key shape (rule PXGET: `trap_ctx`).
+    /// 9 a call of a shared run, for the call's template (rule
+    /// SHARED-SITE-RUN, `shared_run_site`): no site run, so its own calls
+    /// are template runs again.
     /// The fourth component is the function value a run's called
     /// parameter is bound to (`Summary::called`), else `NO_VAL`.
     /// Nothing in a key is another instance: the count is (sites +
@@ -353,6 +363,127 @@ pub struct SumState {
     pub made_of: FxHashMap<(CallId, Maker, u32), CallId>,
     /// Maker context `BORN - 1 - i` -> (its birth site, its maker).
     pub made: Vec<(CallId, Maker)>,
+    /// Rule SINKBIRTH: the instance copies of calls whose result reaches
+    /// only nodes every run shares (`sink_calls`), with the operands every
+    /// run shares (bit 0 the receiver, bit 1 + i argument i): the object
+    /// such a copy returns from those operands alone is born as the
+    /// template run's (`Model::birth_ctx_result`).
+    pub sink_calls: FxHashMap<CallId, u32>,
+    /// `sink_calls` of each summary, with the summary it was read from.
+    pub(crate) sink_of: FxHashMap<FnIdx, (Rc<Summary>, Rc<Vec<SinkCall>>)>,
+}
+
+/// One `sink_calls` entry: the call's index in `Summary::calls`, whether
+/// its result reaches an outer slot, and its operands (bit 0 the receiver,
+/// bit 1 + i argument i) that are absolute nodes / outer slots.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SinkCall {
+    pub k: u32,
+    pub via_outer: bool,
+    pub abs: u32,
+    pub outer: u32,
+}
+
+/// Rule SINKBIRTH: the calls of `s` (index in `calls`) whose result reaches
+/// only nodes every run of `s` shares, and whether an outer slot is among
+/// them (shared only by the runs with no closure context). The result term
+/// is an absolute node, an outer slot, or a fresh slot whose only uses are
+/// copy edges into such nodes: no rule reads or names it, no call takes it
+/// (or returns into it besides this one), no closure captures it, and it is
+/// no parameter, `this`, rest or the body's result. With each, the call's
+/// operands every run shares: an absolute node, or an outer slot (shared
+/// only by the runs with no closure context); with a spread argument no
+/// argument is (its positions come from a run's array).
+pub(crate) fn sink_calls(s: &Summary) -> Vec<SinkCall> {
+    let n = s.nslots as usize;
+    let ix = |x: NodeId| (x != NO_NODE && x & SLOT != 0).then(|| (x & !SLOT) as usize);
+    let mut outer = vec![false; n];
+    for &o in &s.outer {
+        outer[o as usize] = true;
+    }
+    let mut used = vec![false; n];
+    let mut rets = vec![0u32; n];
+    {
+        let mut mark = |x: NodeId| {
+            if let Some(i) = ix(x) {
+                used[i] = true;
+            }
+        };
+        for &p in s.params.iter().chain([&s.ret, &s.this, &s.rest]) {
+            mark(p);
+        }
+        for (h, c) in &s.cons {
+            mark(*h);
+            for x in cons_fields(c).0 {
+                mark(x);
+            }
+        }
+        for (_, cs) in &s.calls {
+            if let ThisArg::Node(x) = cs.this {
+                mark(x);
+            }
+            for &x in cs.args.iter().chain(&cs.spread) {
+                mark(x);
+            }
+            mark(cs.region);
+        }
+        for (sl, _, terms, _) in &s.closures {
+            mark(SLOT | sl);
+            for &x in terms {
+                mark(x);
+            }
+        }
+    }
+    for (_, cs) in &s.calls {
+        if let Some(i) = ix(cs.ret) {
+            rets[i] += 1;
+        }
+    }
+    let mut shared_out = vec![true; n];
+    let mut via_outer = vec![false; n];
+    for &(a, b) in &s.edges {
+        let Some(i) = ix(a) else { continue };
+        match ix(b) {
+            Some(j) if outer[j] => via_outer[i] = true,
+            Some(_) => shared_out[i] = false,
+            None => {}
+        }
+    }
+    // Operand `x` at bit `b`: absolute (`abs`) or an outer slot (`outer`).
+    let shared = |x: NodeId, b: u32, abs: &mut u32, out: &mut u32| match ix(x) {
+        None => *abs |= 1 << b,
+        Some(i) if outer[i] => *out |= 1 << b,
+        Some(_) => {}
+    };
+    let mut out = Vec::new();
+    for (k, (_, cs)) in s.calls.iter().enumerate() {
+        if cs.ret == NO_NODE {
+            continue;
+        }
+        let via_outer = match ix(cs.ret) {
+            None => false,
+            Some(i) if outer[i] => true,
+            Some(i) if !used[i] && rets[i] == 1 && shared_out[i] => via_outer[i],
+            Some(_) => continue,
+        };
+        let (mut abs, mut outs) = (0u32, 0u32);
+        match cs.this {
+            ThisArg::Node(x) => shared(x, 0, &mut abs, &mut outs),
+            ThisArg::Undef | ThisArg::Tok(_) => abs |= 1,
+        }
+        if cs.spread.is_empty() {
+            for (i, &x) in cs.args.iter().enumerate().take(31) {
+                shared(x, 1 + i as u32, &mut abs, &mut outs);
+            }
+        }
+        out.push(SinkCall {
+            k: k as u32,
+            via_outer,
+            abs,
+            outer: outs,
+        });
+    }
+    out
 }
 
 mod map;
@@ -384,9 +515,11 @@ impl Model {
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
                 | Cons::NotObjectProto { dst }
+                | Cons::NotError { dst, .. }
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
+ | Cons::ArrayRecordEntry { dst }
                 | Cons::TypeIs { dst, .. }
                 | Cons::Objects { dst }
                 | Cons::NotUndefined { dst }
@@ -830,6 +963,43 @@ impl Model {
         }
     }
 
+    /// Rule SINKBIRTH: the birth context of the object `call` returns,
+    /// whose contents come from the call operands `need` (bit 0 the
+    /// receiver, bit 1 + i argument i; `u32::MAX`: from anything else). An
+    /// instance's copy of a call whose result reaches only nodes every run
+    /// shares, and whose `need` operands are nodes every run shares
+    /// (`SumState::sink_calls`), births it as the template run does (its
+    /// program site's context). Every run's copy is then the same
+    /// constraints over the same nodes, apart from the birth's token: the
+    /// per-run objects are images of one another under exchanging them, so
+    /// one token stands for them with the same value sets (DECLS.md).
+    /// Every other birth is `birth_ctx`'s.
+    pub(crate) fn birth_ctx_result(&mut self, call: CallId, need: u32) -> CallId {
+        if self
+            .sum
+            .sink_calls
+            .get(&call)
+            .is_some_and(|&ok| need & !ok == 0)
+        {
+            if let Some(site) = self.origin_of(call).filter(|&s| self.prog_call(s)) {
+                return self.birth_ctx(site);
+            }
+        }
+        self.birth_ctx(call)
+    }
+
+    /// The `sink_calls` of the summary of `f` (`s`), read once per summary.
+    fn sink_calls_of(&mut self, f: FnIdx, s: &Rc<Summary>) -> Rc<Vec<SinkCall>> {
+        if let Some((k, v)) = self.sum.sink_of.get(&f) {
+            if Rc::ptr_eq(k, s) {
+                return v.clone();
+            }
+        }
+        let v = Rc::new(sink_calls(s));
+        self.sum.sink_of.insert(f, (s.clone(), v.clone()));
+        v
+    }
+
     /// The object lexical context `lay` names (a constructor run or a
     /// method instance of one object), and whether it is a method's.
     fn lay_object(&self, lay: u32) -> Option<(Tok, bool)> {
@@ -1119,7 +1289,7 @@ impl Model {
             }
         }
         let lay = match key.0 {
-            0 | 7 => LAY_SITE | key.1,
+            0 | 7 | 9 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
             1 if this != NO_NODE => key.1,
             8 if this != NO_NODE => self.sum.trap_ctx[key.1 as usize].0,
@@ -1135,8 +1305,12 @@ impl Model {
             NO_CTX => NO_VC,
             c => self.sum.ctx_vc[c as usize],
         };
+        // A loop body's run for one key (kind 6, FVA 4.3b) is keyed by that
+        // key's String as such a run is: what it births and the closures it
+        // makes (a wrapper capturing `p[k]`) are that key's.
         let vc = match val {
             v if v != NO_VAL && s.switch.is_some() && s.called.is_none() => self.vc_of(pvc, f, v),
+            _ if key.0 == 6 => self.vc_of(pvc, f, key.1),
             _ => pvc,
         };
         self.sum.insts.push(Inst {
@@ -1226,13 +1400,21 @@ impl Model {
         if call != NO_NODE && self.composed_away(call, f) {
             return;
         }
+        // The work bound is looked at where it decides: work charged since
+        // the last check (inside a fill or a replay) counts here, and this
+        // one answer governs the whole binding (key, by-value, M1).
+        if self.past_work_bound() {
+            return;
+        }
+        let widened = self.widened;
         let lay = match x {
             Some(t) if self.has_this_term(f) => self.recv_lay(t),
             _ => LAY_NONE,
         };
         let key = match x {
-            // Rule C: a closure maker's runs are per call site.
-            _ if call != NO_NODE && self.closure_maker(f, x) => {
+            // Rule C: a closure maker's runs are per call site; so are those
+            // of a function with a rest parameter no receiver lays out (E2).
+            _ if call != NO_NODE && (self.closure_maker(f, x) || self.rest_per_site(f, lay)) => {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
@@ -1243,16 +1425,23 @@ impl Model {
             // the run of its key shape (10.5.8 step 8: the trap gets that
             // access's P, never another access's).
             _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
+            _ if lay == LAY_NONE
+                && let Some(site) = self.shared_run_site(call) =>
+            {
+                (9, site, ft)
+            }
             _ => (1, lay, ft),
         };
-        // Widened (`past_work_bound`): no new calling context. The call
-        // runs the function's shared instance, which gets this receiver
-        // and these arguments by the same edges (below): a merge of
-        // callers. A birth's run (5) stays per object: its key is what
-        // it births.
+        // Widened (`past_work_bound`, above): no new calling context the
+        // solve itself made. The call runs the function's shared instance,
+        // which gets this receiver and these arguments by the same edges
+        // (below): a merge of callers. A birth's run (5) stays per object:
+        // its key is what it births. A key the program text bounds before
+        // the solve stays too (`text_key`, owner 11-26).
         let key = match key.0 {
-            0 | 1 | 7 | 8
-                if self.widened
+            0 | 1 | 7 | 8 | 9
+                if widened
+                    && !Self::text_key(key, self.sum.n_prog)
                     && !self
                         .sum
                         .inst_key
@@ -1265,13 +1454,13 @@ impl Model {
         // A function that only calls a parameter runs once per function
         // value a call passes there alone; checked again once the
         // worklist is empty (`settle_val_runs`).
-        let val = match by_val && !self.widened {
+        let val = match by_val && !widened {
             true => self.called_val(call, f),
             false => NO_VAL,
         };
         // Its argument holds nothing yet: the run is chosen once the
         // worklist is empty (`settle_val_runs`).
-        if val == NO_VAL && by_val && !self.widened && self.called_pending(call, f) {
+        if val == NO_VAL && by_val && !widened && self.called_pending(call, f) {
             self.val_runs.push((call, ft, x, prim, NO_VAL));
             return;
         }
@@ -1280,7 +1469,7 @@ impl Model {
         }
         // Rule M1: an argument that holds only string constants runs the
         // run of each one (the clauses a value it holds selects, none other).
-        let vals = match val == NO_VAL && by_val && !self.widened {
+        let vals = match val == NO_VAL && by_val && !widened {
             true => self.switch_vals(call, f),
             false => Vec::new(),
         };
@@ -1291,6 +1480,19 @@ impl Model {
             self.val_runs.push((call, ft, x, prim, v));
             self.bind_instance(call, f, key, v, x, prim);
         }
+    }
+
+    /// WIDEN9 (owner 11-26): a run key whose count the program text fixes
+    /// before the solve, so a widened solve keeps it: a kind-0 run at a
+    /// program site, a rule-C run (7) and a SHARED-SITE-RUN run (9) of a
+    /// call that exists when summaries are built (`n_prog`: program calls
+    /// and summary templates), times a function token. What such a run
+    /// births is per (birth site, that call) (`made_ctx`), so the tokens a
+    /// widened solve makes are bounded too. A key the solve made (a
+    /// nested-site chain copy, a solver call, a receiver or trap context)
+    /// has no such bound and merges.
+    fn text_key(key: (u8, u32, Tok), n_prog: usize) -> bool {
+        matches!(key.0, 0 | 7 | 9) && (key.1 as usize) < n_prog
     }
 
     fn bind_instance(
@@ -1351,7 +1553,8 @@ impl Model {
     /// callee at a site. (Folding by token alone let a recursion that
     /// reaches every closure of one function run each permutation of them:
     /// three.js `WebGLShadowMap` `renderObject`, 16 closures.) A call in the
-    /// shared run (no site, no object) keeps the shared run.
+    /// shared run (no site, no object) is its template's site
+    /// (`shared_run_site`).
     fn nested_site(&self, call: CallId, ft: Tok) -> Option<CallId> {
         if call == NO_NODE || (call as usize) < self.sum.n_prog {
             return None;
@@ -1383,6 +1586,32 @@ impl Model {
             }
         }
         Some(call)
+    }
+
+    /// Rule SHARED-SITE-RUN: a plain call an instance made (a copy of a
+    /// template, `tmpl_of`) inside a run that is no context of its own (no
+    /// site, no object: a function's shared run, as a callback a builtin
+    /// calls from inside an instance runs, and the runs below it) runs the
+    /// callee's run for the call's template (kind 9), one per site of the
+    /// program text. The shared run is the function's one body for every
+    /// call no site keys, as the body of a function without a summary is,
+    /// and that body's calls run per site; before this rule the shared
+    /// run's calls all ran the callee's shared run, so a literal one site
+    /// stores into an escaped object was the literal every other such site
+    /// reads (perry-web css/layout.ts `b.margin = edges(..)` and the edge
+    /// reads of `layoutInline`). A kind-9 run is no site run: its own plain
+    /// calls are kind-9 runs of their templates again, so no chain grows
+    /// below it and the runs are at most templates x function tokens.
+    fn shared_run_site(&self, call: CallId) -> Option<CallId> {
+        if call == NO_NODE || (call as usize) < self.sum.n_prog {
+            return None;
+        }
+        let t = *self.sum.tmpl_of.get(&call)?;
+        if !self.sum.site_tmpls.contains(&t) {
+            return None;
+        }
+        let cur = *self.sum.call_inst.get(&call)?;
+        (!self.sum.site_run.contains(&cur)).then_some(t)
     }
 
     fn site_of_call(&self, call: CallId) -> Option<CallId> {
@@ -1553,6 +1782,13 @@ impl Model {
                     self.bind_layout_run(call, ft, x, prim, true);
                     more = true;
                 }
+            } else if val == NO_VAL && self.called_pending(call, self.tok_fn(ft)) {
+                // A waiting call whose argument still holds nothing waits on:
+                // no value reaches that argument, so the call never runs
+                // with one (a loop arm whose source a guard holds back,
+                // `settle_record_entry`). A later settle that fills it
+                // binds it on the next round.
+                keep.push(r);
             } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
                 // (pushes its run's record when it takes one): the run of
@@ -1578,6 +1814,18 @@ impl Model {
             return false;
         };
         (x.is_none() || s.this == NO_NODE) && s.maker
+    }
+
+    /// E2: a rest parameter's array is born by each call (ECMA-262 10.2.11
+    /// FunctionDeclarationInstantiation: CreateArrayFromList of that call's
+    /// remaining arguments), so its elements are that call's arguments only.
+    /// A run with no receiver layout (`LAY_NONE`) births the rest template
+    /// every such run shares (`fill_instance`), merging the arguments of
+    /// every call; the per-site run of rule C (kind 7, `LAY_SITE`) births one
+    /// array per call site instead. Bounded as rule C: a site inside an
+    /// instance is its template.
+    fn rest_per_site(&self, f: FnIdx, lay: u32) -> bool {
+        lay == LAY_NONE && self.funcs[f as usize].rest.is_some()
     }
 
     /// Apply the entries of every pending instance (a worklist: instances
@@ -1696,6 +1944,15 @@ impl Model {
             TokKind::Func(_, c) => c,
             _ => NO_CTX,
         };
+        // Rule SINKBIRTH: the copies whose result reaches only nodes every
+        // run shares, with their shared operands; an outer slot is one only
+        // without a closure context (it is then the template's own node).
+        for sc in self.sink_calls_of(f, &s).iter() {
+            if !sc.via_outer || ctx == NO_CTX {
+                let ok = sc.abs | if ctx == NO_CTX { sc.outer } else { 0 };
+                self.sum.sink_calls.insert(kmap[sc.k as usize], ok);
+            }
+        }
         for (slot, g, terms, cap) in &s.closures {
             let nodes: Vec<NodeId> = terms.iter().map(|&x| tr(x)).collect();
             let (key, clay) = match *cap {
@@ -1726,6 +1983,11 @@ impl Model {
             if bit != REACH_ALL && s.edge_reach.get(&(a, b)).is_some_and(|&m| m & bit == 0) {
                 continue;
             }
+            // An edge sends what its source holds now (`register_copy`):
+            // the bound holds inside one fill too.
+            if self.past_work_bound() {
+                return;
+            }
             self.edge(tr(a), tr(b));
         }
         for (i, (t, cs)) in s.calls.iter().enumerate() {
@@ -1740,6 +2002,10 @@ impl Model {
             if s.cons_reach.get(ci).is_some_and(|&m| m & bit == 0) {
                 continue;
             }
+            // Each rule replays on what its node holds now (`replay_cons`).
+            if self.past_work_bound() {
+                return;
+            }
             let c2 = map_cons(c, tr, |k| {
                 if k != NO_NODE && k & CALL != 0 {
                     kmap[(k & !CALL) as usize]
@@ -1747,7 +2013,16 @@ impl Model {
                     k
                 }
             });
+            // The copy stands where the body's rule does.
+            let p = s.cons_pos.get(ci).copied();
+            let saved = match (self.stop_top.as_mut(), p) {
+                (Some(st), Some(p)) => Some(st.replay_at(p)),
+                _ => None,
+            };
             self.cons(tr(*h), c2);
+            if let (Some(st), Some(saved)) = (self.stop_top.as_mut(), saved) {
+                st.replay_done(saved);
+            }
         }
     }
 
@@ -2219,11 +2494,20 @@ impl Model {
                     continue;
                 }
                 let b = self.node_l("param-bind");
-                self.node_fn[b as usize] = f;
+                self.set_owner(b, f);
                 self.nodes[b as usize].frame = run;
                 self.nodes[b as usize].rel = true;
                 self.nodes[p as usize].frame = run;
+                // The binding stands at the parameter's declaration (the
+                // position generation recorded for the parameter's node).
+                let saved = self.stop_top.as_mut().map(|s| {
+                    let at = s.node_pos.get(p as usize).copied().unwrap_or(crate::topstop::NOPOS);
+                    std::mem::replace(&mut s.gen_pos, at)
+                });
                 self.edge(b, p);
+                if let (Some(s), Some(g)) = (self.stop_top.as_mut(), saved) {
+                    s.gen_pos = g;
+                }
                 self.funcs[f as usize].params[i] = b;
             }
         }
@@ -2370,6 +2654,31 @@ impl Model {
         }
     }
 
+    /// A summarized `f` whose `this` has values from generation: its
+    /// shared instance.
+    pub(crate) fn eager_this(&mut self, f: FnIdx) {
+        let s = self.sum.of[&f].clone();
+        if is_slot(s.this) {
+            let sl = s.this & !SLOT;
+            let ft = self.funcs[f as usize].token;
+            let fed = s.seeds.iter().any(|x| x.0 == sl)
+                || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
+            if fed && self.instantiable(ft) {
+                self.instance((1, LAY_NONE, ft));
+            }
+        }
+    }
+
+    /// Queue step `d` until summaries exist, at the program position of
+    /// what runs now (`StopTop::cur_pos`).
+    pub(crate) fn defer(&mut self, d: Deferred) {
+        if let Some(s) = self.stop_top.as_ref() {
+            let p = s.cur_pos();
+            self.sum.deferred_pos.push(p);
+        }
+        self.sum.deferred.push(d);
+    }
+
     /// After generation: summaries, observation nodes, then every queued
     /// binding.
     pub fn summarize_and_replay(&mut self) {
@@ -2390,12 +2699,20 @@ impl Model {
                 }
             }
         }
+        self.detach_foreign();
         self.sum.ready = true;
         self.run_unsummarized();
         self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
+        let deferred_pos = std::mem::take(&mut self.sum.deferred_pos);
         let nd = deferred.len();
-        for d in deferred {
+        for (di, d) in deferred.into_iter().enumerate() {
+            // The step stands where generation deferred it.
+            let p = deferred_pos.get(di).copied();
+            let saved = match (self.stop_top.as_mut(), p) {
+                (Some(s), Some(p)) => Some(s.replay_at(p)),
+                _ => None,
+            };
             match d {
                 Deferred::Bind(call, t) => self.bind_args(call, t),
                 Deferred::Escape(f, reason) => self.escape_fn_params(f, reason),
@@ -2414,12 +2731,15 @@ impl Model {
                     self.reflect_construct(call, target, new_target)
                 }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
-                Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
+                Deferred::ForIn(call, ft, t, l) => self.for_in_tok(call, ft, t, l),
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => self.with_native(call, |m, call| {
                     crate::builtins::native_method_at(m, r, key, call)
                 }),
+            }
+            if let (Some(s), Some(saved)) = (self.stop_top.as_mut(), saved) {
+                s.replay_done(saved);
             }
         }
         // A `this` with values from generation (static blocks, field
@@ -2428,15 +2748,9 @@ impl Model {
         let mut fs: Vec<FnIdx> = self.sum.of.keys().copied().collect();
         fs.sort_unstable();
         for f in fs {
-            let s = self.sum.of[&f].clone();
-            if is_slot(s.this) {
-                let sl = s.this & !SLOT;
-                let ft = self.funcs[f as usize].token;
-                let fed = s.seeds.iter().any(|x| x.0 == sl)
-                    || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
-                if fed && self.instantiable(ft) {
-                    self.instance((1, LAY_NONE, ft));
-                }
+            // D2: an inert one's when it activates (`wake_activated`).
+            if !self.fn_inert(f) {
+                self.eager_this(f);
             }
         }
         self.fill_instances();

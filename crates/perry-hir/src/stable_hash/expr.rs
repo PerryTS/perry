@@ -203,8 +203,8 @@ impl SH for Expr {
             Expr::FsAppendFileSync(a, b) => { tag(h, 87); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::FsReadFileBinary(e) => { tag(h, 88); e.as_ref().hash(h); }
             Expr::FsRmRecursive(e) => { tag(h, 89); e.as_ref().hash(h); }
-            Expr::PathJoin(a, b) => { tag(h, 90); a.as_ref().hash(h); b.as_ref().hash(h); }
-            Expr::PathWin32Join(a, b) => { tag(h, 462); a.as_ref().hash(h); b.as_ref().hash(h); }
+            Expr::PathJoin(es) => { tag(h, 90); es.hash(h); }
+            Expr::PathWin32Join(es) => { tag(h, 462); es.hash(h); }
             Expr::PathWin32 { method, args } => { tag(h, 11222); (*method as u32).hash(h); for a in args { a.hash(h); } }
             Expr::PathDirname(e) => { tag(h, 91); e.as_ref().hash(h); }
             Expr::PathBasename(e) => { tag(h, 92); e.as_ref().hash(h); }

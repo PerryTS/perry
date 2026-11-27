@@ -9,6 +9,7 @@ use crate::object::{js_object_set_field_f64, js_object_set_keys};
 use crate::{js_object_alloc, js_string_from_bytes, ArrayHeader, ObjectHeader, StringHeader};
 
 pub mod abort;
+pub(crate) mod href;
 pub mod node_compat;
 pub mod parse;
 pub(crate) mod prototype;
@@ -78,6 +79,17 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
         crate::exception::throw_core(crate::error::CoreError::type_error(m));
     }
     crate::value::js_jsvalue_to_string(value)
+}
+
+/// The optional `base` argument of `new URL`, `URL.canParse` and `URL.parse`:
+/// `undefined` is an omitted argument (Web-IDL `optional`), which reads as a
+/// null pointer (no base); any other value is `String(value)`.
+#[no_mangle]
+pub extern "C" fn js_url_coerce_base(value: f64) -> *mut StringHeader {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        return std::ptr::null_mut();
+    }
+    js_url_coerce_string(value)
 }
 #[cfg(feature = "url-engine")]
 pub(crate) fn install_engine() {
@@ -302,6 +314,4 @@ pub(crate) use crate::value::boxed_text::{
     string_from_header,
 };
 
-pub(crate) use crate::url_hooks::{
-    idna_domain_to_ascii, idna_domain_to_unicode, whatwg_canonicalize_host,
-};
+pub(crate) use crate::url_hooks::{idna_domain_to_unicode, whatwg_canonicalize_host};
