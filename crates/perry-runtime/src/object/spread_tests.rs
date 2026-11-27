@@ -346,3 +346,44 @@ fn spread_of_a_non_extensible_source_is_extensible() {
         assert_eq!(get(result, "x"), 7.0);
     }
 }
+
+/// A same-layout source whose keys run past its inline slots (2 inline, 10
+/// keys) is copied structurally: the result is born on the source's layout
+/// word with its own spill holding copies of the spilled values, a heap
+/// value among them, and a store into the result's spill leaves the
+/// source's untouched.
+#[test]
+fn spread_of_a_spilled_source_copies_its_spill() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let names: Vec<String> = (0..10).map(|i| format!("spilled_{i}")).collect();
+        let src = js_object_alloc_plain(2);
+        for (i, name) in names.iter().enumerate() {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(src, key, i as f64);
+        }
+        let text = crate::string::js_string_from_bytes(b"heap-value".as_ptr(), 10);
+        let heap = f64::from_bits(crate::JSValue::string_ptr(text).bits());
+        let key = crate::string::js_string_from_bytes(names[9].as_ptr(), names[9].len() as u32);
+        js_object_set_field_by_name(src, key, heap);
+        let source = crate::value::js_nanbox_pointer(src as i64);
+        let record =
+            shapes::shape_record_for_word(shapes::object_shape_stamp(src)).unwrap();
+        assert!(record.logical_key_count() > record.live_inline_slot_count());
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        assert_eq!(
+            shapes::object_shape_stamp(receiver(result)),
+            shapes::object_shape_stamp(src),
+            "born on the source's layout word"
+        );
+        for (i, name) in names.iter().enumerate().take(9) {
+            assert_eq!(get(result, name), i as f64);
+        }
+        assert_eq!(get(result, &names[9]).to_bits(), heap.to_bits());
+        let key = crate::string::js_string_from_bytes(names[5].as_ptr(), names[5].len() as u32);
+        js_object_set_field_by_name(receiver(result), key, 55.0);
+        assert_eq!(get(result, &names[5]), 55.0);
+        assert_eq!(get(source, &names[5]), 5.0);
+    }
+}
