@@ -1639,22 +1639,52 @@ fn births_heap_object(ir: &str) -> bool {
 }
 
 /// Whether `symbol`'s address is materialised (`ptrtoint`) anywhere that could
-/// register it as a callable entry. The function-name metadata (the
-/// `__perry_function_name_descriptors` table and the `<sym>$info` records that
-/// name `$generic` / `$spec_*` clones for `Error.stack`) takes clone addresses
-/// by design: it holds them as names to resolve a return address, never as
-/// entries a caller can reach, so those lines do not count. Matching is exact
-/// (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
+/// register it as a callable entry. The function-name metadata (the `$info`
+/// constants that name `$generic` / `$spec_*` clones for `Error.stack`, and
+/// `symbol`'s own `$fnrec` record that lets the link keep it with its body)
+/// takes clone addresses by design: it holds them as names to resolve a return
+/// address, never as entries a caller can reach, so those lines do not count.
+/// Matching is exact (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
 fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
     let tokens = [
         format!("ptrtoint (ptr @{symbol} to"),
         format!("ptrtoint ptr @{symbol} to"),
     ];
+    // The record's definition, ELF and Mach-O spellings; another body's record still counts.
+    let own_record = [
+        format!("@{symbol}$fnrec = "),
+        format!("@\"\\01l_{symbol}$fnrec\" = "),
+    ];
     ir.lines()
-        .filter(|line| {
-            !line.starts_with("@__perry_function_name_descriptors") && !line.contains("$info = ")
-        })
+        .filter(|line| !line.contains("$info = "))
+        .filter(|line| !own_record.iter().any(|r| line.starts_with(r.as_str())))
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
+}
+
+#[test]
+fn address_taken_outside_name_metadata_skips_only_the_bodys_own_record() {
+    let take =
+        |sym: &str| format!("i32 trunc (i64 sub (i64 ptrtoint (ptr @{sym} to i64), i64 0) to i32)");
+    for own in ["@f$generic$fnrec", "@\"\\01l_f$generic$fnrec\""] {
+        let ir = format!(
+            "{own} = internal constant {{ i32, i32 }} {{ {} }}\n",
+            take("f$generic")
+        );
+        assert!(
+            !address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
+    for other in [
+        "@g$fnrec = internal constant",
+        "@__perry_class_decl_members_C = constant",
+    ] {
+        let ir = format!("{other} {{ {} }}\n", take("f$generic"));
+        assert!(
+            address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
 }
 
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {

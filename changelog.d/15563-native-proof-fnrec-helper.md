@@ -1,0 +1,1 @@
+Test suite: the four `typed_*_method_clone` tests in `native_proof_regressions` pass again; their address-take check counts a body's own `$fnrec` record (from the link-time DCE records) as name metadata, like the `$info` names, instead of as a runtime vtable registration.
