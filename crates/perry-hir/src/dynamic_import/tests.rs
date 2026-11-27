@@ -678,7 +678,7 @@ fn resolve_path_join_over_replaced_dirname() {
             replacement: Box::new(Expr::String("node_modules.asar.unpacked".to_string())),
         },
         Expr::String("worker/conoutSocketWorker.js".to_string()),
-    );
+    ]);
 
     let mut visiting = HashSet::new();
     match resolve_import_path_with_context(

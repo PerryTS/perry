@@ -391,7 +391,10 @@ mod posix_pinned_tests {
     }
 
     fn join(win32: bool, a: *mut StringHeader, b: *mut StringHeader) -> *mut StringHeader {
-        let args = [crate::value::js_nanbox_string(a as i64), crate::value::js_nanbox_string(b as i64)];
+        let args = [
+            crate::value::js_nanbox_string(a as i64),
+            crate::value::js_nanbox_string(b as i64),
+        ];
         if win32 {
             super::super::join::win32_join_values(&args)
         } else {
@@ -443,7 +446,10 @@ mod platform_default_tests {
     }
 
     fn join(win32: bool, a: *mut StringHeader, b: *mut StringHeader) -> *mut StringHeader {
-        let args = [crate::value::js_nanbox_string(a as i64), crate::value::js_nanbox_string(b as i64)];
+        let args = [
+            crate::value::js_nanbox_string(a as i64),
+            crate::value::js_nanbox_string(b as i64),
+        ];
         if win32 {
             super::super::join::win32_join_values(&args)
         } else {

@@ -95,8 +95,7 @@ fn posix_join_into(args: &[f64], out: &mut [u8]) -> usize {
     };
     let last = args.iter().rposition(|&v| arg_len(v) > 0).unwrap_or(first);
     let is_absolute = with_string_value_bytes(args[first], |b| b[0] == b'/').unwrap_or(false);
-    let trailing =
-        with_string_value_bytes(args[last], |b| b[b.len() - 1] == b'/').unwrap_or(false);
+    let trailing = with_string_value_bytes(args[last], |b| b[b.len() - 1] == b'/').unwrap_or(false);
     let start = usize::from(is_absolute);
     if is_absolute {
         out[0] = b'/';
@@ -160,14 +159,22 @@ pub(crate) fn posix_join_values(args: &[f64]) -> *mut StringHeader {
 fn is_windows_reserved_name(part: &[u8], colon: usize) -> bool {
     let device = &part[..colon];
     let eq = |name: &[u8]| device.eq_ignore_ascii_case(name);
-    if ["CON", "PRN", "AUX", "NUL"].iter().any(|n| eq(n.as_bytes())) {
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|n| eq(n.as_bytes()))
+    {
         return true;
     }
     // COM1-9 / LPT1-9, and the superscript digits ¹ ² ³ (UTF-8 C2 B9/B2/B3).
-    if device.len() < 4 || !(device[..3].eq_ignore_ascii_case(b"COM") || device[..3].eq_ignore_ascii_case(b"LPT")) {
+    if device.len() < 4
+        || !(device[..3].eq_ignore_ascii_case(b"COM") || device[..3].eq_ignore_ascii_case(b"LPT"))
+    {
         return false;
     }
-    matches!(&device[3..], [b'1'..=b'9'] | [0xC2, 0xB9] | [0xC2, 0xB2] | [0xC2, 0xB3])
+    matches!(
+        &device[3..],
+        [b'1'..=b'9'] | [0xC2, 0xB9] | [0xC2, 0xB2] | [0xC2, 0xB3]
+    )
 }
 
 fn is_win32_sep(c: u8) -> bool {
@@ -212,7 +219,11 @@ pub(crate) fn win32_join_values(args: &[f64]) -> *mut StringHeader {
     let reserved = joined
         .split(|&c| c == b'\\')
         .filter(|p| !p.is_empty())
-        .any(|p| p.iter().position(|&c| c == b':').is_some_and(|colon| is_windows_reserved_name(p, colon)));
+        .any(|p| {
+            p.iter()
+                .position(|&c| c == b':')
+                .is_some_and(|colon| is_windows_reserved_name(p, colon))
+        });
     if reserved {
         for c in joined.iter_mut() {
             if *c == b'/' {
@@ -294,7 +305,11 @@ mod tests {
 
     fn join(win32: bool, parts: &[&str]) -> String {
         let args: Vec<f64> = parts.iter().map(|s| value(s)).collect();
-        read(if win32 { win32_join_values(&args) } else { posix_join_values(&args) })
+        read(if win32 {
+            win32_join_values(&args)
+        } else {
+            posix_join_values(&args)
+        })
     }
 
     /// Expected values are node's `path.posix.join` (v26).
@@ -338,7 +353,10 @@ mod tests {
             (&["a/./b/.", "c/./"], "a/b/c/"),
             (&["//a", "b"], "/a/b"),
             (&["ü", "ß", "..", "日本"], "ü/日本"),
-            (&["/srv/app", ".next", "routes-manifest.json"], "/srv/app/.next/routes-manifest.json"),
+            (
+                &["/srv/app", ".next", "routes-manifest.json"],
+                "/srv/app/.next/routes-manifest.json",
+            ),
         ] {
             assert_eq!(join(false, parts), expected, "posix.join{parts:?}");
         }
