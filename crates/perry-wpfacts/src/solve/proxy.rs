@@ -1649,6 +1649,11 @@ impl Model {
             // Holds the global object only, never a Proxy.
             Cons::InterpRuns { .. } => {}
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
+            // Not a Map: what an element read of the Proxy reads.
+            Cons::MapEntryAt { dst, .. } => {
+                let ek = self.elem_key();
+                self.proxy_get_into(p, ek, NO_NODE, dst)
+            }
             Cons::IdxLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
             // `p.m( ... )` / `p[k]( ... )`: [[Get]], then Call( f, p, args ).
             Cons::MCall { key, call } => {

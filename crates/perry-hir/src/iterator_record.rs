@@ -210,7 +210,16 @@ impl IteratorRecordPlan {
         }
     }
 
-    fn element(&self) -> Expr {
+    /// The record's own Get of the cursor's index. `position` is the
+    /// literal position of an array pattern's element pull (rule DESTR-POS):
+    /// `arrayRecordIndex(c, i)`. When that pull runs on the array arm the
+    /// cursor equals i (ECMA-262 8.6.2 IteratorBindingInitialization, 23.1.5.1
+    /// %ArrayIteratorPrototype%.next: the pattern pulls positions 0, 1, ... in
+    /// order, each pull either advanced the cursor once or marked the pattern
+    /// done, which skips every later pull), so the read is `array[i]`. The
+    /// second argument only names that index for the analyses; lowering reads
+    /// the cursor (`arrayRecordIndex(c)` is `c`).
+    fn element(&self, position: Option<usize>) -> Expr {
         if let Some(values) = &self.scalars {
             // Read only below the count: the last scalar needs no test.
             let Some((last, init)) = values.split_last() else {
@@ -238,7 +247,9 @@ impl IteratorRecordPlan {
             object: Box::new(Expr::LocalGet(self.array)),
             index: Box::new(runtime(
                 "arrayRecordIndex",
-                vec![Expr::LocalGet(self.index)],
+                std::iter::once(Expr::LocalGet(self.index))
+                    .chain(position.map(|i| Expr::Integer(i as i64)))
+                    .collect(),
                 self.byte_offset,
             )),
         }
@@ -366,7 +377,7 @@ impl IteratorRecordPlan {
             op: UpdateOp::Increment,
             prefix: false,
         };
-        let element = self.element();
+        let element = self.element(literal_index);
         // Elisions discard the result value, but ArrayIterator.next still
         // performs Get(i), including an inherited getter.
         let mut success = if read_value {
@@ -549,7 +560,7 @@ impl IteratorRecordPlan {
                     vec![
                         self.iterator_mode(),
                         Expr::LocalGet(value_id),
-                        self.element(),
+                        self.element(None),
                     ],
                     self.byte_offset,
                 )),

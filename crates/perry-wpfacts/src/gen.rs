@@ -26,7 +26,6 @@ pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
 mod proto_first;
-mod record_steps;
 mod shared_closures;
 mod view;
 mod walk;
@@ -325,9 +324,6 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
-    /// Rule RP1 (`gen/record_steps.rs`): the address of the arguments of
-    /// each positional `arrayRecordIndex(c)` step read, with its index.
-    pub(crate) record_steps: FxHashMap<usize, u32>,
     /// Rule RP2: the (module, local) of each guarded iterator record
     /// source (`arrayRecordNeedsIterator(s = s)`) and payload
     /// (`arrayRecordPayload(.., p = ..)`), whose protocol arm never sees a
@@ -869,7 +865,6 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
-            record_steps: Default::default(),
             record_locals: Default::default(),
             record_sources: Default::default(),
             last_local_set: None,
@@ -1334,6 +1329,9 @@ impl<'a> Gen<'a> {
                     None => {
                         let t = self.new_arr_template(mi, "rest");
                         self.m.rest_param_tmpls.insert(t);
+                        // A rest parameter is CreateArrayFromList (ECMA-262
+                        // 10.2.11 step 26): an ordinary Array (rule RP2).
+                        self.m.ordinary_arrays.insert(t);
                         self.m.rest_owner.insert(t, self.m.cur_fn);
                         t
                     }

@@ -135,6 +135,12 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// Rule MAP-KV: the entry part a typed Map's `[k, v]` for-of reads
+    /// (HIR `MapEntryKeyAt` / `MapEntryValueAt`: `js_map_entry_key_at` /
+    /// `js_map_entry_value_at` read the Map's own entry list): of a Map its
+    /// keys (`Model::map_keys`, `value` false) or its values
+    /// (`Model::map_vals`), of any other value what an element read reads.
+    MapEntryAt { value: bool, dst: NodeId },
     /// Rule EK: the String keys of own properties (ECMA-262 20.1.2.5
     /// Object.entries, 7.3.23 EnumerableOwnProperties): of a literal whose
     /// enumerable keys are known (`Model::enum_keys`), those keys, each a
@@ -1247,6 +1253,7 @@ impl Cons {
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::MapEntryAt { .. } => "mapentryat",
             Cons::OwnKeys { .. } => "ownkeys",
             Cons::OwnNames { .. } => "ownnames",
             Cons::OwnDescValues { .. } => "owndescvalues",

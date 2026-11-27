@@ -390,7 +390,7 @@ fn opaque_key(key: &Expr, types: &HirTypeEnv) -> bool {
             method,
             args,
             ..
-        } if module == "__perry_runtime" && method == "arrayRecordIndex" && args.len() == 1 => {
+        } if module == "__perry_runtime" && method == "arrayRecordIndex" && !args.is_empty() => {
             &args[0]
         }
         _ => key,

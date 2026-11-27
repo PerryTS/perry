@@ -39,6 +39,7 @@ impl Model {
             ),
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
+            Cons::MapEntryAt { value, dst } => format!("MapEntryAt value={value} dst={dst:?}"),
             Cons::OwnKeys { dst } => format!("OwnKeys dst={:?}", dst),
             Cons::OwnNames { dst } => format!("OwnNames dst={:?}", dst),
             Cons::OwnDescValues { dst, key } => format!("OwnDescValues dst={dst:?} key={key:?}"),

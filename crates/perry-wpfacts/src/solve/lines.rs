@@ -16,6 +16,7 @@ impl Model {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
             }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::MapEntryAt { value, dst } => format!("mapentryat {n} {value} {dst}"),
             Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
             Cons::OwnNames { dst } => format!("ownnames {n} {dst}"),
             Cons::OwnDescValues { dst, key } => format!("owndescvalues {n} {dst} {key}"),
