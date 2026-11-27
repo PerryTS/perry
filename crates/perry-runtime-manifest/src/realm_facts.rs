@@ -946,6 +946,17 @@ pub(super) fn callable(
     {
         keys.push(string("prototype"));
     }
+    // A built-in getter or setter is not a constructor (ECMA-262 10.3, 10.4.1):
+    // it has no [[Construct]] and no own `prototype`. Its body says so
+    // (FN_NON_CONSTRUCTOR), so the runtime and this declaration agree.
+    if matches!(kind, "getter" | "setter") && keys.iter().any(|k| k.string() == Some("prototype"))
+    {
+        return Err(format!(
+            "{}: a built-in getter/setter is not a constructor; give its body FN_NON_CONSTRUCTOR \
+             and drop constructible",
+            facts.name
+        ));
+    }
     let constructor = if kind == "constructor" {
         let families = super::families::read(include_str!(
             "../../perry-runtime/src/object/global_this_tables.rs"
@@ -953,17 +964,6 @@ pub(super) fn callable(
         families
             .get(facts.family.as_deref().unwrap_or(&facts.name))
             .cloned()
-    } else {
-        None
-    };
-    let (captures, capture_flags) = if let Some(captures) = bound_captures {
-        (captures, 0)
-    } else if facts.builtin_constructor {
-    // A built-in getter or setter is not a constructor (ECMA-262 10.3, 10.4.1):
-    // it has no [[Construct]] and no own `prototype`. Its body says so
-    // (FN_NON_CONSTRUCTOR), so the runtime and this declaration agree.
-    if matches!(kind, "getter" | "setter") && keys.iter().any(|k| k.string() == Some("prototype"))
-    {
             .map(|mut family| {
                 // `no_prototype` is consumed above (no instance, no own
                 // prototype key); the wire constructor record does not carry it.
@@ -972,12 +972,12 @@ pub(super) fn callable(
                 }
                 family
             })
-        return Err(format!(
-            "{}: a built-in getter/setter is not a constructor; give its body FN_NON_CONSTRUCTOR \
-             and drop constructible",
-            facts.name
-        ));
-    }
+    } else {
+        None
+    };
+    let (captures, capture_flags) = if let Some(captures) = bound_captures {
+        (captures, 0)
+    } else if facts.builtin_constructor {
         let family = constructor
             .as_ref()
             .ok_or("builtin constructor has no family declaration")?;
