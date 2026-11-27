@@ -34,7 +34,10 @@ supports two paths:
   `Reflect.getOwnMetadata`, `Reflect.hasMetadata`,
   `Reflect.hasOwnMetadata`, `Reflect.getMetadataKeys`,
   `Reflect.getOwnMetadataKeys`, `Reflect.deleteMetadata`, and
-  `@Reflect.metadata(...)` are available. Perry emits
+  `@Reflect.metadata(...)` are available. A side-effect
+  `import "reflect-metadata"` exposes the metadata read/write methods on
+  `Reflect` itself, so a detached method reads the same records as a
+  decorator. This built-in subset does not support Symbol keys. Perry emits
   `design:paramtypes` for decorated classes/methods and `design:type`
   for decorated properties. A member decorator receives the same
   `target` `tsc` hands it: `Class.prototype` for an instance member and

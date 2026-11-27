@@ -35,6 +35,7 @@ mod async_generator_state;
 mod generator;
 mod generator_state;
 mod install_static;
+mod reflect_metadata;
 mod math_temporal;
 
 // Complete namespace construction, reached through feature hooks.

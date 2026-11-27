@@ -445,14 +445,23 @@ fn decorator_callee_expr(ctx: &LoweringContext, name: &str) -> Expr {
     }
 }
 
-/// Emit a one-shot note when the user imports `reflect-metadata`. Perry
-/// ships a built-in subset that's enough for the Nest-style decorator
-/// metadata canaries (see docs/src/language/decorators.md), but is NOT
-/// the full npm package's surface — `class-validator` and `TypeORM` reach
-/// into corners that aren't shimmed. Telling the user up-front avoids the
-/// silent-failure surprise where a polyfill they `import`-ed turns out
-/// not to be the polyfill they expected.
-pub(crate) fn emit_reflect_metadata_shim_note() {
+/// Static imports take effect before the importing module's body, even when
+/// the declaration follows a read of the global Reflect object.
+pub(crate) fn install_reflect_metadata_shim(module: &mut Module, byte_offset: u32) {
+    module.init.insert(
+        0,
+        Stmt::Expr(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_reflect_install_metadata".into(),
+                param_types: vec![Type::Any],
+                return_type: Type::Any,
+            }),
+            args: vec![builtin_metadata_constructor("Reflect")],
+            type_args: Vec::new(),
+            byte_offset,
+        }),
+    );
     use std::sync::atomic::{AtomicBool, Ordering};
     static EMITTED: AtomicBool = AtomicBool::new(false);
     if EMITTED.swap(true, Ordering::Relaxed) {

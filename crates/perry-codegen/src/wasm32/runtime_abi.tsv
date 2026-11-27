@@ -3504,6 +3504,7 @@ js_reflect_get_prototype_of	f64	f64
 js_reflect_has	f64	f64,f64
 js_reflect_has_metadata	f64	f64,f64,f64
 js_reflect_has_own_metadata	f64	f64,f64,f64
+js_reflect_install_metadata	f64	f64
 js_reflect_is_extensible	f64	f64
 js_reflect_own_keys	f64	f64
 js_reflect_prevent_extensions	f64	f64
