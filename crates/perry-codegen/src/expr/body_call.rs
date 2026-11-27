@@ -177,7 +177,7 @@ pub(crate) fn emit_sloppy_receiver_coercion(ctx: &mut crate::expr::FnCtx<'_>, sl
         let maybe_symbol = blk.icmp_eq(I32, &first_word, &magic);
         blk.cond_br(&maybe_symbol, &slow_label, &done_label);
     }
-    // A pointer payload below the heap floor is a native handle: an object.
+    // Off the heap edge: a POINTER-tagged handle is an object; any other tag is coerced.
     ctx.current_block = other_idx;
     {
         let blk = ctx.block();

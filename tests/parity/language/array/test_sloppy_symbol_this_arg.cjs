@@ -20,6 +20,10 @@ console.log("find", [7].find(wraps, sym), "findIndex", [7].findIndex(wraps, sym)
 console.log("Array.from", Array.from([0], kind, sym)[0], Array.from([0], strictKind, sym)[0]);
 console.log("typed", Array.from(new Uint8Array(1).map(function () { return wraps.call(this) ? 1 : 0; }, sym))[0]);
 
+function self() { return this; }
+const [first, second] = [0, 1].map(self, sym);
+console.log("fresh wrapper", first !== second, first.valueOf() === second.valueOf());
+
 const setSeen = [];
 new Set([1]).forEach(function () { setSeen.push(typeof this); }, sym);
 new Map([[1, 1]]).forEach(function () { setSeen.push(typeof this); }, sym);
