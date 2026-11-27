@@ -689,7 +689,7 @@ fn node_core_namespace_writes_and_escapes() {
         ("node:path", "relative"),
         ("node:fs", "existsSync"),
         ("node:fs", "promises.readFile"),
-        ("node:os", "*"),
+        ("node:os", "$esc"),
     ] {
         assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
     }
@@ -698,7 +698,7 @@ fn node_core_namespace_writes_and_escapes() {
             && matches!(m.as_str(), "*" | "resolve" | "sep" | "normalize")),
         "{s:?}"
     );
-    let set: &BTreeSet<(String, String)> = &s;
+    let set = &s;
     assert!(node_ns::member_patched(set, "path", &["join"]));
     assert!(node_ns::member_patched(
         set,
@@ -714,11 +714,12 @@ fn node_core_namespace_writes_and_escapes() {
     ));
     assert!(node_ns::member_patched(set, "fs/promises", &["readFile"]));
     assert!(!node_ns::member_patched(set, "fs", &["promises", "stat"]));
-    assert!(node_ns::member_patched(set, "os", &["cpus"]));
+    // Handed to `f`, which stores nothing: an escape is not a write.
+    assert!(!node_ns::member_patched(set, "os", &["cpus"]));
 }
 
 #[test]
-fn node_core_namespace_handed_on_is_any_member() {
+fn node_core_namespace_handed_on_is_an_escape_not_a_write() {
     let s = scan(
         r#"
         import path from "path";
@@ -726,12 +727,55 @@ fn node_core_namespace_handed_on_is_any_member() {
         export { w };
         module.exports = { fs: require("fs") };
         export * from "util";
+        take(process);
         "#,
     );
     // `path.win32` folds into the root on the host it equals.
-    for (k, m) in [("node:path", "*"), ("node:fs", "*"), ("node:util", "*")] {
+    for (k, m) in [
+        ("node:path", "$esc"),
+        ("node:fs", "$esc"),
+        ("node:util", "$esc"),
+        ("node:process", "$esc"),
+    ] {
         assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
     }
+    assert!(!s.iter().any(|(k, m)| k.starts_with("node:") && m.ends_with('*')), "{s:?}");
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(&s, "fs", &["promises", "readFile"]));
+    assert!(!node_ns::member_patched(&s, "process", &["hrtime", "bigint"]));
+}
+
+#[test]
+fn node_core_store_through_a_handed_namespace_is_a_write() {
+    let s = scan(
+        r#"
+        const path = require("path"), fs = require("fs");
+        function patch(m) { m.basename = () => "x"; }
+        patch(path);
+        const holder = { f: fs };
+        holder.f.existsSync = () => true;
+        Object.defineProperty(other(), "readdirSync", { value: 1 });
+        ({}).dirname = 1;
+        Object.assign({}, { relative: 1 });
+        "#,
+    );
+    assert!(node_ns::member_patched(&s, "path", &["basename"]));
+    assert!(node_ns::member_patched(&s, "path", &["posix", "basename"]));
+    assert!(!node_ns::member_patched(&s, "path", &["join"]));
+    assert!(node_ns::member_patched(&s, "fs", &["existsSync"]));
+    assert!(node_ns::member_patched(&s, "fs", &["readdirSync"]));
+    // A store onto a value the expression creates reaches no namespace.
+    assert!(!node_ns::member_patched(&s, "path", &["dirname"]));
+    assert!(!node_ns::member_patched(&s, "path", &["relative"]));
+    // `os` never escaped: a same-named store elsewhere does not reach it.
+    let t = scan(
+        r#"
+        const os = require("os");
+        os.cpus();
+        thing.cpus = 1;
+        "#,
+    );
+    assert!(!node_ns::member_patched(&t, "os", &["cpus"]));
 }
 
 #[test]
@@ -764,11 +808,15 @@ fn node_core_escape_in_the_open_loader_arm_counts_only_when_open() {
             if (__perry_cjs_open()) { if (specifier === "path") { return _path; } }
             throw new Error("closed");
         }
+        require(name).join = () => "";
         "#,
     );
     assert!(s.contains(&pair("node:path", "$open")), "{s:?}");
     assert!(!node_ns::member_patched(&s, "path", &["join"]));
     assert!(promote_open_node_escapes(&mut s));
+    assert!(s.contains(&pair("node:path", "$esc")), "{s:?}");
+    // The computed require hands `path` to program code that stores `join`.
     assert!(node_ns::member_patched(&s, "path", &["join"]));
+    assert!(!node_ns::member_patched(&s, "path", &["resolve"]));
     assert!(!promote_open_node_escapes(&mut s));
 }

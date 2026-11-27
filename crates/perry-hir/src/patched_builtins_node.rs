@@ -5,22 +5,38 @@
 //! implementation and never reads the namespace member. Like the global
 //! namespaces of the main scan, that is only sound while the member still
 //! holds the built-in, so the same whole-program pre-scan records every
-//! program write into a node-core namespace, keyed
+//! PROGRAM store into a node-core namespace, keyed
 //! `("node:<module>", "<member path>")`:
 //!
 //! - a named or computed member store, `delete`, destructuring assignment
 //!   into a member, `Object.assign` / `Object.defineProperty(ies)` /
 //!   `Reflect.set` with the namespace as target (the main scan's call arms);
 //! - `Object.setPrototypeOf` / `Reflect.setPrototypeOf` on the namespace;
-//! - the namespace (or a sub-namespace such as `path.posix`, `fs.promises`)
-//!   handed on as a value: an argument, a stored or returned value, an
-//!   export, a re-export from the module, a dynamic `import()` of it, or a
-//!   direct `eval` in a module that binds it. Code the scan cannot follow may
-//!   then write any of its members, recorded as `"<prefix>*"`.
+//! - all of these through a program alias the scan follows by name
+//!   (`const p = path; p.join = f`, `const { posix } = path`).
 //!
 //! The member path is dotted (`"join"`, `"promises.readFile"`, `"*"`,
 //! `"promises.*"`). `path.posix` is `path` on POSIX hosts (and `path.win32`
 //! on Windows), so both prefixes are folded into the root.
+//!
+//! A namespace handed on as a value (an argument, a stored or returned value,
+//! an export or re-export, a dynamic `import()`, a direct `eval`, the
+//! CommonJS loader's computed `require`) is NOT a write by itself. Two owner
+//! premises say so: "unknown code handed a value never writes members of
+//! intrinsics it reaches along that value's chain" (2026-11-19) and P-EVAL,
+//! "code built at run time touches program values only through the global
+//! object's program keys and the values handed to it" (2026-11-23); the
+//! built-in calls rest on the one program-wide fact "no PROGRAM store reaches
+//! a built-in prototype, namespace or global binding" (rf-6, 2026-11-19).
+//! What program code does with a handed namespace is still a program store
+//! the scan must see, but it no longer names the namespace: `function
+//! patch(m) { m.basename = f } patch(path)`, `holder.fs.existsSync = f`,
+//! `require(name).join = f`, a module that re-exports `path` and a second
+//! module that stores into the re-export. So an escape is recorded as
+//! `"<prefix>$esc"`, every static-key store onto a target the scan does not
+//! resolve is recorded program-wide by key (`PatchedBuiltins::node_stored`), and a call
+//! below an escaped prefix is patched when a member name on its path was
+//! stored that way somewhere in the program.
 //!
 //! The bindings are found by NAME, as the main scan's aliases are: an
 //! identifier bound anywhere in the module to `require("<node-core>")`, an
@@ -29,12 +45,12 @@
 //! plus the global `process`. A same-named unrelated binding can only add a
 //! write that never happens: a generic call, never a wrong one.
 //!
-//! Differences from the global-namespace scan: an escape counts with the
-//! facts on as well (no `IntrinsicCallee` verdict covers a native-module
-//! call); destructuring a namespace (`const { join } = path`) is a read, not
-//! an escape; and there is no runtime `Pristine` guard, so a dynamic-key store
-//! into the global object or non-constant dynamic code does not reach these
-//! namespaces (they are not global bindings, apart from `process`).
+//! Not seen (no solver verdict covers a native-module call, and there is no
+//! runtime `Pristine` guard): a store with a computed key, or an
+//! `Object.assign` with a non-literal source, onto a target the scan does not
+//! resolve, after the namespace was handed on (`function f(o, k, v) { o[k] =
+//! v } f(path, "join", g)`); a dynamic-key store into the global object or
+//! non-constant dynamic code (P-EVAL) does not reach these namespaces.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -110,10 +126,40 @@ fn covers(recorded: &str, full: &str) -> bool {
     }
 }
 
+/// Member suffix of a namespace handed on as a value (see the module docs).
+pub(crate) const ESCAPE: &str = "$esc";
+
+/// Does an escape of `prefix` reach call path `full` through a member name
+/// some unresolved program store wrote (`PatchedBuiltins::node_stored`)?
+fn escape_reaches(stored: &BTreeSet<String>, prefix: &str, full: &str) -> bool {
+    let Some(rest) = full.strip_prefix(prefix) else {
+        return false;
+    };
+    rest.split('.')
+        .filter(|seg| !seg.is_empty())
+        .any(|seg| stored.contains(seg))
+}
+
+/// An expression that creates its value (`{}`, `[]`, a function or class,
+/// `new C()`, a literal): a store onto it never reaches a namespace.
+pub(crate) fn fresh_value(e: &ast::Expr) -> bool {
+    matches!(
+        peel(e),
+        ast::Expr::Object(_)
+            | ast::Expr::Array(_)
+            | ast::Expr::Fn(_)
+            | ast::Expr::Arrow(_)
+            | ast::Expr::Class(_)
+            | ast::Expr::New(_)
+            | ast::Expr::Lit(_)
+            | ast::Expr::Tpl(_)
+    )
+}
+
 /// May the program replace member path `path` of node-core module `module`
 /// (or a namespace on the way to it)? `module` is the lowering's module name.
 pub(crate) fn member_patched(
-    set: &BTreeSet<(String, String)>,
+    set: &super::PatchedBuiltins,
     module: &str,
     path: &[&str],
 ) -> bool {
@@ -127,7 +173,10 @@ pub(crate) fn member_patched(
     let full = canonical(&ns.0, &full);
     set.range((ns.0.clone(), String::new())..)
         .take_while(|(k, _)| *k == ns.0)
-        .any(|(_, recorded)| covers(recorded, &full))
+        .any(|(_, recorded)| match recorded.strip_suffix(ESCAPE) {
+            Some(prefix) => escape_reaches(&set.node_stored, prefix, &full),
+            None => covers(recorded, &full),
+        })
 }
 
 /// `require("<lit>")` with exactly one literal argument.
@@ -267,8 +316,8 @@ impl Visit for BindingCollector<'_> {
 /// drops those arms (`cjs_link::resolve_open_sites`).
 pub(crate) const OPEN_ESCAPE: &str = "$open";
 
-/// Turn every open-arm escape into an escape of any member below it. True
-/// when that added an entry.
+/// Turn every open-arm escape into an escape (`"<prefix>$esc"`). True when
+/// that added an entry.
 pub(crate) fn promote_open_escapes(set: &mut BTreeSet<(String, String)>) -> bool {
     let open: Vec<(String, String)> = set
         .iter()
@@ -276,7 +325,7 @@ pub(crate) fn promote_open_escapes(set: &mut BTreeSet<(String, String)>) -> bool
         .map(|(k, m)| {
             (
                 k.clone(),
-                format!("{}{ANY_MEMBER}", &m[..m.len() - OPEN_ESCAPE.len()]),
+                format!("{}{ESCAPE}", &m[..m.len() - OPEN_ESCAPE.len()]),
             )
         })
         .collect();
@@ -314,7 +363,9 @@ fn modeled_writer(callee: &ast::Expr) -> bool {
     )
 }
 
-/// Records node-core namespaces handed on as values (see the module docs).
+/// Records node-core namespaces handed on as values (see the module docs):
+/// an escape is not a write; it only lets an unresolved program store reach
+/// the namespace.
 pub(crate) struct EscapeScan<'a> {
     pub(crate) bindings: &'a NodeBindings,
     pub(crate) out: &'a mut BTreeSet<(String, String)>,
@@ -324,8 +375,8 @@ pub(crate) struct EscapeScan<'a> {
 
 impl EscapeScan<'_> {
     fn escape(&mut self, ns: &NsPath) {
-        let member = self.open_arm.then_some(OPEN_ESCAPE);
-        self.out.insert(entry(ns, member));
+        let member = if self.open_arm { OPEN_ESCAPE } else { ESCAPE };
+        self.out.insert(entry(ns, Some(member)));
     }
     /// Visit `e` unless it is itself a namespace value (only read here).
     fn read_only(&mut self, e: &ast::Expr) {
