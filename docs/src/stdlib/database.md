@@ -54,6 +54,11 @@ discarded, and the reported change count comes from the connection. A step
 error makes the call fail instead of reporting a completed run, and `get()` /
 `all()` fail rather than returning the rows read before the error.
 
+For a prepared statement, `reader` means the SQL has result columns, even if
+a query returns no rows. It is independent of `readonly`: an
+`INSERT ... RETURNING` statement has `reader === true` and `readonly === false`.
+Reading either property does not execute the statement.
+
 ## MongoDB
 
 `mongodb` has no native binding: `import { MongoClient } from "mongodb"`

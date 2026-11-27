@@ -508,6 +508,22 @@ pub(crate) fn build_and_run_link(
                 },
                 prepare_well_known,
             );
+            // ld64 can satisfy js_sqlite_open/prepare from the full stdlib even
+            // with the chosen wrapper first. Root a wrapper-exclusive entry so
+            // those handles and their registered property getter have one owner.
+            if is_macos
+                && prepared.safe_to_precede_stdlib
+                && super::super::optimized_libs::links_better_sqlite3(
+                    &source_well_known_libs,
+                    target,
+                )
+            {
+                if is_cross_macos {
+                    cmd.args(["-u", "_js_sqlite_stmt_safe_integers"]);
+                } else {
+                    cmd.arg("-Wl,-u,_js_sqlite_stmt_safe_integers");
+                }
+            }
             (prepared.paths, prepared.safe_to_precede_stdlib)
         } else {
             (source_well_known_libs, true)
