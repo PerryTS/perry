@@ -21,7 +21,7 @@ pub(super) fn alloc_response(
             type_name: "default".to_string(),
             url: String::new(),
             redirected: false,
-            cached_headers_id: None,
+            cached_headers: 0,
             cached_body_stream: None,
             body_stream: None,
         },
@@ -108,16 +108,7 @@ pub unsafe extern "C" fn js_response_new(
     let body = body_opt.unwrap_or_default();
     let status_text_ptr = status_text.map_or(std::ptr::null(), |h| h.get_raw_const_ptr());
     let (status_u16, status_text) = response_init(status, status_text_ptr, body_present);
-    let headers_id = handle_id(headers_handle);
-    let registered = (headers_id != 0)
-        .then(|| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&headers_id)
-                .map(|record| record.store.clone())
-        })
-        .flatten();
+    let registered = headers::headers_store_of(headers_handle);
     // Non-literal Response init objects can deliver a plain HeadersInit value
     // here. Preserve those records instead of treating them as missing handles.
     let mut headers = registered
@@ -128,16 +119,11 @@ pub unsafe extern "C" fn js_response_new(
             headers.set("content-type", content_type);
         }
     }
-    // A Response owns a private Headers list. The constructor input may be an
-    // existing Headers object, so retaining its registry id would make
-    // mutations alias in both directions instead of copying the initializer.
-    let response_headers_id = (headers_id != 0).then(|| alloc_headers(headers.clone()));
+    // A Response owns a private copy of the list: an init Headers object is
+    // copied, never shared, and `response.headers` is born on its first read.
     let id = alloc_response(status_u16, status_text, headers, body, body_present);
-    if response_headers_id.is_some() || body_stream.is_some() {
+    if body_stream.is_some() {
         if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {
-            if let Some(headers_id) = response_headers_id {
-                resp.cached_headers_id = Some(headers_id);
-            }
             if let Some(stream_id) = body_stream {
                 resp.body_stream = Some(stream_id);
                 resp.cached_body_stream = Some(stream_id);
@@ -201,7 +187,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 type_name: resp.type_name.clone(),
                 url: resp.url.clone(),
                 redirected: resp.redirected,
-                cached_headers_id: None,
+                cached_headers: 0,
                 cached_body_stream: cloned_stream_id,
                 body_stream: cloned_stream_id,
             }

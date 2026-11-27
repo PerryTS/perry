@@ -293,6 +293,7 @@ pub(super) unsafe fn install_fetch_registrations() {
         // Headers → flat `{name:value}` object-JSON producer for the
         // `fetch(url, { headers: Headers })` request path (avoids the
         // `js_json_stringify`-on-handle SIGSEGV).
+        fn js_register_global_headers_prototype(f: extern "C" fn(*mut perry_runtime::ObjectHeader));
         fn js_register_global_headers_object_json(
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
         );
@@ -322,6 +323,7 @@ pub(super) unsafe fn install_fetch_registrations() {
         crate::fetch_blob::js_url_revoke_object_url,
     );
     js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
+    js_register_global_headers_prototype(crate::fetch::install_headers_prototype);
     js_register_global_headers_object_json(crate::fetch::js_headers_fetch_object_json);
     // `instanceof` for WHATWG fetch handles
     // (Response/Request/Headers/Blob/File).

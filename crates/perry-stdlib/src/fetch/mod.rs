@@ -43,8 +43,6 @@ pub use headers::*;
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
 // this file under the 2,000-line lint gate. Same child-module/`use super::*`
 // contract as `headers`.
-mod headers_method_value;
-pub(crate) use headers_method_value::headers_bound_method_value;
 
 // Untyped handle dispatch helpers (`dispatch_request_method`,
 // `dispatch_response_property`, …) — split out to keep this file under the
@@ -345,11 +343,12 @@ struct FetchResponse {
     type_name: String,
     url: String,
     redirected: bool,
-    /// Cached Headers handle id, allocated on first `response.headers`
-    /// access. None until a property/method dispatcher needs to expose
-    /// the headers as a Headers instance. Subsequent reads of `.headers`
-    /// return the same id (preserves `res.headers === res.headers`).
-    cached_headers_id: Option<usize>,
+    /// The `response.headers` Headers object (NaN-boxed bits, 0 = not yet
+    /// read), born on the first read so repeat reads return the same object
+    /// (`res.headers === res.headers`). Once born it is the authority for
+    /// the list. A GC edge: visited by the Fetch scanner and, during a full
+    /// mark, through the record's live id (`lifecycle::observe`).
+    cached_headers: u64,
     /// Cached ReadableStream handle id for `response.body`, allocated on
     /// first read so repeat `.body` reads return the same stream (the spec
     /// requires a stable `ReadableStream`; getting a fresh unlocked stream
@@ -372,45 +371,39 @@ struct FetchResponse {
 /// response through that Headers view, so losing the handle also lost its
 /// `Set-Cookie` header when the response crossed a module boundary.
 fn response_headers_handle(resp_id: usize) -> f64 {
-    let mut responses = FETCH_RESPONSES.lock().unwrap();
-    let Some(response) = responses.get_mut(&resp_id) else {
-        return f64::from_bits(TAG_UNDEFINED);
+    let (store, immutable) = {
+        let responses = FETCH_RESPONSES.lock().unwrap();
+        let Some(response) = responses.get(&resp_id) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        if response.cached_headers != 0 {
+            return f64::from_bits(response.cached_headers);
+        }
+        (response.headers.clone(), response.type_name == "error")
     };
-    if let Some(id) = response.cached_headers_id {
-        return handle_to_f64(id);
+    // Allocate with the registry unlocked (a collection locks it).
+    let headers = headers::headers_object(store, immutable);
+    if let Some(response) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
+        response.cached_headers = headers.to_bits();
     }
-    let id = alloc_headers(response.headers.clone());
-    response.cached_headers_id = Some(id);
-    handle_to_f64(id)
+    headers
 }
 
 /// Snapshot the observable Headers backing, including mutations made through
 /// `response.headers`, for operations such as `Response.clone()`.
 fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
-    response
-        .cached_headers_id
-        .and_then(|id| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&id)
-                .map(|record| record.store.clone())
-        })
+    (response.cached_headers != 0)
+        .then(|| headers::headers_store_of(f64::from_bits(response.cached_headers)))
+        .flatten()
         .unwrap_or_else(|| response.headers.clone())
 }
 
 /// Snapshot the observable Request headers, including mutations made through
-/// the lazily cached `request.headers` object.
+/// the lazily born `request.headers` object.
 fn request_headers_snapshot(request: &RequestRecord) -> HeadersStore {
-    request
-        .cached_headers_id
-        .and_then(|id| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&id)
-                .map(|record| record.store.clone())
-        })
+    (request.cached_headers != 0)
+        .then(|| headers::headers_store_of(f64::from_bits(request.cached_headers)))
+        .flatten()
         .unwrap_or_else(|| request.headers.clone())
 }
 
@@ -1056,7 +1049,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 mod headers_store;
-use headers_store::{HeadersRecord, HeadersStore};
+use headers_store::{HeadersPayload, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
     pub(super) props: u64,
@@ -1079,10 +1072,11 @@ struct RequestRecord {
     keepalive: bool,
     duplex: String,
     signal: f64,
-    /// Cached Headers handle id, allocated on first `request.headers` read so
-    /// repeat reads return the same handle (preserves `req.headers ===
-    /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
-    cached_headers_id: Option<usize>,
+    /// The `request.headers` Headers object (NaN-boxed bits, 0 = not yet
+    /// read), born on the first read so repeat reads return the same object
+    /// (`req.headers === req.headers`). Mirrors
+    /// `FetchResponse::cached_headers` (#1649).
+    cached_headers: u64,
     /// The error the body's stream ended with; consuming the body rejects
     /// with it. A GC root, visited with `signal`.
     body_error: Option<f64>,
@@ -1093,8 +1087,6 @@ struct RequestRecord {
     read_body_stream_id: Option<crate::streams::RsRef>,
 }
 
-static HEADERS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, HeadersRecord>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static REQUEST_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, RequestRecord>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 pub(crate) static BLOB_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, BlobData>>> =
@@ -1127,15 +1119,6 @@ pub(crate) fn alloc_blob(mut data: BlobData) -> usize {
     data.props = 0;
     let id = alloc_fetch_handle_id();
     BLOB_REGISTRY.lock().unwrap().insert(id, data);
-    id
-}
-
-fn alloc_headers(store: HeadersStore) -> usize {
-    let id = alloc_fetch_handle_id();
-    HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .insert(id, HeadersRecord::from(store));
     id
 }
 
@@ -1352,23 +1335,21 @@ pub use body_clone::*;
 /// and caches the id so `req.headers === req.headers`. Caller must have
 /// already verified `req_id` is a live Request. (#1649)
 fn request_headers_handle(req_id: usize) -> f64 {
-    if let Some(id) = REQUEST_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&req_id)
-        .and_then(|r| r.cached_headers_id)
-    {
-        return handle_to_f64(id);
-    }
-    let store = match REQUEST_REGISTRY.lock().unwrap().get(&req_id) {
-        Some(r) => r.headers.clone(),
-        None => return f64::from_bits(TAG_UNDEFINED),
+    let store = {
+        let requests = REQUEST_REGISTRY.lock().unwrap();
+        let Some(request) = requests.get(&req_id) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        if request.cached_headers != 0 {
+            return f64::from_bits(request.cached_headers);
+        }
+        request.headers.clone()
     };
-    let new_id = alloc_headers(store);
-    if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get_mut(&req_id) {
-        req.cached_headers_id = Some(new_id);
+    let headers = headers::headers_object(store, false);
+    if let Some(request) = REQUEST_REGISTRY.lock().unwrap().get_mut(&req_id) {
+        request.cached_headers = headers.to_bits();
     }
-    handle_to_f64(new_id)
+    headers
 }
 
 /// `request.headers` — returns a NaN-boxed `Headers` handle (Web Fetch spec).
@@ -1525,7 +1506,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 keepalive: req.keepalive,
                 duplex: req.duplex.clone(),
                 signal: req.signal,
-                cached_headers_id: None,
+                cached_headers: 0,
                 body_error: req.body_error,
                 read_body_stream_id: None,
             })
