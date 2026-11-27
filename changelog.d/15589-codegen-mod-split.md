@@ -1,0 +1,1 @@
+The module codegen entry point (`codegen/mod.rs`) is split by responsibility into sibling modules: compile progress, module emission, imported class stubs, class key and birth tables, module constants, method signature tables, typed clone sets, method ABI routes and specialized-ABI selection. No behavior change.
