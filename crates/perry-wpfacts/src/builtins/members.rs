@@ -945,11 +945,20 @@ pub(super) fn realm_chain_keys(start: &'static RealmEntry) -> Vec<String> {
 
 pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
     let realm = crate::native_effects::realm();
+    // HOSTSURF H2: with host surfaces loaded, `%Global%` is the merged
+    // object (static own keys and the providers' globals).
+    if name == "%Global%" {
+        if let Some(g) = crate::host::entry(name) {
+            return Some(g);
+        }
+    }
     // The runtime's realm source sorts its declarations by name.
     realm
         .binary_search_by_key(&name, |e| e.name)
         .ok()
         .map(|i| &realm[i])
+        // A provider's declaration (HOSTSURF H2), after the static table.
+        .or_else(|| crate::host::entry(name))
 }
 
 /// What the realm's own property `p` of a constructor reads as a member:

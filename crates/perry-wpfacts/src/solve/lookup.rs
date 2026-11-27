@@ -750,6 +750,26 @@ impl Model {
         if !clean(self, t) {
             return false;
         }
+        // HOSTSURF H2: a provider's object (a realm-born `BObj` of a host
+        // prototype) owns no property from birth (the surface declares
+        // none): [[Set]] finds the accessor its declared chain holds
+        // (ECMA-262 10.1.9.2 step 7) while it was not relinked and no store
+        // wrote the key onto a prototype of that chain.
+        if let TmplKind::BObj { what, .. } = self.tmpls[tm0 as usize].kind {
+            return crate::host::is_host_proto(what)
+                && !self.super_relink.contains(&t)
+                && !held(self.fields.get(&(t, a)))
+                && !held(self.field_any.get(&t))
+                && builtins::realm_proto_named(what)
+                    .and_then(|born| builtins::realm_born_setter(born, &self.atoms[a as usize]))
+                    .is_some()
+                && crate::derive::builtin_protos_unwritten(
+                    self,
+                    Some(builtins::NativeFamily::Declared(what)),
+                    a,
+                )
+                .is_ok();
+        }
         let (mut c, mut below) = (tm0, t);
         loop {
             let tp = &self.tmpls[c as usize];

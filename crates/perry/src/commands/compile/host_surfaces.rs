@@ -83,21 +83,17 @@ pub(crate) fn collect(
 }
 
 /// The guard: refuses whole-program facts over a realm whose host adds
-/// globals no loaded surface declares.
-pub(crate) fn guard(h: &HostSurfaces, facts_on: bool) -> Result<()> {
+/// globals no loaded surface declares; then loads the surfaces into the
+/// facts' host realm (HOSTSURF H2: the solver reads them beside the static
+/// realm), a load error being a compile error. `None`: facts off, or no
+/// surface.
+pub(crate) fn guard(
+    h: &HostSurfaces,
+    facts_on: bool,
+) -> Result<Option<&'static perry_wpfacts::host::HostRealm>> {
     if !facts_on {
-        return Ok(());
+        return Ok(None);
     }
     hs::check_required(&h.requirements, &h.surfaces).map_err(anyhow::Error::msg)?;
-    // The solver does not read host tables yet (HOSTSURF H2): a loaded
-    // surface would satisfy the rule above while the facts still read the
-    // static realm alone, so a surface is refused until the solver reads it.
-    if let Some(s) = h.surfaces.first() {
-        bail!(
-            "whole-program facts: host surface `{}` is loaded, but the solver does not read host \
-             surfaces yet; compile with PERRY_PROGRAM_FACTS=0",
-            s.provider
-        );
-    }
-    Ok(())
+    perry_wpfacts::host::load(&h.surfaces).map_err(anyhow::Error::msg)
 }

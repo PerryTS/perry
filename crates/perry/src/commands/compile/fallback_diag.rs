@@ -90,6 +90,11 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             perry_wpfacts::Verdict::AccessorGet | perry_wpfacts::Verdict::AccessorSet => {
                 "accessor proof recorded; generic path emitted".into()
             }
+            perry_wpfacts::Verdict::HostMember { .. }
+            | perry_wpfacts::Verdict::HostGet { .. }
+            | perry_wpfacts::Verdict::HostSet { .. } => {
+                "host surface member proof recorded; generic path emitted".into()
+            }
             perry_wpfacts::Verdict::AddsKey => {
                 "adds-key store recorded; generic path emitted".into()
             }

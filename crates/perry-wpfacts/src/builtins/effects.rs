@@ -492,7 +492,12 @@ pub(super) fn declared(fam: Family, name: &str) -> Option<&'static RealmEntry> {
 /// The declaration of the native `owner.name` (`Function.prototype.bind`),
 /// when the runtime declares its effects in forms `run_native` runs.
 pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry> {
-    let e = *by_proto().get(owner)?.get(name)?;
+    let e = match by_proto().get(owner).and_then(|o| o.get(name)) {
+        Some(e) => *e,
+        // A provider's member (HOSTSURF H2): `provider:Obj.key`, and its
+        // accessor parts `.key.<get>` / `.key.<set>`.
+        None => crate::host::entry(&format!("{owner}.{name}"))?,
+    };
     (interpretable(e.effects) && !names_callee(e.effects)).then_some(e)
 }
 
@@ -506,9 +511,12 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
         // A host pool and an `is` filter are host-surface forms
         // (HOSTSURF §1.4), which only a loaded host table carries.
-        if matches!(s.root, RealmSlotRoot::Pool(_))
-            || s.steps.iter().any(|st| matches!(st, RealmSlotStep::Is(_)))
-        {
+        // HOSTSURF H2: a pool is read whole or through `is` filters only.
+        if matches!(s.root, RealmSlotRoot::Pool(_)) {
+            return crate::host::current().is_some()
+                && s.steps.iter().all(|st| matches!(st, RealmSlotStep::Is(_)));
+        }
+        if s.steps.iter().any(|st| matches!(st, RealmSlotStep::Is(_))) {
             return false;
         }
         matches!(
@@ -567,8 +575,10 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Json | RealmOperand::Unknown => true,
             // No value at all: a whole result only (the manifest's check).
             RealmOperand::Never => true,
-            // A host-surface form (HOSTSURF §1.4.4).
-            RealmOperand::FreshByTag { .. } => false,
+            // A host-surface form (HOSTSURF §1.4.4): a provider's tag
+            // relation (H2).
+            RealmOperand::FreshByTag { tags, .. } => crate::host::current()
+                .is_some_and(|h| h.table.tags.contains_key(tags.as_ref())),
         }
     }
     !effects.is_empty()
@@ -672,7 +682,7 @@ impl Run {
     fn root(&mut self, m: &mut Model, r: RealmSlotRoot) -> Vals {
         let mut v = Vals::default();
         match r {
-            RealmSlotRoot::Pool(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
+            RealmSlotRoot::Pool(p) => v.nodes.push(host_pool(m, p.0)),
             RealmSlotRoot::This => v.nodes.push(self.recv(m)),
             // Spread positions are not kept: with a spread argument,
             // argument `i` is a direct argument at index `i` or before, or
@@ -726,6 +736,13 @@ impl Run {
                 self.walk(m, n, rest)
             }
             (r, []) => self.root(m, r),
+            // A pool through `is` filters (HOSTSURF H2): each filter keeps a
+            // subset, which the pool's whole set over-approximates.
+            (r @ RealmSlotRoot::Pool(_), steps)
+                if steps.iter().all(|st| matches!(st, RealmSlotStep::Is(_))) =>
+            {
+                self.root(m, r)
+            }
             // The values iterating a slot yields, or its own enumerable
             // properties' values: taken from the slot the step is in.
             (r, [inner @ .., st @ (RealmSlotStep::Iterated | RealmSlotStep::OwnValues)]) => {
@@ -790,7 +807,13 @@ impl Run {
                     return Vals::default();
                 };
                 match last {
-                    RealmSlotStep::Is(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
+                    // An `is` filter keeps the values whose chain holds the
+                    // named prototype: a subset, which the slot's whole set
+                    // over-approximates (HOSTSURF H2).
+                    RealmSlotStep::Is(_) => Vals {
+                        nodes: vec![n],
+                        spread: vec![],
+                    },
                     RealmSlotStep::Elems => Vals {
                         nodes: vec![],
                         spread: vec![n],
@@ -859,7 +882,11 @@ impl Run {
                 }
             };
             cur = match st {
-                RealmSlotStep::Is(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
+                // A subset of the values (HOSTSURF H2, as above).
+                RealmSlotStep::Is(_) => Vals {
+                    nodes: vec![base],
+                    spread: vec![],
+                },
                 RealmSlotStep::Elems => Vals {
                     nodes: vec![],
                     spread: vec![base],
@@ -932,7 +959,13 @@ impl Run {
 
     fn operand(&mut self, m: &mut Model, o: &RealmOperand) -> NodeId {
         match o {
-            RealmOperand::FreshByTag { .. } => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
+            RealmOperand::FreshByTag { tags, .. } => {
+                let n = m.node_l("native-fresh-tag");
+                for t in self.fresh_by_tag(m, tags, false) {
+                    m.add_tok(n, t);
+                }
+                n
+            }
             RealmOperand::Prim(ps) => {
                 let n = m.node_l("num");
                 m.add_prim(n, prim_bits(ps));
@@ -1110,6 +1143,26 @@ impl Run {
         out
     }
 
+    /// `fresh_by_tag(arg, tags)` (HOSTSURF §1.4): the object of the
+    /// interface the provider's tag relation maps the argument to. The
+    /// argument's String is not read here: one fresh object per interface
+    /// the relation names (its map and `other`), each its own token of this
+    /// call, a superset of the one the call makes.
+    fn fresh_by_tag(&mut self, m: &mut Model, tags: &str, result: bool) -> Vec<Tok> {
+        let rel = &crate::host::current()
+            .expect("interpretable() takes fresh_by_tag with a host table")
+            .table
+            .tags[tags];
+        let mut protos: Vec<&'static str> = rel.map.values().copied().collect();
+        protos.push(rel.other);
+        protos.sort_unstable();
+        protos.dedup();
+        protos
+            .into_iter()
+            .map(|p| self.fresh(m, &Cow::Borrowed(p), &[], &[], result))
+            .collect()
+    }
+
     /// The value of an own field of fresh object `holder`: a closure native
     /// whose declaration reads its captures (`names_callee`) is the value
     /// made for this holder, with `islot(callee, self)` = `holder`; any
@@ -1183,7 +1236,11 @@ impl Run {
 
     fn returns(&mut self, m: &mut Model, o: &RealmOperand) {
         match o {
-            RealmOperand::FreshByTag { .. } => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
+            RealmOperand::FreshByTag { tags, .. } => {
+                for t in self.fresh_by_tag(m, tags, true) {
+                    ret_tok(m, self.call, t);
+                }
+            }
             RealmOperand::Prim(ps) => ret_prim(m, self.call, prim_bits(ps)),
             RealmOperand::Slot(s) if s.root == RealmSlotRoot::This && s.steps.is_empty() => {
                 let t = self
@@ -1332,6 +1389,48 @@ fn flow(m: &mut Model, v: &Vals, dst: NodeId) {
 
 /// `call` into declared native `entry` with receiver token `t`: each
 /// declared effect, in declaration order.
+/// The node of provider pool `pool` (HOSTSURF §1.4): one per model,
+/// holding from its first use every birth the provider keeps there; a
+/// member's `stores(.. -> pool(p))` flows into it, `slot(pool(p))` reads it.
+pub(crate) fn host_pool(m: &mut Model, pool: &'static str) -> NodeId {
+    if let Some(&n) = m.host_pools.get(pool) {
+        return n;
+    }
+    let n = m.node_l("host-pool");
+    m.host_pools.insert(pool, n);
+    let h = crate::host::current().expect("a pool is read with a host table");
+    for b in h.table.births.values() {
+        if b.pools.iter().any(|p| p.0 == pool) {
+            for &proto in &b.protos {
+                let t = host_birth(m, b.name, proto);
+                m.add_tok(n, t);
+            }
+        }
+    }
+    n
+}
+
+/// The object of provider birth `birth` (`provider:Document`) whose
+/// [[Prototype]] is `proto`, one per model: a builtin object of that
+/// prototype (`TmplKind::BObj { what: proto }`), as a declaration's
+/// `fresh(proto)` makes, born before the program runs.
+pub(crate) fn host_birth(m: &mut Model, birth: &'static str, proto: &'static str) -> Tok {
+    if let Some(&t) = m.host_births.get(&(birth, proto)) {
+        return t;
+    }
+    let t = super::native_protocol::anon_tmpl(m, proto);
+    m.host_births.insert((birth, proto), t);
+    t
+}
+
+/// The values of a provider's data member that names a birth
+/// (`document`: `birth(Document)`), each interface's object.
+pub(crate) fn host_birth_values(m: &mut Model, birth: &str) -> Option<Vec<Tok>> {
+    let b = crate::host::current()?.table.births.get(birth)?;
+    let (name, protos) = (b.name, b.protos.clone());
+    Some(protos.into_iter().map(|p| host_birth(m, name, p)).collect())
+}
+
 pub(crate) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
     run(m, entry, Some(t), None, call, None)
 }

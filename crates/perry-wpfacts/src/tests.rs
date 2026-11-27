@@ -1810,6 +1810,7 @@ mod w3j;
 mod w3k;
 mod nsprim;
 mod hostchain;
+mod hostsurf;
 mod wbound;
 mod widened_finite_keys;
 mod w3l;

@@ -3222,6 +3222,13 @@ pub struct Model {
     /// [[Prototype]] `Navigator.prototype`), born once per model: what
     /// Node's `get navigator` on the global object returns.
     pub navigator: Option<Tok>,
+    /// HOSTSURF H2: a provider's pool (`pool(nodes)`), one node per pool
+    /// per model: what the provider keeps (its births, the values its
+    /// members store there).
+    pub host_pools: FxHashMap<&'static str, NodeId>,
+    /// HOSTSURF H2: the one object of a provider birth (`Element+`,
+    /// `Document`) per interface prototype, born once per model.
+    pub host_births: FxHashMap<(&'static str, &'static str), Tok>,
     /// What `require.cache` / `require.extensions` / `require.main` are at
     /// run time: the support module's cache and the extensions the runtime
     /// returned to it (`__perry_runtime.cjsInstall`), the runtime's own

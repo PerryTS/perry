@@ -52,6 +52,9 @@ fn rank(v: &crate::Verdict) -> u8 {
         | crate::Verdict::T0Set
         | crate::Verdict::OwnLength
         | crate::Verdict::NativeMember
+        | crate::Verdict::HostMember { .. }
+        | crate::Verdict::HostGet { .. }
+        | crate::Verdict::HostSet { .. }
         | crate::Verdict::Dead
         | crate::Verdict::Throws
         | crate::Verdict::OwnDataOrAbsent

@@ -29,6 +29,7 @@ use super::CompilationContext;
 pub(super) fn prune(
     ctx: &mut CompilationContext,
     roots: &[PathBuf],
+    host: Option<&'static perry_wpfacts::host::HostRealm>,
 ) -> Result<Option<perry_wpfacts::Activation>> {
     if matches!(
         std::env::var("PERRY_DYNAMIC_REACH").as_deref(),
@@ -136,6 +137,7 @@ pub(super) fn prune(
         data_url_import,
         &ctx.patched_builtins.dynamic_code_reach,
         roots.iter().map(|p| p.display().to_string()).collect(),
+        host,
     ) else {
         return Ok(None);
     };

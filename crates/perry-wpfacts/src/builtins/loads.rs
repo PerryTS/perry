@@ -1188,6 +1188,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some(n @ ("globalThis" | "global")) if !m.unit_mode => {
                     declared_global_load(m, t, t, n, dst)
                 }
+                // HOSTSURF H2: a global a provider adds (`document`): its
+                // declared value, and what the program stored there.
+                Some(n) if crate::host::is_host_global(n) && hostval_global(m, t, key, n, dst) => {
+                    declared_global_value(m, t, n, dst);
+                }
                 Some(n) if hostval_global(m, t, key, n, dst) => {}
                 // REALMVAL: every member %Global% owns has a value side
                 // (RealmManifest::validate) that an arm above reads.
@@ -2134,6 +2139,30 @@ fn hostval_member(
                 opaque_member(m, dst);
             } else {
                 super::effects::getter_load(m, getter, t, a, dst);
+            }
+            return true;
+        }
+    }
+    // HOSTSURF H2: a provider's data member naming a birth (`document`:
+    // the Document) or a prototype object (an interface object's
+    // `prototype`): that object, as every other reference to it.
+    if let Some(V::Reference(r)) = o.map(|o| o.value) {
+        let host: Option<Vec<Tok>> = match members::realm_entry(r).map(|d| d.kind) {
+            _ if crate::host::current().is_none() => None,
+            Some(K::BirthSite) => super::effects::host_birth_values(m, r),
+            Some(K::Prototype) if crate::host::is_host_proto(r) => {
+                let base = r.strip_suffix(".prototype").unwrap_or(r);
+                Some(vec![native_proto(m, base)])
+            }
+            _ => None,
+        };
+        if let Some(toks) = host {
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                for x in toks {
+                    m.add_tok(dst, x);
+                }
             }
             return true;
         }

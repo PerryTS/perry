@@ -437,7 +437,9 @@ fn load_effects(
             if n == "null" {
                 Ok(Cow::Borrowed("null"))
             } else {
-                Ok(Cow::Owned(l.resolve(provider, n, at)?))
+                // Leaked once per compile, as every host name: the solver
+                // keys a fresh object's kind by the static name.
+                Ok(Cow::Borrowed(leak(l.resolve(provider, n, at)?)))
             }
         };
         Ok(match o {

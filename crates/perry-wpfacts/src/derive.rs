@@ -12,7 +12,7 @@ pub(crate) use element::element_facts;
 pub(crate) use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};
 pub(crate) use member_ops::member_op_facts;
-use native_member::host_member;
+use native_member::{host_member, host_site};
 pub(crate) use native_member::native_member;
 
 use crate::gen::Gen;
@@ -315,6 +315,19 @@ pub enum Verdict {
     /// both are in the solve. The emitted operation stays the generic one
     /// (the runtime's Proxy dispatch).
     ProxyTrap,
+    /// HOSTSURF H2 (§2.3): a read or call whose receivers resolve the key,
+    /// by OrdinaryGet over each provider-declared chain, to one manifest
+    /// member nothing else writes (`host_site`): the member's function (a
+    /// method, a call), its object or primitive (a data member).
+    /// `nullable`: `undefined`/`null` beside them, the operation's own
+    /// TypeError arm.
+    HostMember { member: String, nullable: bool },
+    /// HOSTSURF H2: a read whose receivers resolve the key to one manifest
+    /// accessor: its getter runs (`member` names it).
+    HostGet { member: String, nullable: bool },
+    /// HOSTSURF H2: a named store whose receivers resolve the key to one
+    /// manifest accessor with a setter (OrdinarySet 10.1.9.2 step 7).
+    HostSet { member: String, nullable: bool },
     No(String),
 }
 
@@ -2354,6 +2367,10 @@ fn judge(
     // The intrinsic member of one builtin family. Like OwnLength it names
     // no layout slot or body. A write onto a builtin prototype that alone
     // keeps it from the site is the site's reason.
+    // HOSTSURF H2: a provider's member (`host_site`).
+    if let Some((receivers, verdict)) = host_site(m, s, toks, prim) {
+        return (receivers, false, verdict, true, FxHashMap::default());
+    }
     let native_why = match native_member(m, s, toks, prim) {
         Ok(receivers) => {
             return (
@@ -3224,6 +3241,10 @@ fn judge_store(
             );
         }
     }
+    // HOSTSURF H2: a provider's accessor (`host_site`).
+    if let Some((receivers, verdict)) = host_site(m, s, toks, prim) {
+        return (receivers, false, verdict, true, FxHashMap::default());
+    }
     for &t in toks {
         match &m.toks[t as usize] {
             TokKind::Top => {
@@ -3872,7 +3893,7 @@ fn known_object_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), Strin
 /// under key `a` or under any key, so the intrinsics' descriptions
 /// (`members`) decide what their chains read under `a`. `Err`: the write
 /// that may change it.
-fn builtin_protos_unwritten(
+pub(crate) fn builtin_protos_unwritten(
     m: &Model,
     fam: Option<crate::builtins::NativeFamily>,
     a: Atom,

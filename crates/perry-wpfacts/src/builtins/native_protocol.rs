@@ -1706,6 +1706,9 @@ pub fn is_builtin_module(s: &str) -> bool {
 pub fn global_user_key(m: &Model, name: &str) -> bool {
     name != crate::STAR_KEY
         && (!m.unit_mode || name.starts_with("__"))
+        // HOSTSURF H2: a global a provider declares (`document`) is the
+        // provider's, as a static realm global is.
+        && !crate::host::is_host_global(name)
         && !["%Global%", "Object.prototype"].into_iter().any(|holder| {
             m.declarations
                 .named(holder, m)

@@ -355,6 +355,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::KnownObjectStore => "known-object-store".to_string(),
             Verdict::ProxyTrap => "proxy-trap".to_string(),
             Verdict::IntrinsicCall => "intrinsic-call".to_string(),
+            Verdict::HostMember { member, nullable } => host_verdict("member", member, *nullable),
+            Verdict::HostGet { member, nullable } => host_verdict("get", member, *nullable),
+            Verdict::HostSet { member, nullable } => host_verdict("set", member, *nullable),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(
@@ -685,4 +688,10 @@ pub(crate) fn solver_state(m: &crate::model::Model) -> String {
         .unwrap();
     }
     out
+}
+
+/// HOSTSURF H2: `host:member|get|set`, the manifest member, and
+/// `nullable` when `undefined`/`null` flow beside the host receivers.
+fn host_verdict(kind: &str, member: &str, nullable: bool) -> String {
+    format!("host:{kind}={member}{}", if nullable { ",nullable" } else { "" })
 }

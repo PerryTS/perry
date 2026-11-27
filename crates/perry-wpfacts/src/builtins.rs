@@ -5111,3 +5111,23 @@ pub(crate) fn is_extensible_ops(m: &mut Model, o: NodeId, integrity: bool) {
         );
     }
 }
+
+/// HOSTSURF H2: the realm declaration `name`, static or a provider's
+/// (`%Global%`: merged with the providers' globals).
+pub(crate) fn realm_entry_of(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    members::realm_entry(name)
+}
+
+/// HOSTSURF H2: OrdinaryGet of `key` over the declared chain of prototype
+/// `proto` (a provider's): the holder's name and the member's value;
+/// `None` when no declaration on the chain has the key.
+pub(crate) fn host_chain_find(
+    proto: &str,
+    key: &str,
+) -> Option<(&'static str, perry_hir::realm_manifest::RealmOwnValue)> {
+    let born = members::realm_born(proto)?;
+    match members::realm_chain_find(born, key) {
+        members::RealmFind::Own(p, holder) => Some((holder.name, p.value)),
+        members::RealmFind::Absent => None,
+    }
+}

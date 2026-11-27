@@ -229,6 +229,7 @@ pub(crate) fn run(
     cache_dir: &Path,
     activation: Option<perry_wpfacts::Activation>,
     native_externs: BTreeMap<String, perry_wpfacts::NativeResult>,
+    host: Option<&'static perry_wpfacts::host::HostRealm>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -338,6 +339,7 @@ pub(crate) fn run(
             PathBuf::from(d)
         }),
         native_externs,
+        host,
     };
     // Entry outlining moves module bindings into compiler-owned functions.
     // Facts need the same logical module scope that codegen's globals and
@@ -1632,6 +1634,7 @@ pub(crate) fn activation(
     data_url_import: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
+    host: Option<&'static perry_wpfacts::host::HostRealm>,
 ) -> Option<perry_wpfacts::Activation> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -1730,6 +1733,7 @@ pub(crate) fn activation(
         }),
         unit: false,
         jobs: perry_codegen::workers::unit_workers(),
+        host,
         ..Default::default()
     };
     let inputs = facts_inputs(modules);
@@ -1799,6 +1803,10 @@ fn verification_sites(
                 | perry_wpfacts::Verdict::KnownObjectStore
                 | perry_wpfacts::Verdict::PerKind
                 | perry_wpfacts::Verdict::ProxyTrap
+                // HOSTSURF: no codegen consumer of a host verdict yet (H5).
+                | perry_wpfacts::Verdict::HostMember { .. }
+                | perry_wpfacts::Verdict::HostGet { .. }
+                | perry_wpfacts::Verdict::HostSet { .. }
                 | perry_wpfacts::Verdict::No(_) => return None,
             };
             Some(SiteClaim {

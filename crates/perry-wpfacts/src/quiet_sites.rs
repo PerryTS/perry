@@ -185,6 +185,9 @@ pub(crate) fn collect(
         let why = match s.verdict {
             Verdict::OwnLength
             | Verdict::NativeMember
+            | Verdict::HostMember { .. }
+            | Verdict::HostGet { .. }
+            | Verdict::HostSet { .. }
             | Verdict::T0Mono
             | Verdict::T0Set
             | Verdict::Dead

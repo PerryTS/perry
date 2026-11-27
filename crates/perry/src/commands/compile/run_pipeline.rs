@@ -1176,6 +1176,16 @@ pub fn run_with_parse_cache(
     // #2309: tree-shake the final module graph — prune unreachable
     // node_modules modules and re-raise any deferred refusal that survives.
     // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
+    // HOSTSURF guard: a host that adds globals needs its surface loaded
+    // before the facts may read `%Global%` as complete; the loaded surfaces
+    // are the realm of both facts passes (the activation pass and the
+    // facts), HOSTSURF H2.
+    let host_surfaces = super::host_surfaces::collect(
+        &args.host_surface,
+        &ctx.native_libraries,
+        args.target.as_deref(),
+    )?;
+    let host_realm = super::host_surfaces::guard(&host_surfaces, perry_wpfacts::enabled_from_env())?;
     // The compile's one activation pass (dynamic reach runs it) and its roots
     // go to the facts (`perry_wpfacts::Activation`).
     let (activation, activation_roots) = {
@@ -1197,7 +1207,7 @@ pub fn run_with_parse_cache(
                 roots.push(entry_path.canonicalize().unwrap_or(entry_path));
             }
         }
-        let activation = super::dynamic_reach::prune(&mut ctx, &roots)?;
+        let activation = super::dynamic_reach::prune(&mut ctx, &roots, host_realm)?;
         (activation, roots)
     };
 
@@ -1936,12 +1946,6 @@ pub fn run_with_parse_cache(
     // options see what they see there.
     // HOSTSURF guard: a host that adds globals needs its surface loaded
     // before the facts may read `%Global%` as complete.
-    let host_surfaces = super::host_surfaces::collect(
-        &args.host_surface,
-        &ctx.native_libraries,
-        args.target.as_deref(),
-    )?;
-    super::host_surfaces::guard(&host_surfaces, perry_wpfacts::enabled_from_env())?;
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
         super::program_facts::export_sources(&ctx),
@@ -1964,6 +1968,7 @@ pub fn run_with_parse_cache(
         super::program_facts::native_externs(
             ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
         ),
+        host_realm,
     );
     {
         let (index, methods) = super::program_facts::array_chain_facts(program_facts.as_deref());

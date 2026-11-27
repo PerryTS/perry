@@ -17,6 +17,7 @@
 //! `secret-tests/scratchpad/wpfacts-design-20261012.md`.
 
 pub mod bindings;
+pub mod host;
 mod booleans;
 mod born_with;
 mod k3_census;
@@ -185,6 +186,10 @@ pub struct FactsConfig {
     /// symbol, the externs the driver found so, with their result kind
     /// (`Gen::native_extern_call`); empty: every extern call is unknown code.
     pub native_externs: std::collections::BTreeMap<String, NativeResult>,
+    /// HOSTSURF H2: the host surfaces the build links (`host::load`), read
+    /// beside the static realm for the duration of the solve; `None`: the
+    /// static realm alone.
+    pub host: Option<&'static host::HostRealm>,
     /// JSON position classes (`solve::json_pos`), default OFF
     /// (`PERRY_FACTS_JSON_POSITIONS=1`): off, a parse's objects are one
     /// token (BATCHB28: on, the three.js skin solve runs past its bound).
@@ -469,6 +474,7 @@ pub fn compute_with(
     cfg: &FactsConfig,
     given: Option<Activation>,
 ) -> ProgramFacts {
+    let _host = host::install(cfg.host);
     let mut pf = compute_act(modules, cfg, None, None, Some(given));
     if cfg.diagnostics {
         let mut sorted: Vec<(&str, &Module)> =
@@ -844,6 +850,7 @@ impl Activation {
 /// run; a body is walked once an active body's transfer solves to its
 /// function or the function escapes, until none is left.
 pub fn activation(modules: &[(String, &Module)], cfg: &FactsConfig) -> Activation {
+    let _host = host::install(cfg.host);
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let (act, live) = match activation_pass(&sorted, cfg, std::time::Instant::now()) {
