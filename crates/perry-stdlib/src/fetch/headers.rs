@@ -205,20 +205,6 @@ fn is_headers_init_iterable(value: f64) -> bool {
         || has_sync_iterator(value)
 }
 
-/// Read a plain-object `HeadersInit` without changing registry ownership.
-/// Response construction uses this when codegen passes a runtime header record
-/// rather than a `Headers` registry handle.
-pub(super) fn headers_store_from_record_value(init: f64) -> Option<HeadersStore> {
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let rooted = scope.root_nanbox_f64(init);
-    let entries = read_headers_record_entries(rooted.get_nanbox_f64(), &scope)?;
-    let mut store = HeadersStore::default();
-    for (key, value) in entries {
-        store.append(&key, &value);
-    }
-    Some(store)
-}
-
 fn read_headers_record_entries(
     value: f64,
     scope: &perry_runtime::gc::RuntimeHandleScope,
@@ -421,9 +407,9 @@ unsafe fn read_headers_iterable_entries(
 /// A header name is a token (RFC 9110 §5.6.2).
 fn is_valid_header_name(name: &str) -> bool {
     !name.is_empty()
-        && name.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
-        })
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
 /// A header value with leading/trailing HTTP whitespace removed, or `None`
@@ -435,7 +421,9 @@ fn normalized_header_value(value: &str) -> Option<&str> {
 
 unsafe fn checked_name(op: &str, name: String) -> String {
     if !is_valid_header_name(&name) {
-        throw_fetch_type_error(&format!("Headers.{op}: \"{name}\" is an invalid header name."));
+        throw_fetch_type_error(&format!(
+            "Headers.{op}: \"{name}\" is an invalid header name."
+        ));
     }
     name
 }
@@ -443,7 +431,9 @@ unsafe fn checked_name(op: &str, name: String) -> String {
 unsafe fn checked_pair(op: &str, name: String, value: String) -> (String, String) {
     let name = checked_name(op, name);
     let Some(v) = normalized_header_value(&value) else {
-        throw_fetch_type_error(&format!("Headers.{op}: \"{value}\" is an invalid header value."));
+        throw_fetch_type_error(&format!(
+            "Headers.{op}: \"{value}\" is an invalid header value."
+        ));
     };
     (name, v.to_string())
 }
@@ -555,7 +545,9 @@ pub unsafe extern "C" fn js_headers_get(handle: f64, key: f64) -> f64 {
     let key = checked_name("get", header_init_string(key));
     let value = headers_payload(this.get_nanbox_f64()).and_then(|p| p.store.get(&key));
     match value {
-        Some(v) => f64::from_bits(JSValue::string_ptr(js_string_from_bytes(v.as_ptr(), v.len() as u32)).bits()),
+        Some(v) => f64::from_bits(
+            JSValue::string_ptr(js_string_from_bytes(v.as_ptr(), v.len() as u32)).bits(),
+        ),
         None => f64::from_bits(TAG_NULL),
     }
 }
@@ -664,7 +656,9 @@ pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader
 /// in insertion order). Shared by `forEach`, `keys`, `values`, `entries`
 /// and `[Symbol.iterator]` so all five agree (refs #576).
 fn snapshot_sorted(handle: f64) -> Vec<(String, String)> {
-    let mut entries = headers_store_of(handle).map(|s| s.entries).unwrap_or_default();
+    let mut entries = headers_store_of(handle)
+        .map(|s| s.entries)
+        .unwrap_or_default();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
 }
@@ -677,9 +671,7 @@ unsafe fn headers_for_each_with(handle: f64, callback: f64, this_arg: f64) -> f6
     let cb_handle = scope.root_nanbox_f64(callback);
     let this_arg = scope.root_nanbox_f64(this_arg);
     if !perry_runtime::closure::is_closure_bits(callback.to_bits()) {
-        throw_fetch_type_error(
-            "Headers.forEach: Expected callback to be a function.",
-        );
+        throw_fetch_type_error("Headers.forEach: Expected callback to be a function.");
     }
     let entries = snapshot_sorted(this.get_nanbox_f64());
     for (k, v) in entries {
@@ -722,13 +714,23 @@ fn nanbox_array_pointer(arr: *mut perry_runtime::ArrayHeader) -> f64 {
 /// `headers.keys()` — the sorted names, as an (iterable) array (refs #576).
 #[no_mangle]
 pub extern "C" fn js_headers_keys(handle: f64) -> f64 {
-    string_array(snapshot_sorted(handle).into_iter().map(|(k, _)| k).collect())
+    string_array(
+        snapshot_sorted(handle)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect(),
+    )
 }
 
 /// `headers.values()` — the values in name order. See `js_headers_keys`.
 #[no_mangle]
 pub extern "C" fn js_headers_values(handle: f64) -> f64 {
-    string_array(snapshot_sorted(handle).into_iter().map(|(_, v)| v).collect())
+    string_array(
+        snapshot_sorted(handle)
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect(),
+    )
 }
 
 /// `headers.entries()` / `headers[Symbol.iterator]()` — sorted `[name,
@@ -816,7 +818,12 @@ extern "C" fn proto_for_each(
 /// WebIDL operations: `{ writable, enumerable, configurable }`.
 const OPERATION: u8 = 0x07;
 
-fn define(proto: *mut perry_runtime::ObjectHeader, name: &str, info: *const JsFunctionInfo, arity: u32) -> f64 {
+fn define(
+    proto: *mut perry_runtime::ObjectHeader,
+    name: &str,
+    info: *const JsFunctionInfo,
+    arity: u32,
+) -> f64 {
     unsafe { js_builtin_define_method(proto, name.as_ptr(), name.len(), info, arity, OPERATION) }
 }
 

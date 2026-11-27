@@ -528,9 +528,8 @@ pub extern "C" fn js_fetch_headers_prototype() -> *mut crate::object::ObjectHead
 /// Is `value` a Headers object (direct or a subclass instance)? Its payload
 /// cell names the family: the class id is the low word of the cell's type.
 pub(crate) fn is_headers_object(value: f64) -> bool {
-    crate::native_payload::payload_cell_of_value(value).is_some_and(|cell| {
-        (unsafe { (*cell).type_id } as u32) == crate::native_class_ids::HEADERS
-    })
+    crate::native_payload::payload_cell_of_value(value)
+        .is_some_and(|cell| (unsafe { (*cell).type_id } as u32) == crate::native_class_ids::HEADERS)
 }
 
 /// Register perry-stdlib's `Headers` → entries-JSON producer (#4965). The
