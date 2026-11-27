@@ -48,8 +48,8 @@ class Rect extends Shape {
   }
 }
 
-// Receivers the facts close over two classes: describe/scaled are direct,
-// inlinable calls of Shape's bodies.
+// Receivers the facts close over two classes: describe/scaled are direct
+// calls of Shape's bodies; scaled, which records no frame, is inlined.
 const shapes: Shape[] = [new Circle(2), new Rect(2, 3)];
 let acc = "";
 let total = 0;
