@@ -962,6 +962,13 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
         }
         // Every Number key is a CanonicalNumericIndex: NaN and the infinities
         // are invalid indices, whose store still runs ToNumber on the value.
+        // An object value's ToNumber can collect, and the result is the value.
+        if value.to_bits() & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(value);
+            typed_array_set_number_key(owner, key, value.get_nanbox_f64());
+            return value.get_nanbox_f64();
+        }
         typed_array_set_number_key(owner, key, value);
         value
     }
