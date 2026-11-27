@@ -1781,7 +1781,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_jsvalue_to_string", "js_jsvalue_to_string_coerce",
     "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
     "js_string_coerce", "js_string_coerce_method_this",
-    "js_number_coerce", "js_object_coerce",
+    "js_number_coerce", "js_number_from_value", "js_object_coerce",
     # Full string argument coercion/validation can invoke user code. The
     # number/string-only entries used after coercion are deliberately absent.
     "js_string_index_to_i32", "js_string_end_index_to_i32", "js_string_number_coerce",

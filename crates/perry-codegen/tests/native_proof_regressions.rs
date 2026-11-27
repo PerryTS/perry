@@ -2163,7 +2163,7 @@ fn number_coerce_of_proven_numeric_loop_expression_skips_runtime_call() {
 
     let ir = compile_ir("number_coerce_numeric_loop_no_runtime_call.ts", body);
     assert!(
-        !ir.contains("call double @js_number_coerce"),
+        !ir.contains("call double @js_number_from_value"),
         "Number(i + 0.5) with a proven integer loop counter is already a primitive number:\n{ir}"
     );
 }
@@ -2187,7 +2187,7 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_number_coerce"),
+        ir.contains("call double @js_number_from_value"),
         "Number(values[0]) must still coerce boxed numeric-array fallback values:\n{ir}"
     );
 }

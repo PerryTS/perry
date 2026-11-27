@@ -156,12 +156,12 @@ fn number_of_possibly_bigint_bitwise_result_keeps_its_coercion() {
     };
     let unknown = number_of(Expr::LocalGet(B));
     assert!(
-        unknown.contains("call double @js_number_coerce("),
+        unknown.contains("call double @js_number_from_value("),
         "`Number(a & b)` must convert a BigInt result:\n{unknown}"
     );
     let masked = number_of(Expr::Integer(255));
     assert!(
-        !masked.contains("call double @js_number_coerce("),
+        !masked.contains("call double @js_number_from_value("),
         "`Number(a & 255)` is already a Number:\n{masked}"
     );
 }

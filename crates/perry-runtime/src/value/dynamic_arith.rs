@@ -469,20 +469,13 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     a + b
 }
 
-/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
-/// unchanged, every other value is coerced via `ToNumber`. The codegen's
-/// update path uses this for the *operand read* so that the postfix return
-/// value and the stepping base keep their BigInt type instead of collapsing
-/// to a Number (`let i = 10n; i++` must stay a BigInt — otherwise a later
-/// `i + 87n` throws a mixed-type TypeError; test262
-/// BigInt/prototype/toString/a-z).
+/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt, or a BigInt that
+/// ToPrimitive returns for an object, passes through; every other value takes
+/// ToNumber. The postfix return value and the stepping base therefore keep
+/// their BigInt type (`let i = 10n; i++` stays a BigInt).
 #[no_mangle]
 pub unsafe extern "C" fn js_to_numeric(value: f64) -> f64 {
-    if JSValue::from_bits(value.to_bits()).is_bigint() {
-        value
-    } else {
-        crate::builtins::js_number_coerce(value)
-    }
+    to_numeric(value)
 }
 
 /// Step a ToNumeric operand by `1` of its own numeric type for `++`/`--`.
