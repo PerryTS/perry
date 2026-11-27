@@ -93,10 +93,24 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
         "close" => {
             let callback = closure_arg(args.first().copied());
             let turnloop = super::turnloop_conn_of_session(handle);
+            let mut server = false;
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                session.mark_closed();
-                if callback != 0 {
-                    session.close_callbacks.push(callback);
+                server = session.session_type == 0;
+                if server {
+                    // Destroyed only once its socket has closed.
+                    session.closed = true;
+                } else {
+                    session.mark_closed();
+                }
+                match (callback, server) {
+                    (0, _) => {}
+                    // Node's `once('close', cb)`: the socket's close emits it.
+                    (_, true) => session
+                        .listeners
+                        .entry("close".into())
+                        .or_default()
+                        .push(callback),
+                    (_, false) => session.close_callbacks.push(callback),
                 }
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
@@ -105,16 +119,22 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             if let Some(conn) = turnloop {
                 crate::server::turnloop_h2::control::session_close(conn);
             }
-            push_h2_event(Http2PendingEvent::ClientClose {
-                session_handle: handle,
-                callback,
-            });
+            if !server {
+                push_h2_event(Http2PendingEvent::ClientClose {
+                    session_handle: handle,
+                    callback,
+                });
+            }
             self_ref
         }
         "destroy" => {
             let turnloop = super::turnloop_conn_of_session(handle);
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                session.mark_closed();
+                if session.session_type == 0 {
+                    session.mark_destroyed();
+                } else {
+                    session.mark_closed();
+                }
             }
             // `destroy()` is the abrupt one: no GOAWAY, no drain.
             if let Some(conn) = turnloop {
