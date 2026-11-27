@@ -13,13 +13,13 @@ mod accessors;
 mod copy;
 mod define;
 mod lookup;
-mod proto_first;
-mod shadow;
 pub(crate) mod map_vals;
 mod not_error;
 mod own_read;
+mod proto_first;
 mod range_inputs;
 mod record_entry;
+mod shadow;
 pub(crate) use range_inputs::{grow_crange, grow_range, grow_rule_range};
 
 use crate::builtins;
@@ -28,6 +28,7 @@ mod call_and_construct;
 mod native_value;
 mod reflect_construct;
 mod shared;
+mod this_bind;
 use crate::delta::Tokens;
 use crate::model::*;
 
