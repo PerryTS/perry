@@ -2840,6 +2840,15 @@ fn judge(
                     own_or_absent += 1;
                 }
             }
+            // SITEB1: the global object's own data property the realm
+            // declares, unwritten (`builtins::global_declared_unwritten`):
+            // its [[Get]] reads the realm's value (10.1.8.1); for a call that
+            // value is the callee, whose set is checked below. A read only
+            // decides the arm: the site stays generic (PerKind, no claim).
+            TokKind::Builtin(_) if crate::builtins::global_declared_unwritten(m, t, s.key) => {
+                receivers.push(m.tok_name(t));
+                native_arms += 1;
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;

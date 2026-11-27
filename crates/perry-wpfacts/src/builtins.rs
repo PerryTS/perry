@@ -3558,6 +3558,76 @@ pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -
     own && !native_written(m, t, a)
 }
 
+/// SITEB1: key `a` read off the global object `t` (`globalThis`, or the
+/// HIR's global sentinel a bare global name is read off: 9.1.1.4.6
+/// GetBindingValue of the global environment's object record, [[Get]] of
+/// the global object) is an own data property the realm gives the global
+/// object (`%Global%`'s declared own keys, ECMA-262 19.1-19.4: `Math`,
+/// `Map`, `console`, ...; not an accessor such as `localStorage`), and no
+/// write the solve sees reached the key on any global-object token or on ⊤:
+/// every [[Set]] (`globalThis.N = v`, a sloppy or strict `N = v`, a computed
+/// store whose key may be `N`), [[DefineOwnProperty]], [[Delete]] and a
+/// global object handed to unknown code record one in `native_writes`
+/// (as `derive::namespace_callee`'s "global binding not replaced"), and
+/// no program store left a value in a global-object field under the key or
+/// under any key. Then
+/// 10.1.8.1 OrdinaryGet finds that own property, the realm's value. No
+/// namespace object is a lock holder, so interpreted code or an unseen
+/// module, which may write any global, refuse. Whole-program solves only.
+pub(crate) fn global_declared_unwritten(m: &Model, t: Tok, a: Atom) -> bool {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    if m.unit_mode
+        || m.interp_runs
+        || m.unseen_module_runs
+        || m.is_private_atom(a)
+        || !global_object(m, t)
+    {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    let data = members::realm_entry("%Global%").is_some_and(|e| {
+        e.own.iter().any(|p| {
+            !p.symbol && p.key == name && !matches!(p.value, RealmOwnValue::Accessor { .. })
+        })
+    });
+    let written = |w: Tok| {
+        m.native_writes.contains_key(&(w, None)) || m.native_writes.contains_key(&(w, Some(a)))
+    };
+    // A program store onto the global object (a named store, a computed
+    // one whose key may be `a`) puts its value in the global's field, not
+    // in `native_writes` (`native_protocol::written_by`, `stored_key`).
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let stored = [BuiltinNs::GlobalThis, BuiltinNs::Other].into_iter().any(|ns| {
+        m.tok_index.get(&TokKind::Builtin(ns)).is_some_and(|&g| {
+            !empty(m.fields.get(&(g, a))) || !empty(m.field_any.get(&g))
+        })
+    });
+    // A program store onto the global object under a String key the solve
+    // cannot name (`globalThis[k] = v`, a computed-key define) takes the
+    // global's any-key field of its key shape (`global_any_field`), which a
+    // read of binding `a` takes when the shape can spell `a`
+    // (`global_any_read`): the same test makes it a write of `a`. A
+    // Number-key store (an index property, 7.1.19) shares the shape-0
+    // field here; under W10-IDX it has its own field (`global_num_field`),
+    // which no realm-declared name reads, so the test stays the same.
+    let any_stored = m
+        .global_any_fields
+        .iter()
+        .any(|&(s, f)| m.key_may_name_str(Key::Any(s), name) && !empty(Some(&f)));
+    data && !stored
+        && !any_stored
+        && !written(TOP)
+        && !m
+            .native_writes
+            .keys()
+            .any(|&(w, k)| w != TOP && global_object(m, w) && k.is_none_or(|k| k == a))
+}
+
 /// R9READ9: named key `a` is absent on builtin function value `t` and its
 /// whole chain: a described language constructor or namespace
 /// (`members::ns_member`: neither its own statics nor its chain,
