@@ -594,6 +594,23 @@ impl CoreError {
         Self::with_own_code(js_typeerror_new, message, code)
     }
 
+    /// `TypeError(message)` with own enumerable string properties in `props`
+    /// order, raised from Node's C++ layer: no `[CODE]` header in its stack
+    /// (`new URL` failing: `Object.keys(e)` is `["code", "input", "base"]`).
+    pub fn type_error_with_own_strings(message: &[u8], props: &[(&str, &str)]) -> Self {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = scope.root_raw_mut_ptr(js_typeerror_new(msg));
+        for &(key, text) in props {
+            let text = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            let text = scope.root_nanbox_f64(crate::value::js_nanbox_string(text as i64));
+            err.with_mut_ptr(|err: *mut u8| {
+                crate::node_submodules::set_error_user_prop(err as usize, key, text.get_nanbox_f64())
+            });
+        }
+        err.with_mut_ptr(Self::of)
+    }
+
     /// `RangeError(message)` with an own enumerable `code`.
     pub fn range_error_with_own_code(message: &[u8], code: &[u8]) -> Self {
         Self::with_own_code(js_rangeerror_new, message, code)

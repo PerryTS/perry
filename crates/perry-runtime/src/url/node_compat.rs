@@ -442,7 +442,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let href = path_to_file_url_string(&path, windows);
     match super::href::parse(&href, None) {
         Some(parsed) => crate::value::js_nanbox_pointer(super::href::new_url_object(&parsed) as i64),
-        None => super::parse::throw_invalid_url(&href),
+        None => super::parse::throw_invalid_url(&href, None),
     }
 }
 
