@@ -12,6 +12,7 @@ mod accessor_lookup;
 mod copy;
 mod define;
 mod lookup;
+mod shadow;
 pub(crate) mod map_vals;
 mod not_error;
 mod own_read;
