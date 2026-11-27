@@ -136,9 +136,7 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
         );
     }
     for &spread in &c.spread {
-        let keys = m.node_l("accessor-lookup-spread-key");
-        let key = m.elem_key();
-        m.cons(spread, Cons::Load { key, dst: keys });
+        let keys = m.spread_elems_of(spread);
         m.cons(
             keys,
             Cons::Implicit {

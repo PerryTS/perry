@@ -1005,10 +1005,47 @@ impl Model {
 
     #[track_caller]
     fn cons_untagged(&mut self, n: NodeId, c: Cons) {
-        let defer = std::mem::take(&mut self.chain_defer);
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;
+        }
+        // A node's rules are a set: the rule it already has, attached
+        // again (by the next copy of a call, the next receiver a native
+        // method runs on), adds no rule and no replay (its replay is
+        // idempotent). What the attach itself records still holds of the
+        // second one: made inside a clause it joins that clause's reach
+        // mask, outside every clause it is every run's (rule M1, as
+        // `note_edge_reach`); made in a generation region it raises there
+        // too; it is a consumer of a watched cell. A rule of an inert
+        // body's foreign node waits for the activation, which replays what
+        // it recorded.
+        if !self.foreign_rule(n) {
+            let next = self.nodes[n as usize].cons.len() as u32;
+            match self.cons_seen.entry((n, c)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let ci = *e.get();
+                    match self.clause {
+                        Some((f, m)) if self.cur_fn == f => {
+                            if let Some(r) = self.cons_reach.get_mut(&(n, ci)) {
+                                *r |= m;
+                            }
+                        }
+                        _ => {
+                            self.cons_reach.remove(&(n, ci));
+                        }
+                    }
+                    if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
+                        self.cons(n, Cons::Raise { region });
+                    }
+                    if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+                        self.cell_woken.push(n);
+                    }
+                    return;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(next);
+                }
+            }
         }
         self.stats_cons += 1;
         if let Cons::FieldTruthy { dst, .. } = c {
@@ -1111,16 +1148,32 @@ impl Model {
             return;
         }
         self.own_refuted_cons(n, c);
-        if defer {
-            // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c, ci));
-            return;
-        }
         self.replay_cons(n, c, ci);
     }
 
-    /// Apply the attached constraint `c` of `n` to what `n` holds now.
+    /// Apply the attached constraint `c` of `n` to what `n` holds now; a
+    /// replay asked for while one runs is queued (`Model::replay_q`) and run
+    /// by the outermost one. The solve's result is the least fixpoint of
+    /// the rules, whatever order they are applied in, and every rule is
+    /// applied to what its node holds once the queue is drained.
     pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
+        if self.replaying {
+            self.replay_q.push((n, c, ci));
+            return;
+        }
+        self.replaying = true;
+        self.replay_one(n, c, ci);
+        while let Some((n2, c2, i2)) = self.replay_q.pop() {
+            if self.aborted {
+                self.replay_q.clear();
+                break;
+            }
+            self.replay_one(n2, c2, i2);
+        }
+        self.replaying = false;
+    }
+
+    fn replay_one(&mut self, n: NodeId, c: Cons, ci: u32) {
         if matches!(c, Cons::Detached) || self.inert_node(n) {
             return;
         }

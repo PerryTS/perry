@@ -1467,8 +1467,13 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(..)
                     ) {
+                        // The method found on `q` runs in its native frame,
+                        // as its dispatch does (`Model::native_frame`).
+                        let native = builtins::proto_native(self, q, key);
                         self.with_native(call, |m, call| {
-                            builtins::proto_method(m, q, origin, key, call)
+                            m.native_frame(call, native, |m| {
+                                builtins::proto_method(m, q, origin, key, call)
+                            })
                         });
                     }
                 }
@@ -1684,20 +1689,45 @@ impl Model {
                     }
                 }
             }
+            // The Annex B rules run `Object.prototype`'s native for the
+            // program call `call`, as its dispatch does (`call_tok`): in that
+            // native's frame (`Model::native_frame`).
             Cons::AnnexBDefine { call, setter } => {
+                let name = if setter {
+                    "__defineSetter__"
+                } else {
+                    "__defineGetter__"
+                };
+                let (op, a) = (self.tok(TokKind::ObjectProto), self.atom(name));
+                let native = builtins::proto_native(self, op, Key::Named(a));
                 for &t in toks {
-                    self.with_native(call, |m, call| builtins::annexb_define(m, t, call, setter));
+                    self.with_native(call, |m, call| {
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_define(m, t, call, setter)
+                        })
+                    });
                 }
             }
             Cons::AnnexBLookup { call, setter } => {
+                let name = if setter {
+                    "__lookupSetter__"
+                } else {
+                    "__lookupGetter__"
+                };
+                let (op, a) = (self.tok(TokKind::ObjectProto), self.atom(name));
+                let native = builtins::proto_native(self, op, Key::Named(a));
                 for &t in toks {
                     self.with_native(call, |m, call| {
-                        builtins::annexb_lookup(m, Some(t), call, setter)
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_lookup(m, Some(t), call, setter)
+                        })
                     });
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
                     self.with_native(call, |m, call| {
-                        builtins::annexb_lookup_prim(m, prim, call, setter)
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_lookup_prim(m, prim, call, setter)
+                        })
                     });
                 }
             }
@@ -2158,21 +2188,10 @@ impl Model {
                             of,
                             from: q,
                         };
-                        // SKINROOT27: one prototype level per queue entry, not
-                        // per Rust frame group (55k levels overflowed r8).
-                        if self.chain_active {
-                            self.chain_defer = true;
-                            self.cons(up, link);
-                        } else {
-                            self.chain_active = true;
-                            self.cons(up, link);
-                            while let Some((n2, c2, i2)) = self.chain_q.pop() {
-                                if !self.aborted {
-                                    self.replay_cons(n2, c2, i2);
-                                }
-                            }
-                            self.chain_active = false;
-                        }
+                        // SKINROOT27: one prototype level per replay queue
+                        // entry (`Model::replay_q`), not per Rust frame group
+                        // (55k levels overflowed r8).
+                        self.cons(up, link);
                     }
                 }
             }

@@ -101,21 +101,27 @@ fn alias_getter_returns_the_same_function_for_member_and_plain_calls() {
     }
 }
 
+/// The alias handed to unknown code: that code is the runtime and the host
+/// (closed world, owner 2026-11-14), which never add or write a property of
+/// an intrinsic it is handed or reaches along its chain (owner premise
+/// 2026-11-19). So `zap` stays absent on the one function and on
+/// `%Function.prototype%`: `f.zap(o)` throws a TypeError (an absent-key
+/// call, owner 2026-11-16) and `o` is handed to nobody.
 #[test]
-fn alias_exposure_makes_the_identified_missing_member_unknown() {
+fn alias_exposure_keeps_the_identified_missing_member_absent() {
     effect(
         "new Set().keys",
         "new Set().values",
         "external(alias);",
         "f.zap(o);",
-        false,
+        true,
     );
     effect(
         "Object.prototype.hasOwnProperty",
         "({}).hasOwnProperty",
         "external(alias);",
         "f.zap(o);",
-        false,
+        true,
     );
 }
 
@@ -537,9 +543,13 @@ fn prototype_constructor_and_global_constructor_are_one_value() {
 fn restoring_the_declared_global_value_does_not_expose_its_members() {
     for (change, proven) in [
         ("(globalThis as any).Object=Object;", true),
+        // `Object` handed to unknown code (the runtime and the host, closed
+        // world, owner 2026-11-14) keeps its members: that code never writes
+        // an intrinsic (owner premise 2026-11-19), so `Object.keys` is the
+        // intrinsic one and `load` is never called.
         (
             "(globalThis as any).Object=Object; external(Object);",
-            false,
+            true,
         ),
     ] {
         let src = format!(

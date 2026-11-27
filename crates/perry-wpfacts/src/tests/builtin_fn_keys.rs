@@ -409,7 +409,9 @@ fn a_proto_store_reaches_inherited_reads() {
 /// (20.1.3.7, returns `this`): nothing of the function escapes. Control:
 /// once `Function.prototype` reached unknown code and the program stores
 /// into ⊤, its `toString` may be any function, which then holds the
-/// receiver.
+/// receiver. Only a program store can write it: unknown code (the runtime
+/// and the host, closed world, owner 2026-11-14) never writes an intrinsic
+/// it is handed (owner premise 2026-11-19).
 fn to_primitive_src(control: &str) -> String {
     format!(
         "{BOX}{control}\n\
@@ -429,13 +431,29 @@ fn to_primitive_of_a_builtin_function_calls_the_intrinsic_methods() {
         "{}",
         verdicts(&pf, &src, "// SITE-TP", "n")
     );
-    // A computed store into ⊤ once `Function.prototype` reached unknown
-    // code may write its `toString`: the call then runs an unknown function
-    // with the receiver.
+    // `Function.prototype` handed to unknown code, which does not write it;
+    // a later call of that code with no argument does not give it back (a
+    // realm function holds no state of its own: what a call returns is
+    // reached from its arguments): the program's computed store into that
+    // result writes no `toString` of it.
     let src = to_primitive_src(
         "const u: any = (globalThis as any)[process.argv[2]];\n\
          u(Function.prototype);\n\
          const w: any = u();\n\
+         w[process.argv[3]] = u();",
+    );
+    let pf = facts(&src);
+    assert!(
+        proven(&pf, &src, "// SITE-TP", "n"),
+        "{}",
+        verdicts(&pf, &src, "// SITE-TP", "n")
+    );
+    // Control: unknown code may hand `Function.prototype` back (`Object(x)`
+    // returns `x`): a computed program store into that result may write its
+    // `toString` with an unknown function, which then holds the receiver.
+    let src = to_primitive_src(
+        "const u: any = (globalThis as any)[process.argv[2]];\n\
+         const w: any = u(Function.prototype);\n\
          w[process.argv[3]] = u();",
     );
     let pf = facts(&src);

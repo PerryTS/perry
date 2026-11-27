@@ -2127,6 +2127,9 @@ pub struct Model {
     /// token, the last step) -> the class's object and array tokens.
     /// Compiler-internal: nothing of it reaches the binary.
     pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
+    /// A parse's result pair (object, array) -> the one inner pair of that
+    /// parse birth (`Model::json_inner`, FRESHSITE R2).
+    pub json_inner_of: FxHashMap<(Tok, Tok), (Tok, Tok)>,
     /// JSON-RT parse sites (`solve::json_rt`): the site's `json` object
     /// token -> its any-JSON value, root and nested nodes (made on first
     /// use). Compiler-internal, as everything below.
@@ -2946,10 +2949,25 @@ pub struct Model {
     /// A call with spread arguments -> the call a builtin model reads
     /// (`Model::builtin_args_view`); a view maps to itself.
     pub spread_view: FxHashMap<CallId, CallId>,
+    /// A spread source node -> the one node holding its elements
+    /// (`Model::spread_elems_of`).
+    pub spread_elems: FxHashMap<NodeId, NodeId>,
+    /// An Annex B define call (`annexb_define`) -> its holder node per
+    /// (own receiver, setter): every receiver of the call that defines the
+    /// same way is a token of that one node.
+    pub annexb_holders: FxHashMap<(CallId, bool, bool), NodeId>,
+    /// The rules attached to each node (`cons_untagged`): a node's rules
+    /// are a set; the value is the rule's index in the node's list.
+    pub cons_seen: crate::pts::FxHashMap<(NodeId, Cons), u32>,
     /// Solver-made call → the call its chain of solver-made calls started
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.
     pub made_root: FxHashMap<CallId, CallId>,
+    /// (program root of the maker chain, native code position) -> the made
+    /// site of every
+    /// solver-made call a maker passes its own id as site
+    /// (`Model::solver_call_raw`, FRESHSITE R1).
+    pub made_sites: FxHashMap<(CallId, &'static std::panic::Location<'static>), CallId>,
     /// (root, maker, aux, aux2, args, spreads) → the one call that maker
     /// makes for every call of that root, and the node its callee
     /// constraint sits on (`Model::solver_call_keyed`).
@@ -3412,16 +3430,16 @@ pub struct Model {
     /// The work counter at the last budget check (`solve`).
     pub budget_work_at: u64,
     pub aborted: bool,
-    /// SKINROOT27: the prototype-chain walk of `Cons::EnumChain` as a
-    /// worklist. `chain_active`: an EnumChain application is on the stack;
-    /// a deeper link is then attached to its prototype node at once (so the
-    /// solve sees it for later tokens) and its replay on what that node holds
-    /// is queued in `chain_q` (drained by the outermost application) instead
-    /// of recursing one Rust frame group per prototype level. `chain_defer`:
-    /// the next `cons_untagged` queues its replay (consumed at its entry).
-    pub chain_active: bool,
-    pub chain_defer: bool,
-    pub chain_q: Vec<(NodeId, Cons, u32)>,
+    /// The replays of attached rules as a worklist (`Model::replay_cons`).
+    /// `replaying`: a replay is on the stack; a rule attached meanwhile is
+    /// attached at once (so the solve sees it for later tokens) and its
+    /// replay on what its node holds now is queued in `replay_q`, drained
+    /// by the outermost replay, instead of recursing one Rust frame group
+    /// per rule a replay attaches (SKINROOT27: 55k prototype levels of
+    /// `Cons::EnumChain` overflowed r8; R12H: a native namespace call whose
+    /// stored answer attaches a `Cons::CallThis` that makes the next one).
+    pub replaying: bool,
+    pub replay_q: Vec<(NodeId, Cons, u32)>,
     /// Past the work bound (`Model::past_work_bound`): a call that would
     /// make a new calling context runs the function's shared instance
     /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
