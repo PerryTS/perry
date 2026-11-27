@@ -61,3 +61,14 @@ show("Date field", () => {
   o.d++;
   return o.d;
 });
+show("typed array own valueOf", () => {
+  let t: any = new Uint8Array([1]);
+  t.valueOf = () => 40n;
+  t++;
+  return t;
+});
+show("typed array own valueOf times BigInt", () => {
+  const t: any = new Uint8Array([1]);
+  t.valueOf = () => 3n;
+  return t * 2n;
+});

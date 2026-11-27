@@ -117,6 +117,8 @@ unsafe fn to_numeric(value: f64) -> f64 {
     if crate::symbol::js_is_symbol(value) != 0 {
         return crate::builtins::js_number_coerce(value);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
     match crate::value::to_string_primitive::to_primitive_number(value) {
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::Primitive(p) => {
             // A BigInt primitive stays a BigInt (that's the whole point of
@@ -128,15 +130,10 @@ unsafe fn to_numeric(value: f64) -> f64 {
             }
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
-            if jsval.is_handle() {
-                // The handle already completed ToPrimitive above. Convert its
-                // default string directly so user getters aren't consulted a
-                // second time by js_number_coerce's handle arm.
-                let string = crate::value::js_jsvalue_to_string(value);
-                crate::builtins::js_number_coerce(crate::value::js_nanbox_string(string as i64))
-            } else {
-                crate::builtins::js_number_coerce(value)
-            }
+            // ToPrimitive already ran; convert the default string directly so
+            // no user method is consulted a second time.
+            let string = crate::value::js_jsvalue_to_string(value_handle.get_nanbox_f64());
+            crate::builtins::js_number_coerce(crate::value::js_nanbox_string(string as i64))
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
             throw_add_type_error(b"Cannot convert object to primitive value")

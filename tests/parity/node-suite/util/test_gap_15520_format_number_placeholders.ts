@@ -23,3 +23,13 @@ const values: any[] = [
 for (const spec of ["%d", "%i", "%f"]) {
   process.stdout.write(`${spec.slice(1)}: ${values.map((v) => format(spec, v)).join(" | ")}\n`);
 }
+
+// A conversion that allocates heavily must not lose the later arguments.
+const churn = {
+  valueOf() {
+    let keep: unknown[] = [];
+    for (let i = 0; i < 20000; i++) keep.push({ i, s: "x" + i });
+    return keep.length;
+  },
+};
+process.stdout.write(`${format("%d %s %i %s", churn, "after", churn, "end")}\n`);
