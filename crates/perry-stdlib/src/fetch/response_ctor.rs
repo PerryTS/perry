@@ -108,12 +108,14 @@ pub unsafe extern "C" fn js_response_new(
     let body = body_opt.unwrap_or_default();
     let status_text_ptr = status_text.map_or(std::ptr::null(), |h| h.get_raw_const_ptr());
     let (status_u16, status_text) = response_init(status, status_text_ptr, body_present);
-    let registered = headers::headers_store_of(headers_handle);
-    // Non-literal Response init objects can deliver a plain HeadersInit value
-    // here. Preserve those records instead of treating them as missing handles.
-    let mut headers = registered
-        .or_else(|| headers_store_from_record_value(headers_handle))
-        .unwrap_or_default();
+    // `init.headers` is any HeadersInit (a Headers object, a record, an
+    // iterable of pairs, a Proxy) or absent (`undefined`, or the 0.0
+    // sentinel codegen passes when the init names no headers): copy it the
+    // way `new Headers(init)` would, which throws for `null` as node does.
+    let mut headers = match headers_handle.to_bits() {
+        0 | TAG_UNDEFINED => HeadersStore::default(),
+        _ => headers::headers_store_from_init(headers_handle),
+    };
     if let Some(content_type) = body_content_type {
         if headers.get("content-type").is_none() {
             headers.set("content-type", content_type);

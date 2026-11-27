@@ -489,12 +489,18 @@ mod root_shape_tests {
             let ptr = perry_runtime::js_array_push_f64(array.get_raw_mut_ptr(), boxed);
             array.set_raw_mut_ptr(ptr);
             super::tests::collect();
-            assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(boxed)));
+            assert!(BLOB_REGISTRY
+                .lock()
+                .unwrap()
+                .contains_key(&handle_id(boxed)));
             assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(raw)));
             array.set_raw_mut_ptr(std::ptr::null_mut::<perry_runtime::ArrayHeader>());
             raw_root.set_raw_mut_ptr(std::ptr::null_mut::<u8>());
             super::tests::collect();
-            assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(boxed)));
+            assert!(!BLOB_REGISTRY
+                .lock()
+                .unwrap()
+                .contains_key(&handle_id(boxed)));
             assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(raw)));
         })
         .join()
@@ -504,7 +510,7 @@ mod root_shape_tests {
     #[test]
     fn minor_keeps_the_cached_headers_edge() {
         let _band = crate::fetch::handle_band_test_lock();
-        std::thread::spawn(|| {
+        std::thread::spawn(|| unsafe {
             perry_runtime::gc::gc_init();
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
             let response = scope.root_nanbox_f64(js_response_new(
@@ -545,19 +551,20 @@ fn moving_collection_rewrites_the_cached_headers_slot() {
         }
         let _restore = Restore(previous);
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let owner = scope.root_nanbox_f64(js_response_new(
-            std::ptr::null(),
-            200.0,
-            std::ptr::null(),
-            0.0,
-        ));
+        let owner = scope.root_nanbox_f64(unsafe {
+            js_response_new(std::ptr::null(), 200.0, std::ptr::null(), 0.0)
+        });
         let before = js_response_get_headers(owner.get_nanbox_f64());
         perry_runtime::gc::js_gc_collect();
         let after = js_response_get_headers(owner.get_nanbox_f64());
         // The cached Headers object is young and only the record names it:
         // after a forced evacuating collection its address can only differ if
         // the Fetch root scanner rewrote the record's slot.
-        assert_ne!(before.to_bits(), after.to_bits(), "the Headers object must actually move");
+        assert_ne!(
+            before.to_bits(),
+            after.to_bits(),
+            "the Headers object must actually move"
+        );
         assert!(super::headers::is_headers(after));
     })
     .join()

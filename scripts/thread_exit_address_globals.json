@@ -1061,16 +1061,6 @@
   {
    "file": "crates/perry-stdlib/src/fetch/mod.rs",
    "names": [
-    "HEADERS_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "HashMap<handle id, HeadersRecord> whose method_values hold NaN-boxed bound-method closure bits (GC heap values) created on the owning thread; each thread scans only ids it owns (fetch/gc.rs), and OwnedHandles::drop -> release() removes the exiting thread's records (fetch/lifecycle.rs:262-275, 216-220).",
-   "hook": "release",
-   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
-  },
-  {
-   "file": "crates/perry-stdlib/src/fetch/mod.rs",
-   "names": [
     "REQUEST_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -2221,6 +2211,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:263) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_HEADERS_PROTOTYPE_INSTALL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to perry-stdlib's Headers.prototype member installer, stored only by js_register_global_headers_prototype and transmuted back to a fn type when the realm's Headers prototype is born; code address."
   },
   {
    "file": "crates/perry-runtime/src/object/global_fetch.rs",
