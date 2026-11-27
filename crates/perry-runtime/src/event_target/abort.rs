@@ -4,20 +4,18 @@ use crate::event_target::state::{
     get_slot as get_abort_slot, set_slot as set_abort_slot, SIGNAL_ABORTED, SIGNAL_REASON,
 };
 use crate::value::boxed_text::*;
-use crate::{js_object_alloc, js_string_from_bytes, ObjectHeader};
+use crate::{js_string_from_bytes, ObjectHeader};
 
 // =========================================================================
 // AbortController implementation
 // =========================================================================
 
 // State is held by ordinary symbol-keyed own properties.
-pub(crate) const ABORT_CONTROLLER_CLASS_ID: u32 = crate::native_class_ids::ABORT_CONTROLLER;
 pub(crate) const ABORT_SIGNAL_CLASS_ID: u32 = crate::native_class_ids::ABORT_SIGNAL;
 const ABORT_SIGNAL_FIELD: u32 = crate::event_target::state::CONTROLLER_SIGNAL;
 
 const TAG_UNDEFINED_AC: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE_AC: u64 = 0x7FFC_0000_0000_0004;
-const TAG_FALSE_AC: u64 = 0x7FFC_0000_0000_0003;
 const POINTER_TAG_AC: u64 = 0x7FFD_0000_0000_0000;
 
 #[inline]
@@ -41,17 +39,7 @@ fn unbox_pointer_ac(v: f64) -> *mut ObjectHeader {
 fn alloc_abort_signal() -> *mut ObjectHeader {
     let _gc = crate::gc::GcSuppressScope::new();
     crate::event_target::note_constructed();
-    let signal = js_object_alloc(ABORT_SIGNAL_CLASS_ID, 0);
-    crate::event_target::state::link(signal, "AbortSignal");
-    crate::event_target::state::initialize_target(signal, true);
-    set_abort_slot(signal, SIGNAL_ABORTED, f64::from_bits(TAG_FALSE_AC));
-    set_abort_slot(signal, SIGNAL_REASON, f64::from_bits(TAG_UNDEFINED_AC));
-    set_abort_slot(
-        signal,
-        crate::event_target::state::COMPOSITE,
-        f64::from_bits(TAG_FALSE_AC),
-    );
-    signal
+    crate::event_target::state::born(&crate::event_target::state::ABORT_SIGNAL_BIRTH)
 }
 
 /// Create a new AbortController
@@ -59,14 +47,7 @@ fn alloc_abort_signal() -> *mut ObjectHeader {
 pub extern "C" fn js_abort_controller_new() -> *mut ObjectHeader {
     let _gc = crate::gc::GcSuppressScope::new();
     crate::event_target::note_constructed();
-    let controller = js_object_alloc(ABORT_CONTROLLER_CLASS_ID, 0);
-    crate::event_target::state::link(controller, "AbortController");
-    crate::event_target::state::set_slot(
-        controller,
-        ABORT_SIGNAL_FIELD,
-        f64::from_bits(TAG_UNDEFINED_AC),
-    );
-    controller
+    crate::event_target::state::born(&crate::event_target::state::ABORT_CONTROLLER_BIRTH)
 }
 
 /// Get the signal from an AbortController (returns NaN-boxed object ptr)
