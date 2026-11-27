@@ -1,7 +1,7 @@
 //! Standalone responses are ordinary objects; only Rust response data lives
 //! in their payload. The hidden JS state owns sockets and callback arrays.
 use super::response::ResponseState;
-use super::types::{PTR_MASK, TAG_UNDEFINED};
+use super::types::{PTR_MASK, TAG_TRUE, TAG_UNDEFINED};
 use perry_ffi::{native_payload as payload, native_stream, JsValue, TransientRootScope};
 static VTABLE: native_stream::PayloadVTable = native_stream::payload_vtable::<ResponseState>(None);
 static FAMILY: payload::PayloadFamily = payload::PayloadFamily::new::<ResponseState>(
@@ -117,6 +117,9 @@ pub(crate) enum Key {
     /// `end(cb)` callbacks: run when the response finishes, or at its
     /// `close` when it never does (node's `kEndCallbacks`).
     EndCallbacks,
+    /// Set when the response finished (node's `kWritableFinished`): the socket
+    /// took the last chunk, so `'finish'` is being emitted.
+    WritableFinished,
     /// Lowercase header directory retained when the native payload closes.
     HeaderNames,
 }
@@ -306,18 +309,35 @@ pub(crate) fn emit_close(handle: i64) {
     set_field(h(), b"_closed", bool_value(true));
     emit(h(), "close");
 }
-/// `'finish'`, after node's `resOnFinish` (registered before any program
-/// listener): an unread request body is dumped.
+/// `this.emit('finish')`.
 pub(crate) fn emit_finish(handle: i64) {
-    let roots = TransientRootScope::enter();
-    let owner = roots.root_nanbox(value(handle));
-    if let Some(req) = field(handle, b"req") {
+    emit(handle, "finish");
+}
+/// node's `resOnFinish`, which the server registers as each response's first
+/// `'finish'` listener: an unread request body is dumped.
+extern "C" fn res_on_finish(
+    closure: *const perry_ffi::RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
+    let owner = unsafe { perry_ffi::closure_capture_f64(closure.cast(), 0) };
+    if let Some(req) = field((owner.to_bits() & PTR_MASK) as i64, b"req") {
         let req = (req.to_bits() & PTR_MASK) as i64;
         if super::request_payload::is_request(req) {
             super::request_payload::dump_unread(req);
         }
     }
-    emit((owner.get().to_bits() & PTR_MASK) as i64, "finish");
+    f64::from_bits(TAG_UNDEFINED)
+}
+/// `res.on('finish', resOnFinish)`, as node's server does before the program
+/// sees the response.
+pub(crate) fn listen_res_on_finish(handle: i64) {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    let listener = perry_ffi::alloc_closure(perry_ffi::js_function_info!(res_on_finish, 0), 1);
+    unsafe { perry_ffi::set_closure_capture_f64(listener, 0, owner.get()) };
+    let listener = roots.root_nanbox(f64::from_bits(JsValue::from_object_ptr(listener).bits()));
+    let event = roots.root_nanbox(string_value("finish"));
+    unsafe { perry_ffi::runtime_call(owner.get(), b"on", &[event.get(), listener.get()]) };
 }
 /// Whether the response's `'close'` has fired.
 pub(crate) fn close_emitted(handle: i64) -> bool {
@@ -480,6 +500,7 @@ extern "C" fn flushed(
     if field(h(), b"destroyed").is_some_and(truthy) {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    set(h(), Key::WritableFinished, f64::from_bits(TAG_TRUE));
     run_end_callbacks(h());
     emit_finish(h());
     f64::from_bits(TAG_UNDEFINED)

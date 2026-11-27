@@ -759,8 +759,9 @@ pub extern "C" fn js_node_http_res_writable_ended(handle: i64) -> i32 {
 pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = heap::closed_field(response_root.get(), b"finished") {
-        return i32::from(heap::truthy(v));
+    if heap::closed_field(response_root.get(), b"finished").is_some() {
+        let finished = heap::get_existing(response_root.get(), ResponseKey::WritableFinished);
+        return i32::from(heap::truthy(finished));
     }
     response_state(response_root.get())
         .map(|sr| if sr.writable_finished { 1 } else { 0 })

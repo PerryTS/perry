@@ -136,10 +136,10 @@ pub(crate) mod response_slot {
 const PAYLOAD_SLOT: u8 = crate::object::key_attrs::PRIVATE_FIELD_ENTRY | OPT;
 
 // `new ServerResponse(req)`: `OutgoingMessage.call(this)` (the emitter's
-// init, then its 24 fields), then `ServerResponse`'s own.
+// init, then its 24 fields), then `ServerResponse`'s own. `_eventsCount`
+// comes with the first listener: OutgoingMessage presets `_events`.
 runtime_layout!(SERVER_RESPONSE, 0x53490007, 0, &raw const SERVER_RESPONSE_PROTO_FAMILY, [
     NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
-    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT,
     NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
     HI_ATOM_OUTPUT_DATA @ response_slot::OUTPUT_DATA,
     HI_ATOM_OUTPUT_SIZE @ response_slot::OUTPUT_SIZE,
@@ -169,6 +169,7 @@ runtime_layout!(SERVER_RESPONSE, 0x53490007, 0, &raw const SERVER_RESPONSE_PROTO
     HI_ATOM_U_SENT100 @ response_slot::SENT100,
     HI_ATOM_U_EXPECT_CONTINUE @ response_slot::EXPECT_CONTINUE,
     HI_ATOM_U_MAX_REQUESTS_PER_SOCKET @ response_slot::MAX_REQUESTS_PER_SOCKET => OPT,
+    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
     NP_ATOM_STATUS_MESSAGE @ response_slot::STATUS_MESSAGE => OPT,
     NP_ATOM_STATUS_CODE @ response_slot::STATUS_CODE => OPT,
     NP_SYMBOL_NATIVE_PAYLOAD @ response_slot::PAYLOAD => PAYLOAD_SLOT,

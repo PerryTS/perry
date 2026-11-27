@@ -67,7 +67,7 @@ pub(crate) use event_emitter::validate_max_listeners;
 // node EventEmitter instance state (EventEmitter.init) and the prototype defaults.
 pub(crate) use event_emitter::{
     init_event_emitter_capture, init_event_emitter_state, init_event_emitter_state_with_presence,
-    install_event_emitter_prototype_state, new_events_object,
+    install_event_emitter_prototype_state, new_events_object, new_outgoing_message_events_object,
 };
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,

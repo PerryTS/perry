@@ -1278,13 +1278,14 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     let f = bool_value(false);
     let t = bool_value(true);
     let null = f64::from_bits(crate::value::TAG_NULL);
-    // EventEmitter.init.
+    // OutgoingMessage presets `_events`, so EventEmitter.init leaves
+    // `_eventsCount` to the first listener.
+    let events = scope.root_nanbox_f64(crate::node_stream::new_outgoing_message_events_object());
     if on_layout() {
-        let events = crate::node_stream::new_events_object();
-        put(emitter_slot::EVENTS, b"_events", events);
-        put(emitter_slot::EVENTS_COUNT, b"_eventsCount", 0.0);
+        put(emitter_slot::EVENTS, b"_events", events.get_nanbox_f64());
         put(emitter_slot::MAX_LISTENERS, b"_maxListeners", undefined());
     } else {
+        put(emitter_slot::EVENTS, b"_events", events.get_nanbox_f64());
         crate::node_stream::init_event_emitter_state(this.get_nanbox_f64());
     }
     // OutgoingMessage's fields, in its constructor's order.
