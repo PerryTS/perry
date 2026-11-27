@@ -77,20 +77,23 @@ fn the_computed_read_is_the_named_reads() {
     }
 }
 
-/// Unknown code given the holder may store any function on it.
+/// Unknown code given a program holder may store any function on it. An
+/// intrinsic holder it never writes (the runtime and the host, closed
+/// world, owner 2026-11-14; owner premise 2026-11-19): the computed read
+/// is the named reads.
 #[test]
 fn a_holder_handed_to_unknown_code_stays_unknown() {
-    for holder in [
-        "const o: any = [1, 2];",
-        "const o: any = [].map;",
-        "const o: any = Object;",
+    for (holder, proven) in [
+        ("const o: any = [1, 2];", false),
+        ("const o: any = [].map;", true),
+        ("const o: any = Object;", true),
     ] {
         let b = format!(
             "{holder}\nnew Function(process.argv[3])(o);\n{}",
             &body("")[1..]
         );
         let (ok, d) = run(SETUP_ARGV, &b);
-        assert!(!ok, "{holder}\n{d}");
+        assert_eq!(ok, proven, "{holder}\n{d}");
     }
 }
 
