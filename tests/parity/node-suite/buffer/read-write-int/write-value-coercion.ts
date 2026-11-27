@@ -23,6 +23,12 @@ const values: [string, any][] = [
   ["Infinity", Infinity],
   ["2**40", 2 ** 40],
   ["'-129'", "-129"],
+  ["1e21", 1e21],
+  ["-1.5e300", -1.5e300],
+  ["-1e-7", -1e-7],
+  ["2**53", 2 ** 53],
+  ["-(2**32)-1", -(2 ** 32) - 1],
+  ["2**32+0.5", 2 ** 32 + 0.5],
 ];
 const methods = ["writeUInt8", "writeInt8", "writeUInt16LE", "writeInt16BE", "writeUInt32BE", "writeInt32LE"];
 for (const method of methods) {
@@ -59,6 +65,9 @@ const offsets: [string, any][] = [
   ["null", null],
   ["valueOf", obj],
   ["undefined", undefined],
+  ["1e21", 1e21],
+  ["2**33", 2 ** 33],
+  ["1.5e-7", 1.5e-7],
 ];
 for (const method of ["writeUInt8", "writeInt16LE", "writeUInt32BE"]) {
   for (const [label, offset] of offsets) {

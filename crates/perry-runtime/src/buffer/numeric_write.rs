@@ -1,15 +1,15 @@
 //! `Buffer.prototype.write{U}Int*`, `writeFloat*`, `writeDouble*` and
 //! `writeBig{U}Int64*`, run in the order Node's `lib/internal/buffer.js` runs
 //! them: `+value`, the value range check, then the offset check. The 8-bit
-//! writers check the offset type before the range. The BigInt writers take
-//! ToNumeric and reject a Number only after the offset check, where Node's
-//! `value & 0xffffffffn` mixes types.
+//! writers check the offset type before the range. The BigInt writers do not
+//! coerce: they compare the value with their bounds and reject a non-BigInt
+//! only after the offset check, where Node's `value & 0xffffffffn` mixes
+//! types.
 
+use super::numeric_offset::{check_offset, validate_offset_type, variable_byte_length};
 use super::*;
 use crate::validators::received::bigint_decimal;
-use crate::validators::{
-    add_numerical_separator, format_range_received, throw_invalid_arg_type, throw_out_of_range,
-};
+use crate::validators::{add_numerical_separator, format_range_received, throw_out_of_range};
 use crate::value::JSValue;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -65,34 +65,39 @@ pub(crate) fn dispatch_numeric_write(receiver: f64, name: &str, args: &[f64]) ->
         o if fixed.is_some() && o.to_bits() == crate::value::TAG_UNDEFINED => 0.0,
         o => o,
     };
-    // `+value` can run a `valueOf` that collects.
+    // `+value` and ToPrimitive can run a `valueOf` that collects.
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let offset = scope.root_nanbox_f64(offset);
-    let value = match kind {
-        Kind::BigInt | Kind::BigUint => unsafe { crate::value::js_to_numeric(arg(0)) },
-        _ => crate::builtins::js_number_coerce(arg(0)),
-    };
-    let value = scope.root_nanbox_f64(value);
-    let value = || value.get_nanbox_f64();
+    let original = scope.root_nanbox_f64(arg(0));
     let checked_offset = || check_offset(receiver.get_nanbox_f64(), offset.get_nanbox_f64(), n);
-    let (offset, bits) = match kind {
-        Kind::Uint | Kind::Int => {
-            if n == 1 {
-                validate_offset_type(offset.get_nanbox_f64());
-            }
-            check_int_range(value(), n, kind == Kind::Int);
-            (checked_offset(), int_bits(value(), n))
+    let (offset, bits) = if let Kind::BigInt | Kind::BigUint = kind {
+        let primitive = scope.root_nanbox_f64(to_primitive_number(original.get_nanbox_f64()));
+        check_bigint_range(
+            original.get_nanbox_f64(),
+            primitive.get_nanbox_f64(),
+            kind == Kind::BigInt,
+        );
+        let offset = checked_offset();
+        // Node's `value & 0xffffffffn` runs ToNumeric again; the primitive
+        // stands in for it, so a `valueOf` runs once here, not three times.
+        let value = primitive.get_nanbox_f64();
+        if !JSValue::from_bits(value.to_bits()).is_bigint() {
+            crate::byte_cell_support::throw_bigint_number_mix();
         }
-        Kind::Float => (checked_offset(), (value() as f32).to_bits() as u64),
-        Kind::Double => (checked_offset(), value().to_bits()),
-        Kind::BigInt | Kind::BigUint => {
-            check_bigint_range(value(), kind == Kind::BigInt);
-            let offset = checked_offset();
-            if !JSValue::from_bits(value().to_bits()).is_bigint() {
-                crate::byte_cell_support::throw_bigint_number_mix();
+        (offset, numeric::bigint_value_to_i64(value) as u64)
+    } else {
+        let value = crate::builtins::js_number_coerce(original.get_nanbox_f64());
+        match kind {
+            Kind::Float => (checked_offset(), (value as f32).to_bits() as u64),
+            Kind::Double => (checked_offset(), value.to_bits()),
+            _ => {
+                if n == 1 {
+                    validate_offset_type(offset.get_nanbox_f64());
+                }
+                check_int_range(value, n, kind == Kind::Int);
+                (checked_offset(), int_bits(value, n))
             }
-            (offset, numeric::bigint_value_to_i64(value()) as u64)
         }
     };
     let le = bits.to_le_bytes();
@@ -103,52 +108,6 @@ pub(crate) fn dispatch_numeric_write(receiver: f64, name: &str, args: &[f64]) ->
         }
     });
     Some(offset + n as f64)
-}
-
-/// Node's `boundsError(byteLength, 6, 'byteLength')` for `writeIntLE` and
-/// its siblings.
-fn variable_byte_length(byte_length: f64) -> usize {
-    let jv = JSValue::from_bits(byte_length.to_bits());
-    if !jv.is_number() {
-        throw_invalid_arg_type("byteLength", "of type number", byte_length);
-    }
-    let n = jv.as_number();
-    if n.floor() != n {
-        throw_out_of_range("byteLength", "an integer", &format_range_received(n));
-    }
-    if !(1.0..=6.0).contains(&n) {
-        throw_out_of_range("byteLength", ">= 1 and <= 6", &format_range_received(n));
-    }
-    n as usize
-}
-
-fn validate_offset_type(offset: f64) -> f64 {
-    let jv = JSValue::from_bits(offset.to_bits());
-    if !jv.is_number() {
-        throw_invalid_arg_type("offset", "of type number", offset);
-    }
-    jv.as_number()
-}
-
-/// Node's `checkBounds`: `offset` is a number and `n` bytes fit at it.
-fn check_offset(receiver: f64, offset: f64, n: usize) -> f64 {
-    let offset = validate_offset_type(offset);
-    let buf = crate::value::js_nanbox_get_pointer(receiver) as *const BufferHeader;
-    let last = js_buffer_length(buf) as f64 - n as f64;
-    if offset >= 0.0 && offset <= last && offset.floor() == offset {
-        return offset;
-    }
-    if offset.floor() != offset {
-        throw_out_of_range("offset", "an integer", &format_range_received(offset));
-    }
-    if last < 0.0 {
-        numeric::throw_buffer_out_of_bounds();
-    }
-    throw_out_of_range(
-        "offset",
-        &format!(">= 0 and <= {last}"),
-        &format_range_received(offset),
-    )
 }
 
 /// Node's `checkInt` range for an `n`-byte integer. `NaN` passes and is
@@ -187,42 +146,82 @@ fn int_bits(value: f64, n: usize) -> u64 {
     }
 }
 
-/// `checkInt` against the 64-bit BigInt bounds for a ToNumeric `value`; a
-/// Number compares by value and fails later as a BigInt mix.
-// shortcut: a string compares here as its ToNumber, where Node compares it
-// as a StringToBigInt and prints it quoted; upgrade if `"1e30"` matters.
-fn check_bigint_range(value: f64, signed: bool) {
+/// `ToPrimitive(value, number)`, which Node's `value > max` comparisons run.
+fn to_primitive_number(value: f64) -> f64 {
+    use crate::value::OrdinaryToPrimitiveOutcome::*;
+    match unsafe { crate::value::to_primitive_number(value) } {
+        Primitive(primitive) => primitive,
+        DefaultString => {
+            crate::value::js_nanbox_string(crate::value::js_jsvalue_to_string(value) as i64)
+        }
+        TypeError => {
+            crate::byte_cell_support::throw_type_error(b"Cannot convert object to primitive value")
+        }
+    }
+}
+
+/// `checkInt` against the 64-bit BigInt bounds. `primitive` compares as
+/// Node's relational operators compare it with a BigInt: a Number by value, a
+/// string through StringToBigInt (no match when it does not parse).
+fn check_bigint_range(original: f64, primitive: f64, signed: bool) {
     let (min, end) = if signed {
         (-(2f64.powi(63)), 2f64.powi(63))
     } else {
         (0.0, 2f64.powi(64))
     };
-    let jv = JSValue::from_bits(value.to_bits());
-    let received = if jv.is_bigint() {
-        let ptr = jv.as_bigint_ptr();
-        let cmp = |bound: f64| crate::bigint::bigint_cmp_f64(ptr, bound);
-        if cmp(min) >= 0 && cmp(end) < 0 {
-            return;
-        }
-        let digits = bigint_decimal(value);
-        let large = cmp(-4_294_967_296.0) < 0 || cmp(4_294_967_296.0) > 0;
-        let digits = if large {
-            add_numerical_separator(&digits)
-        } else {
-            digits
-        };
-        format!("{digits}n")
-    } else if jv.is_number() && (jv.as_number() < min || jv.as_number() >= end) {
-        format_range_received(jv.as_number())
+    let jv = JSValue::from_bits(primitive.to_bits());
+    let bigint = if jv.is_bigint() {
+        Some(jv.as_bigint_ptr())
+    } else if jv.is_any_string() {
+        let text = crate::validators::received::read_js_string_pub(primitive);
+        crate::bigint::string_to_bigint(&text).map(|ptr| ptr as *const _)
+    } else if unsafe { crate::symbol::js_is_symbol(primitive) } != 0 {
+        crate::byte_cell_support::throw_type_error(b"Cannot convert a Symbol value to a number")
     } else {
-        return;
+        None
     };
+    let out_of_range = match bigint {
+        Some(ptr) => {
+            let cmp = |bound: f64| crate::bigint::bigint_cmp_f64(ptr, bound);
+            cmp(min) < 0 || cmp(end) >= 0
+        }
+        None => jv.is_number() && (jv.as_number() < min || jv.as_number() >= end),
+    };
+    if !out_of_range {
+        return;
+    }
     let range = if signed {
         ">= -(2n ** 63n) and < 2n ** 63n"
     } else {
         ">= 0n and < 2n ** 64n"
     };
-    throw_out_of_range("value", range, &received);
+    throw_out_of_range("value", range, &received_value(original));
+}
+
+/// Node's `ERR_OUT_OF_RANGE` rendering of a received value that is not
+/// coerced first: a Number or BigInt grouped past 2 ** 32, anything else
+/// inspected.
+fn received_value(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_number() {
+        return format_range_received(jv.as_number());
+    }
+    if jv.is_bigint() {
+        let digits = bigint_decimal(value);
+        let ptr = jv.as_bigint_ptr();
+        let large = crate::bigint::bigint_cmp_f64(ptr, -4_294_967_296.0) < 0
+            || crate::bigint::bigint_cmp_f64(ptr, 4_294_967_296.0) > 0;
+        let digits = if large {
+            add_numerical_separator(&digits)
+        } else {
+            digits
+        };
+        return format!("{digits}n");
+    }
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    crate::validators::received::read_js_string_pub(crate::builtins::js_util_inspect(
+        value, undefined,
+    ))
 }
 
 #[cfg(test)]

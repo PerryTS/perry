@@ -24,6 +24,22 @@ const values: [string, any][] = [
   ["'7'", "7"],
   ["valueOf", { valueOf: () => 5n }],
   ["-(2**40)", -(2 ** 40)],
+  ["-1", -1],
+  ["2**64", 2 ** 64],
+  ["1e21", 1e21],
+  ["2**70", 2 ** 70],
+  ["1.5e300", 1.5e300],
+  ["NaN", NaN],
+  ["true", true],
+  ["null", null],
+  ["Symbol", Symbol("s")],
+  ["'1e30'", "1e30"],
+  ["' 0x10 '", " 0x10 "],
+  ["''", ""],
+  ["'99999999999999999999'", "99999999999999999999"],
+  ["'-99999999999999999999'", "-99999999999999999999"],
+  ["valueOf '2**70'", { valueOf: () => "1180591620717411303424" }],
+  ["valueOf 1", { valueOf: () => 1 }],
 ];
 for (const method of ["writeBigInt64LE", "writeBigInt64BE", "writeBigUInt64LE", "writeBigUInt64BE"]) {
   for (const [label, value] of values) {

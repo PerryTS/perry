@@ -38,6 +38,7 @@ mod header_brand_tests;
 mod iter;
 mod mutate;
 mod numeric;
+mod numeric_offset;
 mod numeric_write;
 mod own_props;
 pub(crate) mod pool;
