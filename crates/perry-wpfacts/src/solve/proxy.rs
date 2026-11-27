@@ -2448,6 +2448,15 @@ impl Model {
             // Proxy runs: no [[DefineOwnProperty]] (10.5.6), no trap, no
             // forward, whatever the handler is.
             Cons::BirthField { .. } => {}
+            // Rule PXENUMV: ENUM3's `EnumKeyAny` (`enum_key_watch`) watches
+            // the values the enumerated object holds under keys no name
+            // lists, for presence only (`apply`): once one is there, the
+            // copy stores under some String key. A Proxy among them is a
+            // value of the object. EnumerateObjectProperties (14.7.5.9) and
+            // [[OwnPropertyKeys]] run on the enumerated object, never on its
+            // property values: no internal method of the Proxy runs, no
+            // trap, nothing escapes. A Proxy subject keeps its own rules.
+            Cons::EnumKeyAny { o, src, site } => self.enum_key_any(o, src, site),
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2463,7 +2472,6 @@ impl Model {
             | Cons::CjsPublish { .. }
             | Cons::ContractThis { .. }
             | Cons::DefineDesc { .. }
-            | Cons::EnumKeyAny { .. }
             | Cons::EnumKeyStore { .. }
             | Cons::EnumLoad { .. }
             | Cons::ForInAcc { .. }
