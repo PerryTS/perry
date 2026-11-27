@@ -1,0 +1,1 @@
+The garbage collector's trigger and pacing policy is split from one `gc/policy.rs` file into a `gc/policy/` module per responsibility (budgeted cycle, safepoints, major pacing, old-generation reclaim, parse pressure, nursery cap and the rest), with no behavior change.

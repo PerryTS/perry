@@ -2068,20 +2068,20 @@
    "why": "Queue of foreign-thread callback requests: slot index, copied native ABI register images, and an Arc completion; no GC heap addresses."
   },
   {
-   "file": "crates/perry-runtime/src/gc/policy.rs",
-   "names": [
-    "CACHED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock<usize> caching PERRY_GC_SCAVENGE_NURSERY_MB nursery cap bytes; config value."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/policy.rs",
+   "file": "crates/perry-runtime/src/gc/policy/major_pacing.rs",
    "names": [
     "CONFIG"
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock<(usize,usize)> caching major-GC pacing floor bytes and growth numerator from env; config."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/policy/nursery_cap.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<usize> caching PERRY_GC_SCAVENGE_NURSERY_MB nursery cap bytes; config value."
   },
   {
    "file": "crates/perry-runtime/src/pty/reactor.rs",
