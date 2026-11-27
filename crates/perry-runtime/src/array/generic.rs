@@ -325,12 +325,12 @@ pub(crate) fn al_length(recv: f64) -> i64 {
             // A non-numeric `length` (e.g. `length: true` → 1, `length: "2"` →
             // 2) must be ToNumber-coerced first — the raw NaN-boxed bool/string
             // bits would otherwise read as NaN → 0.
-            to_length(crate::math::js_math_to_number(len_val))
+            to_length(crate::builtins::js_number_coerce(len_val))
         }
         // Typed arrays / buffers expose a real length via the safe dispatcher.
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
         // Proxy: Get("length") through the `get` trap (throws on revoked).
-        Some(PtrKind::Proxy) => to_length(crate::math::js_math_to_number(
+        Some(PtrKind::Proxy) => to_length(crate::builtins::js_number_coerce(
             crate::proxy_hooks::proxy_get(recv, proxy_named_key("length")),
         )),
         // Date/RegExp/Error expando receiver: `length` lives in the exotic
@@ -338,7 +338,7 @@ pub(crate) fn al_length(recv: f64) -> i64 {
         Some(PtrKind::ExpandoExotic(kind)) => {
             let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
             match crate::object::exotic_expando::value_lookup(kind, raw, "length") {
-                Some(bits) => to_length(crate::math::js_math_to_number(f64::from_bits(bits))),
+                Some(bits) => to_length(crate::builtins::js_number_coerce(f64::from_bits(bits))),
                 None => 0,
             }
         }

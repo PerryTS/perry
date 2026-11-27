@@ -15,7 +15,7 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `gen_rest.rs:549` | seed | Expr::DateParse: perry-runtime date.rs js_date_parse (f64, NaN on failure = canonical f64 NaN) |
 | `gen_rest.rs:556` | seed | Expr::DateUtc: perry-runtime date.rs js_date_utc (f64) |
 | `gen_rest.rs:617` | seed | HIR Math intrinsics (prim_kids): codegen expr/math_simple.rs (llvm.*.f64) and perry-runtime math.rs js_math_* (f64 arithmetic) |
-| `gen_rest.rs:637` | seed | `math_range` result (ToNumber of a Math operand): codegen expr/dispatch.rs lower_math_operand / js_math_to_number (f64) |
+| `gen_rest.rs:637` | seed | `math_range` result (ToNumber of a Math operand): codegen expr/dispatch.rs lower_math_operand / js_number_coerce (f64) |
 | `gen_rest.rs:644` | seed | ParseInt/ParseFloat/NumberCoerce: perry-runtime builtins/numbers.rs js_parse_int, js_parse_float, js_number_coerce (f64) |
 | `gen_rest.rs:660` | seed | `+x` / ToNumber helper result: codegen unary lowering (fadd 0 / js_number_coerce, f64) |
 | `builtins.rs:1000` | read/map | family/realm/const mapping: no value of its own; the seeds that use it are audited at their own rows |

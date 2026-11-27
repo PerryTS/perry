@@ -3977,7 +3977,7 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
         .unwrap_or(ir.len());
     let fast_body = &ir[fast_body_start..fast_body_end];
     assert!(
-        !fast_body.contains("js_math_to_number"),
+        !fast_body.contains("js_number_coerce"),
         "packed fast body must not route Math.abs(arr[i]) through JSValue ToNumber:\n{fast_body}\n\n{ir}"
     );
     // The fast clone stores through the inline range store (see the
@@ -4020,7 +4020,7 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
         .find("for.packed_f64_slow")
         .expect("expected packed-f64 slow clone");
     assert!(
-        ir[slow_start..].contains("call double @js_math_to_number"),
+        ir[slow_start..].contains("call double @js_number_coerce"),
         "unary math packed store side exit must restart in the slow clone that preserves ToNumber semantics:\n{ir}"
     );
 
@@ -4097,7 +4097,7 @@ fn packed_f64_loop_rejects_coercive_unary_math_store_rhs() {
         "coercive unary math store body must stay out of the packed-f64 fast clone:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_math_to_number"),
+        ir.contains("call double @js_number_coerce"),
         "negative case must exercise the generic ToNumber-preserving math path:\n{ir}"
     );
 
