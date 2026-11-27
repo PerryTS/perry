@@ -2668,6 +2668,42 @@ impl Model {
                 self.proxy_own_keys(p, r);
                 self.enum_key_any(o, src, site);
             }
+            // StoreKeyed / AccessorKeyed: the Proxy as the key of a for-in
+            // body store or definition. ToPropertyKey( p ) (7.1.19) is
+            // ToPrimitive( p, string ): its @@toPrimitive / toString /
+            // valueOf get traps and calls are the key node's own
+            // `Implicit ToPrimitive` rule (`Gen::to_property_key`,
+            // `proxy_to_primitive`); its result is a String or Symbol the
+            // program's code chose: the store / install under any key, as
+            // for an object key of a computed store (`StoreIndexed`).
+            Cons::StoreKeyed {
+                o, src, site, region, ..
+            } => {
+                if self.keyed_once(n, src, 4).is_some() {
+                    self.cons(
+                        o,
+                        Cons::Store {
+                            key: Key::any(),
+                            src,
+                            site,
+                            region,
+                        },
+                    );
+                }
+            }
+            Cons::AccessorKeyed { holder, f, setter } => {
+                if self.keyed_once(n, f, 5 + setter as u8).is_some() {
+                    let key = self.atom(crate::STAR_KEY);
+                    self.cons(
+                        f,
+                        Cons::Accessor {
+                            holder,
+                            key,
+                            setter,
+                        },
+                    );
+                }
+            }
             // Rule PXCLASS: the rules with no PX arm of their own, each named
             // (a new rule must take a place in this match and answer
             // `Cons::proxy_operand`). `Value`: no internal method of the
@@ -2676,8 +2712,7 @@ impl Model {
             // method of the Proxy: its escape, the rule named in the reason
             // (`proxy_escape`: each trap with unknown operands, the target's
             // own escape), and the rule's result is unknown.
-            Cons::AccessorKeyed { .. }
-            | Cons::AddsKeys { .. }
+            Cons::AddsKeys { .. }
             | Cons::AnnexBDefine { .. }
             | Cons::AnnexBLookup { .. }
             | Cons::BoundCall { .. }
@@ -2701,7 +2736,6 @@ impl Model {
             | Cons::RegExpPattern { .. }
             | Cons::RequireSpec { .. }
             | Cons::ShareBuffer { .. }
-            | Cons::StoreKeyed { .. }
             | Cons::StoreOut { .. }
             | Cons::SuperCtor { .. }
             | Cons::SuperCtorParent { .. }

@@ -1530,6 +1530,15 @@ impl Cons {
             // Template bookkeeping: a Proxy has no template; its keys are its
             // target's, which the forwarded store gives.
             Cons::AddsKeys => ProxyOperand::Value,
+            // Rule PXTRAP: a Proxy key of a computed literal key that an `Object.assign`
+            // copy may Set as "__proto__" (ProtoKeySet): ToPropertyKey ran where the key
+            // was evaluated (the key node's Implicit ToPrimitive, the traps'
+            // `proxy_to_primitive`); the ordinary rule takes any object key as one that
+            // may be "__proto__" (`key_may_be_proto`). The object of an own computed key
+            // (OwnComputedKey) records the key for a later copy of that object; a copy of
+            // a Proxy source is its ownKeys / getOwnPropertyDescriptor / get traps
+            // (`SpreadFrom`), so the record runs no internal method.
+            Cons::ProtoKeySet { .. } | Cons::OwnComputedKey { .. } => ProxyOperand::Value,
             // A for-in body's function values (ForInBody): the rule runs each Func token
             // per value of the subject; a Proxy is none (its [[Call]] is no body run).
             Cons::ForInBody { .. } => ProxyOperand::Value,
@@ -1597,7 +1606,9 @@ impl Cons {
             // subject's [[Get]] (EnumLoad); [[Get]] / [[Set]] with Receiver `origin` of a
             // lookup through a Proxy holder (VisitHolders, VisitStop); the [[Call]] of a
             // Proxy getter / setter (Accessor); the traps a for-in body site runs
-            // (ForInAcc); the enumeration traps of a Proxy for-in subject, then a
+            // (ForInAcc); ToPropertyKey of a Proxy key, the key node's Implicit
+            // ToPrimitive, then a store / install under any key (StoreKeyed,
+            // AccessorKeyed); the enumeration traps of a Proxy for-in subject, then a
             // store under any String key (EnumKeyStore).
             Cons::Fulfil { .. }
             | Cons::ProtoKey { .. }
@@ -1607,11 +1618,11 @@ impl Cons {
             | Cons::VisitStop { .. }
             | Cons::Accessor { .. }
             | Cons::ForInAcc { .. }
+            | Cons::StoreKeyed { .. }
+            | Cons::AccessorKeyed { .. }
             | Cons::EnumKeyStore { .. } => ProxyOperand::Trap,
             // An internal method of the Proxy runs and no PX model of it is built
-            // yet: PXESC (the escape stands in for the trap). ToPropertyKey of a key
-            // (ToPrimitive: AccessorKeyed, OwnComputedKey, StoreKeyed, ProtoKeySet);
-            // Get( prototype ) and
+            // yet: PXESC (the escape stands in for the trap). Get( prototype ) and
             // [[Construct]] of an `extends` value (NativeParent); Annex B define / lookup; IsRegExp and ToString (NotRegExp,
             // RegExpPattern); [[Construct]] (NewNamed, SuperCtor, SuperCtorParent); a
             // native on a Proxy `this` its model does not name (NativeThis).
@@ -1620,11 +1631,7 @@ impl Cons {
             // get trap. CjsPublish: `registerPathModule` reads `__perry_cjs_record`
             // and `exports` (`cjs_record_exports`: `js_object_get_field_by_name`, the
             // get trap on a Proxy).
-            Cons::AccessorKeyed { .. }
-            | Cons::OwnComputedKey { .. }
-            | Cons::StoreKeyed { .. }
-            | Cons::ProtoKeySet { .. }
-            | Cons::AnnexBDefine { .. }
+            Cons::AnnexBDefine { .. }
             | Cons::AnnexBLookup { .. }
             | Cons::NotRegExp { .. }
             | Cons::RegExpPattern { .. }
