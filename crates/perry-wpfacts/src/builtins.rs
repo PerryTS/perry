@@ -2891,7 +2891,7 @@ pub(crate) use accessor_lookup::{
     realm_accessor_call,
 };
 pub use methods::*;
-pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
+pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define, proto_native};
 /// Whether the generated global object declares a callable under this key.
 /// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
 /// (`members::box_chain`), as `Gen::json_value` models them, whose fields

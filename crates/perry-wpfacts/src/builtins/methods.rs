@@ -850,6 +850,31 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
 
 /// Annex B defines a descriptor; only an unmodeled receiver keeps the
 /// reflective escape fallback. Known holders use the descriptor accessor flow.
+/// The native method the prototype `p` holds under `key`, as a load finds
+/// it there (`tok_load`): the method a call that finds it there runs
+/// (`proto_method`), named in its native frame (`Model::native_frame`).
+pub(crate) fn proto_native(m: &mut Model, p: Tok, key: Key) -> Option<Tok> {
+    let Key::Named(a) = key else { return None };
+    let name = m.atoms[a as usize].clone();
+    let native = match m.toks[p as usize] {
+        TokKind::ObjectProto => matches!(members::member(Family::Object, &name), Some(Mem::Fn))
+            .then(|| member_native(m, Family::Object, None, &name))
+            .flatten(),
+        TokKind::NativeProto(_, ns) => match ns.and_then(loads::proto_family) {
+            Some((fam, what, _)) => member_native(m, fam, what, &name),
+            None => m
+                .native_property(p, &name)
+                .and_then(|q| q.native)
+                .map(|identity| Native::Member {
+                    identity,
+                    holder: None,
+                }),
+        },
+        _ => None,
+    }?;
+    Some(m.tok(TokKind::BuiltinFn(native)))
+}
+
 pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bool) {
     let c = m.calls[call as usize].clone();
     if c.args.len() < 2 && c.spread.is_empty() {

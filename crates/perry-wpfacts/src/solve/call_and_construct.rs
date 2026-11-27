@@ -20,6 +20,32 @@ impl Model {
     }
 
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
+    /// Run `f` as the native `native` dispatched at `call`: a value it hands
+    /// to unknown code may run there, throwing into the call's region
+    /// (`Model::cur_native_call`); a STOP report names the native.
+    pub(crate) fn native_frame<R>(
+        &mut self,
+        call: CallId,
+        native: Option<Tok>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.cur_native_call.replace(call);
+        let pushed = native.is_some_and(|t| {
+            self.stop_top
+                .as_mut()
+                .map(|s| s.natives.push((call, t)))
+                .is_some()
+        });
+        let r = f(self);
+        if pushed {
+            if let Some(s) = self.stop_top.as_mut() {
+                s.natives.pop();
+            }
+        }
+        self.cur_native_call = prev;
+        r
+    }
+
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         // MATHB1B: the generic-arm call of a namespace pair does not bind
         // the original member: the pair's intrinsic arm is that call
@@ -92,15 +118,7 @@ impl Model {
         } else {
             call
         };
-        let prev = self.cur_native_call.replace(call);
-        if let Some(s) = self.stop_top.as_mut() {
-            s.natives.push((call, t));
-        }
-        let native = self.native_call(call, t, this_tok);
-        if let Some(s) = self.stop_top.as_mut() {
-            s.natives.pop();
-        }
-        self.cur_native_call = prev;
+        let native = self.native_frame(call, Some(t), |m| m.native_call(call, t, this_tok));
         if native {
             return;
         }
