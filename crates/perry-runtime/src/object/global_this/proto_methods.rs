@@ -313,13 +313,13 @@ fn install_function_restricted_accessors(proto_obj: *mut ObjectHeader) {
     let pairs = [
         (
             &b"arguments"[..],
-            crate::fn_info!(#[realm("Function.prototype.arguments.<get>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get arguments"), with_declared(0)),
-            crate::fn_info!(#[realm("Function.prototype.arguments.<set>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set arguments"), with_declared(1)),
+            crate::fn_info!(#[realm("Function.prototype.arguments.<get>")] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get arguments"), with_declared(0)),
+            crate::fn_info!(#[realm("Function.prototype.arguments.<set>")] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set arguments"), with_declared(1)),
         ),
         (
             &b"caller"[..],
-            crate::fn_info!(#[realm("Function.prototype.caller.<get>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get caller"), with_declared(0)),
-            crate::fn_info!(#[realm("Function.prototype.caller.<set>", constructible = true)] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set caller"), with_declared(1)),
+            crate::fn_info!(#[realm("Function.prototype.caller.<get>")] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get caller"), with_declared(0)),
+            crate::fn_info!(#[realm("Function.prototype.caller.<set>")] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set caller"), with_declared(1)),
         ),
     ];
     for (key, get_info, set_info) in pairs {
