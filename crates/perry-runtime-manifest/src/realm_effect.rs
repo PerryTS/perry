@@ -6,8 +6,24 @@
 //!
 //! Anything a declaration does not state does not happen. A function with no
 //! declaration (or with `open`) is unknown code.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
+
+/// The name of a provider-wide value store of a host surface
+/// (`pool(nodes)`, HOSTSURF §1.4.1), prefixed by its provider once loaded
+/// (`feather-dom:nodes`). A host surface is read once per compile and its
+/// table is leaked for the compile, so the name is a `&'static str` and the
+/// slot root stays `Copy`. No runtime declaration names a pool.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct PoolName(pub &'static str);
+
+impl<'de> Deserialize<'de> for PoolName {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        Ok(PoolName(Box::leak(name.into_boxed_str())))
+    }
+}
 
 /// Where a slot starts: the receiver, a positional argument, the arguments
 /// from an index on, the function's own result, the value the N-th
@@ -25,6 +41,10 @@ pub enum RealmSlotRoot {
     Result,
     Returned(u8),
     Callee,
+    /// A host provider's pool (`pool(p)`): every value stored into it plus
+    /// the provider births that name it (HOSTSURF §1.4.1). An inclusion over
+    /// exact values, never an unknown value.
+    Pool(PoolName),
 }
 
 /// One step from a slot into what it holds: its elements (array elements,
@@ -58,6 +78,11 @@ pub enum RealmSlotStep {
     /// [[GetPrototypeOf]] (ECMA-262 7.1.18, 10.1.1; the `__proto__` getter,
     /// 20.1.3.8.1): an object or `null`. A value only: no store goes there.
     Proto,
+    /// The slot's values whose [[Prototype]] chain holds the named host
+    /// prototype (`is(s, feather-dom:Element.prototype)`, HOSTSURF §1.4.2):
+    /// a filter on what the slot holds, a value only. Without it the value
+    /// is merely wider.
+    Is(Cow<'static, str>),
 }
 
 /// `this`, `arg(0)`, `elems(this)`, `field(arg(0), key)`, ...
@@ -166,6 +191,12 @@ pub enum RealmOperand {
     Unknown,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
+    /// A fresh object whose prototype the host provider's tag relation
+    /// `tags` maps the string argument `arg` to (`createElement(tag)`,
+    /// HOSTSURF §1.4.4): the relation is data from the provider's build.
+    /// A constant argument gives the one prototype it maps to; any other
+    /// gives one of every prototype of the relation, its `other` among them.
+    FreshByTag { arg: u8, tags: Cow<'static, str> },
     /// No value: the call never returns normally (`returns(never)`, the
     /// whole result: %ThrowTypeError%, ECMA-262 10.2.4.1, throws a realm
     /// TypeError on every call).
@@ -234,7 +265,10 @@ pub enum RealmEffect {
 impl RealmSlot {
     fn validate(&self, at: &str) -> Result<(), String> {
         for step in self.steps.iter() {
-            if let RealmSlotStep::Field(key) | RealmSlotStep::Internal(key) = step {
+            if let RealmSlotStep::Field(key)
+            | RealmSlotStep::Internal(key)
+            | RealmSlotStep::Is(key) = step
+            {
                 if key.is_empty() {
                     return Err(format!("{at}: effect field key is empty"));
                 }
@@ -302,6 +336,12 @@ impl RealmOperand {
                 args.iter().try_for_each(|a| a.validate(at, names))?;
                 elems.iter().try_for_each(|slot| slot.validate(at))
             }
+            Self::FreshByTag { tags, .. } => {
+                if tags.is_empty() {
+                    return Err(format!("{at}: fresh_by_tag names no tag relation"));
+                }
+                Ok(())
+            }
             Self::Union(members) => {
                 if members.len() < 2 {
                     return Err(format!("{at}: a union needs at least two values"));
@@ -358,7 +398,8 @@ pub fn validate_effects(
             | RealmOperand::Unknown
             | RealmOperand::Never
             | RealmOperand::Native(_)
-            | RealmOperand::Namespace(_) => {}
+            | RealmOperand::Namespace(_)
+            | RealmOperand::FreshByTag { .. } => {}
             RealmOperand::Slot(slot) => out.push(slot),
             RealmOperand::Fresh {
                 elems,
@@ -497,6 +538,9 @@ pub mod emit {
             RealmSlotRoot::Result => format!("{p}RealmSlotRoot::Result"),
             RealmSlotRoot::Returned(i) => format!("{p}RealmSlotRoot::Returned({i})"),
             RealmSlotRoot::Callee => format!("{p}RealmSlotRoot::Callee"),
+            RealmSlotRoot::Pool(PoolName(n)) => {
+                format!("{p}RealmSlotRoot::Pool({p}PoolName({n:?}))")
+            }
         };
         let steps = list(&s.steps, |step| match step {
             RealmSlotStep::Elems => format!("{p}RealmSlotStep::Elems"),
@@ -509,6 +553,9 @@ pub mod emit {
             }
             RealmSlotStep::Internal(k) => {
                 format!("{p}RealmSlotStep::Internal(::std::borrow::Cow::Borrowed({k:?}))")
+            }
+            RealmSlotStep::Is(k) => {
+                format!("{p}RealmSlotStep::Is(::std::borrow::Cow::Borrowed({k:?}))")
             }
         });
         format!("{p}RealmSlot {{ root: {root}, steps: {steps} }}")
@@ -565,6 +612,9 @@ pub mod emit {
             RealmOperand::Union(members) => format!(
                 "{p}RealmOperand::Union({})",
                 list(members, |m| operand(p, m))
+            ),
+            RealmOperand::FreshByTag { arg, tags } => format!(
+                "{p}RealmOperand::FreshByTag {{ arg: {arg}, tags: ::std::borrow::Cow::Borrowed({tags:?}) }}"
             ),
         }
     }

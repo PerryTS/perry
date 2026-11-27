@@ -293,6 +293,7 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
     let slot = |s: &RealmSlot| s.root == root;
     fn operand(o: &RealmOperand, slot: &dyn Fn(&RealmSlot) -> bool, root: RealmSlotRoot) -> bool {
         match o {
+            RealmOperand::FreshByTag { .. } => false,
             RealmOperand::Prim(_) => false,
             RealmOperand::Slot(s) => slot(s),
             RealmOperand::Fresh {
@@ -503,6 +504,13 @@ pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry
 /// `islot` steps over the result (`field(islot(result, listeners), handleEvent)`).
 pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
+        // A host pool and an `is` filter are host-surface forms
+        // (HOSTSURF §1.4), which only a loaded host table carries.
+        if matches!(s.root, RealmSlotRoot::Pool(_))
+            || s.steps.iter().any(|st| matches!(st, RealmSlotStep::Is(_)))
+        {
+            return false;
+        }
         matches!(
             (s.root, &s.steps[..]),
             (_, [])
@@ -559,6 +567,8 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Json | RealmOperand::Unknown => true,
             // No value at all: a whole result only (the manifest's check).
             RealmOperand::Never => true,
+            // A host-surface form (HOSTSURF §1.4.4).
+            RealmOperand::FreshByTag { .. } => false,
         }
     }
     !effects.is_empty()
@@ -662,6 +672,7 @@ impl Run {
     fn root(&mut self, m: &mut Model, r: RealmSlotRoot) -> Vals {
         let mut v = Vals::default();
         match r {
+            RealmSlotRoot::Pool(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
             RealmSlotRoot::This => v.nodes.push(self.recv(m)),
             // Spread positions are not kept: with a spread argument,
             // argument `i` is a direct argument at index `i` or before, or
@@ -779,6 +790,7 @@ impl Run {
                     return Vals::default();
                 };
                 match last {
+                    RealmSlotStep::Is(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
                     RealmSlotStep::Elems => Vals {
                         nodes: vec![],
                         spread: vec![n],
@@ -847,6 +859,7 @@ impl Run {
                 }
             };
             cur = match st {
+                RealmSlotStep::Is(_) => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
                 RealmSlotStep::Elems => Vals {
                     nodes: vec![],
                     spread: vec![base],
@@ -919,6 +932,7 @@ impl Run {
 
     fn operand(&mut self, m: &mut Model, o: &RealmOperand) -> NodeId {
         match o {
+            RealmOperand::FreshByTag { .. } => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
             RealmOperand::Prim(ps) => {
                 let n = m.node_l("num");
                 m.add_prim(n, prim_bits(ps));
@@ -1169,6 +1183,7 @@ impl Run {
 
     fn returns(&mut self, m: &mut Model, o: &RealmOperand) {
         match o {
+            RealmOperand::FreshByTag { .. } => unreachable!("interpretable() refuses the host-surface forms until the solver reads a host table (HOSTSURF H2)"),
             RealmOperand::Prim(ps) => ret_prim(m, self.call, prim_bits(ps)),
             RealmOperand::Slot(s) if s.root == RealmSlotRoot::This && s.steps.is_empty() => {
                 let t = self
@@ -1283,6 +1298,7 @@ pub(crate) fn is_internal_key(name: &str) -> bool {
 
 fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
     match st {
+        RealmSlotStep::Is(_) => unreachable!("an `is` filter has no key"),
         RealmSlotStep::Field(k) => Key::Named(m.atom(k)),
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
         // Read back: any String key (the exclusion is the store's).
@@ -1658,6 +1674,7 @@ pub(crate) fn strkey_set(
 
 fn slot_text(s: &RealmSlot) -> String {
     let mut out = match s.root {
+        RealmSlotRoot::Pool(p) => format!("pool({})", p.0),
         RealmSlotRoot::This => "this".to_string(),
         RealmSlotRoot::Arg(i) => format!("arg({i})"),
         RealmSlotRoot::Rest(i) => format!("rest({i})"),
@@ -1667,6 +1684,7 @@ fn slot_text(s: &RealmSlot) -> String {
     };
     for st in s.steps.iter() {
         out = match st {
+            RealmSlotStep::Is(k) => format!("is({out}, {k})"),
             RealmSlotStep::Elems => format!("elems({out})"),
             RealmSlotStep::Iterated => format!("iterated({out})"),
             RealmSlotStep::OwnValues => format!("values({out})"),

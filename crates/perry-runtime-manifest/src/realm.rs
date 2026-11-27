@@ -7,6 +7,8 @@ pub use realm_layout_facts::*;
 #[path = "realm_effect.rs"]
 mod realm_effect;
 pub use realm_effect::*;
+#[path = "host_surface.rs"]
+pub mod host_surface;
 
 pub use perry_runtime_manifest::realm_source::REALM_MANIFEST_VERSION;
 
@@ -503,7 +505,8 @@ impl RealmManifest {
                 | O::Namespace(_)
                 | O::Bound
                 | O::Json
-                | O::Never => {
+                | O::Never
+                | O::FreshByTag { .. } => {
                     false
                 }
             }
