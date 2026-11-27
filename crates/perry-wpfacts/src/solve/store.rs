@@ -321,7 +321,6 @@ impl Model {
             .get(&t)
             .is_some_and(|ks| ks.contains(&star))
         {
-            self.e7_global_diag(t, reason);
             self.mark_hard(t, Hard::E7Delete, reason);
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
@@ -381,23 +380,8 @@ impl Model {
                 }
             }
             _ => {
-                self.e7_global_diag(t, reason);
                 self.mark_hard(t, Hard::E7Delete, reason);
             }
-        }
-    }
-
-    /// `PERRY_FACTS_E7_GLOBAL_DIAG`: an E7 delete under any key that reaches
-    /// the global object, with its reason (a measurement aid, stderr only).
-    pub(super) fn e7_global_diag(&self, t: Tok, reason: u32) {
-        if t != TOP
-            && std::env::var_os("PERRY_FACTS_E7_GLOBAL_DIAG").is_some()
-            && builtins::global_object(self, t)
-        {
-            eprintln!(
-                "perry: wpfacts e7-global {}",
-                self.reasons.get(reason as usize).map_or("?", |r| r.as_str())
-            );
         }
     }
 
