@@ -1650,19 +1650,14 @@ fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
         format!("ptrtoint (ptr @{symbol} to"),
         format!("ptrtoint ptr @{symbol} to"),
     ];
-    let own_record = format!("{symbol}$fnrec");
-    let defines_own_record = |line: &str| {
-        line.split_once(" = ").is_some_and(|(name, _)| {
-            let name = name.strip_prefix('@').unwrap_or(name);
-            let name = name
-                .strip_prefix("\"\\01l_")
-                .and_then(|quoted| quoted.strip_suffix('"'))
-                .unwrap_or(name);
-            name == own_record
-        })
-    };
+    // The record's definition, ELF and Mach-O spellings; another body's record still counts.
+    let own_record = [
+        format!("@{symbol}$fnrec = "),
+        format!("@\"\\01l_{symbol}$fnrec\" = "),
+    ];
     ir.lines()
-        .filter(|line| !line.contains("$info = ") && !defines_own_record(line))
+        .filter(|line| !line.contains("$info = "))
+        .filter(|line| !own_record.iter().any(|r| line.starts_with(r.as_str())))
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
 }
 
