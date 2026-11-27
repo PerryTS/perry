@@ -1,0 +1,1 @@
+The realm declared-keys table (`realm_declared_keys.tsv`) is regenerated from the realm: it lists the `ReadableState.prototype.readingMore` accessor and the other members main added since it was last written, so `scripts/wpfacts_realm_declared_keys.py --check` passes again.
