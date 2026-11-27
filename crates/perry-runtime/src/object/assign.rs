@@ -1192,14 +1192,8 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         }
     }
 
-    copy_symbol_keys(
-        define,
-        &tgt_h,
-        &src_h,
-        &source_h,
-        source_has_no_symbols,
-        getter_ran,
-    );
+    let symbols = symbol_key_snapshot(&source_h, source_has_no_symbols);
+    copy_symbol_keys(define, &tgt_h, &src_h, &source_h, symbols, getter_ran);
 
     // The target may have moved under any of the getters above; hand the caller
     // the post-collection address, not the `target_f64` captured on entry. The
@@ -1209,30 +1203,22 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
 }
 
-/// CopyDataProperties' symbol part (ECMA-262 7.3.25, `[[OwnPropertyKeys]]`
-/// symbol order, after the string keys) from the source `source_h` (its raw
-/// object `src_h`) onto the target `tgt_h`. `getter_ran`: a getter already ran
-/// during the string part, so each symbol is re-checked for own presence.
+/// The source's own symbol keys, in `[[OwnPropertyKeys]]` symbol order: the
+/// symbol part of CopyDataProperties' key list (ECMA-262 7.3.25 step 3).
+/// Use the full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
+/// surfaces symbols with a stored *value*, missing accessor-only symbols
+/// (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
+/// ran during assign (test262 assign/strings-and-symbol-order). The snapshot
+/// holds the symbol pointers: the inner `[[Get]]` / set re-acquire
+/// SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
 ///
 /// # Safety
-/// The handles root a live target and source object.
-pub(super) unsafe fn copy_symbol_keys(
-    define: bool,
-    tgt_h: &crate::gc::RuntimeHandle<'_>,
-    src_h: &crate::gc::RuntimeHandle<'_>,
+/// `source_h` roots a live source object.
+pub(super) unsafe fn symbol_key_snapshot(
     source_h: &crate::gc::RuntimeHandle<'_>,
     source_has_no_symbols: bool,
-    mut getter_ran: bool,
-) {
-    // 2) Copy own symbol-keyed enumerable properties from source to target,
-    //    in `[[OwnPropertyKeys]]` symbol order (after the string keys). Use the
-    //    full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
-    //    surfaces symbols with a stored *value*, missing accessor-only symbols
-    //    (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
-    //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
-    //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
-    //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
-    let sym_keys: Vec<usize> = if source_has_no_symbols {
+) -> Vec<usize> {
+    if source_has_no_symbols {
         Vec::new()
     } else {
         let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_h.get_nanbox_f64());
@@ -1251,7 +1237,26 @@ pub(super) unsafe fn copy_symbol_keys(
             }
         }
         v
-    };
+    }
+}
+
+/// CopyDataProperties' symbol part (ECMA-262 7.3.25, `[[OwnPropertyKeys]]`
+/// symbol order, after the string keys) from the source `source_h` (its raw
+/// object `src_h`) onto the target `tgt_h`, over `sym_keys`, the source's
+/// symbol keys as [`symbol_key_snapshot`] took them. `getter_ran`: a getter
+/// already ran during the string part, so each symbol is re-checked for own
+/// presence.
+///
+/// # Safety
+/// The handles root a live target and source object.
+pub(super) unsafe fn copy_symbol_keys(
+    define: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    source_h: &crate::gc::RuntimeHandle<'_>,
+    sym_keys: Vec<usize>,
+    mut getter_ran: bool,
+) {
     for sym_ptr in sym_keys {
         // #7200: `js_object_get_symbol_property` below is a symbol-keyed
         // `[[Get]]` — an accessor there runs user code with the same reach as

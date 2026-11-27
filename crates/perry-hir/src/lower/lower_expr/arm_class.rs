@@ -150,13 +150,26 @@ pub(crate) fn lower_class_expr(
     } else {
         None
     };
+    // An anonymous class expression has no inner binding, but `this` in its
+    // static field initializers is still this evaluation's class object: it
+    // gets the same compiler-private local, without a name.
+    let self_binding = self_binding.or_else(|| {
+        (!at_module_top && has_static_field_initializer(&class_expr.class)).then(|| {
+            ctx.define_local(
+                format!("__perry_class_expr_self_{synthetic_name}"),
+                crate::types::Type::Any,
+            )
+        })
+    });
     // Inside a function body a capturing class expression lowers to a fresh
     // class object per evaluation (`ClassExprFresh` below), which is what the
     // guarded class environment keys evaluations by.
     ctx.pending_fresh_class_expr = !at_module_top;
+    ctx.pending_class_static_this = self_binding;
     let class_result = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false);
     ctx.pending_fresh_class_expr = false;
-    if let Some(self_id) = self_binding {
+    ctx.pending_class_static_this = None;
+    if let Some(self_id) = self_binding.filter(|_| source_inner_name.is_some()) {
         let (_, _, popped_id) = ctx
             .class_expr_self_bindings
             .pop()
@@ -561,4 +574,14 @@ pub(crate) fn lower_class_expr(
         seq.push(Expr::ClassRef(synthetic_name));
         Ok(Expr::Sequence(seq))
     }
+}
+
+/// Whether `class` has a static field with an initializer (whose `this` is
+/// the class being defined).
+fn has_static_field_initializer(class: &swc_ecma_ast::Class) -> bool {
+    class.body.iter().any(|member| match member {
+        swc_ecma_ast::ClassMember::ClassProp(prop) => prop.is_static && prop.value.is_some(),
+        swc_ecma_ast::ClassMember::PrivateProp(prop) => prop.is_static && prop.value.is_some(),
+        _ => false,
+    })
 }
