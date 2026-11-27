@@ -18,7 +18,7 @@
 //! body to read.
 
 use crate::block::LlBlock;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I32, I64};
 
 /// The callee parameter of every JS body definition (`perry_abi::JS_BODY_CALLEE_PARAM`).
 pub(crate) const JS_BODY_CALLEE: &str = "%this_closure";
@@ -145,23 +145,46 @@ pub(crate) fn unbound_this_value(ctx: &mut crate::expr::FnCtx<'_>) -> String {
 /// already holds the receiver parameter's bits (stored before the body's
 /// first safepoint, so a moving collection rewrites it). Applies
 /// OrdinaryCallBindThis once, in place: an object receiver is kept inline;
-/// anything else (`undefined`, `null`, a primitive, a class ref) goes through
-/// `js_this_coerce_sloppy`, the only safepoint here. A strict body needs no
-/// prologue: its receiver is the parameter as passed.
+/// anything else (`undefined`, `null`, a primitive, a Symbol, a class ref)
+/// goes through `js_this_coerce_sloppy`, the only safepoint here. A Symbol is
+/// a heap cell whose payload starts with the symbol magic, so a heap receiver
+/// pays one load of its first word. A strict body needs no prologue: its
+/// receiver is the parameter as passed.
 pub(crate) fn emit_sloppy_receiver_coercion(ctx: &mut crate::expr::FnCtx<'_>, slot: &str) {
-    let (value, is_object) = {
+    use crate::expr::receiver_range::{emit_field_ptr, emit_fused_receiver_test};
+    let heap_idx = ctx.new_block("this_prologue.heap");
+    let other_idx = ctx.new_block("this_prologue.other");
+    let slow_idx = ctx.new_block("this_prologue.coerce");
+    let done_idx = ctx.new_block("this_prologue.done");
+    let heap_label = ctx.block_label(heap_idx);
+    let other_label = ctx.block_label(other_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let done_label = ctx.block_label(done_idx);
+    let (value, bits, biased) = {
         let blk = ctx.block();
         let value = blk.load(DOUBLE, slot);
         let bits = blk.bitcast_double_to_i64(&value);
-        let top16 = blk.lshr(I64, &bits, "48");
-        let is_object = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
-        (value, is_object)
+        let fused = emit_fused_receiver_test(blk, &bits);
+        blk.cond_br(&fused.is_object_pointer, &heap_label, &other_label);
+        (value, bits, fused.biased)
     };
-    let slow_idx = ctx.new_block("this_prologue.coerce");
-    let done_idx = ctx.new_block("this_prologue.done");
-    let slow_label = ctx.block_label(slow_idx);
-    let done_label = ctx.block_label(done_idx);
-    ctx.block().cond_br(&is_object, &done_label, &slow_label);
+    ctx.current_block = heap_idx;
+    {
+        let blk = ctx.block();
+        let first_word_ptr = emit_field_ptr(blk, &biased, 0);
+        let first_word = blk.load(I32, &first_word_ptr);
+        let magic = (crate::runtime_abi::SYMBOL_HEADER_MAGIC as i32).to_string();
+        let maybe_symbol = blk.icmp_eq(I32, &first_word, &magic);
+        blk.cond_br(&maybe_symbol, &slow_label, &done_label);
+    }
+    // A pointer payload below the heap floor is a native handle: an object.
+    ctx.current_block = other_idx;
+    {
+        let blk = ctx.block();
+        let top16 = blk.lshr(I64, &bits, "48");
+        let is_handle = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+        blk.cond_br(&is_handle, &done_label, &slow_label);
+    }
     ctx.current_block = slow_idx;
     {
         let blk = ctx.block();
