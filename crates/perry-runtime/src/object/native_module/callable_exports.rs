@@ -335,7 +335,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", effects = { stores(fresh); returns(native("node:fs.Utf8Stream")) }, capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key, constructible = true; "node:fs.default.promises.<get>", effects = { stores(fresh); returns(namespace("node:fs.promises")) }, capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key; "node:fs.default.FileWriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key; "node:fs.default.ReadStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileReadStream")) }, capture = property_key; "node:fs.default.Utf8Stream.<get>", effects = { stores(fresh); returns(native("node:fs.Utf8Stream")) }, capture = property_key; "node:fs.default.WriteStream.<get>", effects = { stores(fresh); returns(native("node:fs.FileWriteStream")) }, capture = property_key; "node:fs.default.promises.<get>", effects = { stores(fresh); returns(namespace("node:fs.promises")) }, capture = property_key, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
@@ -360,7 +360,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>"; "node:fs.default.FileWriteStream.<set>"; "node:fs.default.ReadStream.<set>"; "node:fs.default.WriteStream.<set>"; })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_setter_thunk, 1; with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -1026,7 +1026,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(undefined)) })] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_name("get issuerCertificate"), with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, effects = { returns(prim(undefined)) })] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_name("get issuerCertificate"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             0,
         );
         if !getter.is_null() {

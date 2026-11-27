@@ -790,7 +790,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         // (`webcrypto_namespace`): the same object every read, and nothing
         // a program holds is written.
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc, effects = { returns(namespace("node:crypto.webcrypto")) })] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc, effects = { returns(namespace("node:crypto.webcrypto")) })] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             0,
         );
         let getter_bits = if getter.is_null() {
@@ -817,7 +817,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         // that keeps it is no property, so no program value is written.
         {
             let getter = crate::closure::js_closure_alloc(
-                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined], effects = { returns(namespace("navigator")) })] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined], effects = { returns(namespace("navigator")) })] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             let getter_bits = if getter.is_null() {

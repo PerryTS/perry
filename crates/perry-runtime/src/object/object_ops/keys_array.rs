@@ -798,7 +798,14 @@ fn mark_builtin_accessor_functions_non_constructable(getter_bits: u64, setter_bi
             continue;
         }
         let ptr = value.as_pointer::<u8>() as usize;
-        if crate::closure::is_closure_ptr(ptr) {
+        // A body whose record carries FN_NON_CONSTRUCTOR already says so for
+        // every closure of it (the realm declares it that way); only a shared
+        // body without the bit needs the per-closure mark.
+        if crate::closure::is_closure_ptr(ptr)
+            && !crate::closure::closure_body_is_non_constructor(
+                ptr as *const crate::closure::ClosureHeader,
+            )
+        {
             super::super::native_module::set_builtin_closure_non_constructable(ptr);
         }
     }

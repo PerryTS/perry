@@ -465,12 +465,12 @@ pub(crate) fn install_builtin_constructor_statics(
             }
             s.method(
                 "captureStackTrace",
-                crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Error.captureStackTrace)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             s.method(
                 "isError",
-                crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Error.isError)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             s.method(
@@ -1161,7 +1161,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "ArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Array[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Map[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Promise[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "RegExp[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "Set[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true, effects = { returns(this) }; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", effects = { returns(this) }; "ArrayBuffer[\"@@species\"].<get>", effects = { returns(this) }; "Array[\"@@species\"].<get>", effects = { returns(this) }; "Map[\"@@species\"].<get>", effects = { returns(this) }; "Promise[\"@@species\"].<get>", effects = { returns(this) }; "RegExp[\"@@species\"].<get>", effects = { returns(this) }; "Set[\"@@species\"].<get>", effects = { returns(this) }; "SharedArrayBuffer[\"@@species\"].<get>", effects = { returns(this) }; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     );
     if getter.is_null() {
@@ -1172,8 +1172,6 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         "get [Symbol.species]",
         0,
     );
-    // A getter is a built-in non-constructor: no own `prototype` (ECMA-262 10.3).
-    super::super::native_module::set_builtin_closure_non_constructable(getter as usize);
     let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
     let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
     let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());

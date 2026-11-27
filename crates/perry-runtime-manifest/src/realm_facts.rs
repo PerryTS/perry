@@ -946,6 +946,17 @@ pub(super) fn callable(
     let (captures, capture_flags) = if let Some(captures) = bound_captures {
         (captures, 0)
     } else if facts.builtin_constructor {
+    // A built-in getter or setter is not a constructor (ECMA-262 10.3, 10.4.1):
+    // it has no [[Construct]] and no own `prototype`. Its body says so
+    // (FN_NON_CONSTRUCTOR), so the runtime and this declaration agree.
+    if matches!(kind, "getter" | "setter") && keys.iter().any(|k| k.string() == Some("prototype"))
+    {
+        return Err(format!(
+            "{}: a built-in getter/setter is not a constructor; give its body FN_NON_CONSTRUCTOR \
+             and drop constructible",
+            facts.name
+        ));
+    }
         let family = constructor
             .as_ref()
             .ok_or("builtin constructor has no family declaration")?;

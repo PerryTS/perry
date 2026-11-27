@@ -305,7 +305,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastChar",
         function_value(
-            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastChar.<get>", constructible = true, effects = { returns(fresh(Buffer.prototype)) })] export crate::string_decoder::string_decoder_last_char_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastChar.<get>", effects = { returns(fresh(Buffer.prototype)) })] export crate::string_decoder::string_decoder_last_char_getter, 0; with_declared(0), with_flags(perry_runtime::closure::FN_NON_CONSTRUCTOR)),
             "get lastChar",
         ),
         true,
@@ -314,7 +314,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastNeed",
         function_value(
-            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastNeed.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::string_decoder::string_decoder_last_need_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastNeed.<get>", effects = { returns(prim(num)) })] export crate::string_decoder::string_decoder_last_need_getter, 0; with_declared(0), with_flags(perry_runtime::closure::FN_NON_CONSTRUCTOR)),
             "get lastNeed",
         ),
         true,
@@ -323,7 +323,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastTotal",
         function_value(
-            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastTotal.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::string_decoder::string_decoder_last_total_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastTotal.<get>", effects = { returns(prim(num)) })] export crate::string_decoder::string_decoder_last_total_getter, 0; with_declared(0), with_flags(perry_runtime::closure::FN_NON_CONSTRUCTOR)),
             "get lastTotal",
         ),
         true,
