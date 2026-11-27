@@ -15,7 +15,7 @@ pub(super) unsafe fn store_promise_jsvalue_slot(promise: *mut Promise, slot: *mu
 }
 
 #[inline]
-unsafe fn store_promise_closure_slot(
+pub(super) unsafe fn store_promise_closure_slot(
     promise: *mut Promise,
     slot: *mut ClosurePtr,
     value: ClosurePtr,
@@ -25,7 +25,7 @@ unsafe fn store_promise_closure_slot(
 }
 
 #[inline]
-unsafe fn store_promise_next_slot(
+pub(super) unsafe fn store_promise_next_slot(
     promise: *mut Promise,
     slot: *mut *mut Promise,
     value: *mut Promise,
@@ -272,6 +272,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
             return; // Already settled
         }
         super::async_step::trace_async_settle(promise, "fulfill");
+        let await_token = super::await_reaction::take_token(promise);
         (*promise).state = PromiseState::Fulfilled;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
@@ -319,7 +320,16 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                         task_context.clone(),
                     ));
                 }
-                if has_normal_handler {
+                if let Some(token) = await_token {
+                    super::await_reaction::enqueue_resume(
+                        &mut q,
+                        promise,
+                        value,
+                        true,
+                        task_context,
+                        token,
+                    );
+                } else if has_normal_handler {
                     q.enqueue_promise_job(Task::Promise(promise, value, true, task_context));
                 } else {
                     clear_promise_context(promise);
@@ -488,6 +498,9 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             return; // Already settled
         }
         super::async_step::trace_async_settle(promise, "reject");
+        // The Await reaction's token leaves the fulfillment word before the
+        // pending completion moves into it.
+        let await_token = super::await_reaction::take_token(promise);
         // Preserve the pending completion in the now-unused fulfillment word
         // before reason becomes the rejection result.
         if (*promise).reason.to_bits() != 0 {
@@ -556,7 +569,16 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                         task_context.clone(),
                     ));
                 }
-                if has_normal_handler {
+                if let Some(token) = await_token {
+                    super::await_reaction::enqueue_resume(
+                        &mut q,
+                        promise,
+                        reason,
+                        false,
+                        task_context,
+                        token,
+                    );
+                } else if has_normal_handler {
                     q.enqueue_promise_job(Task::Promise(promise, reason, false, task_context));
                 } else {
                     clear_promise_context(promise);

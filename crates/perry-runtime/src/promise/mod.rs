@@ -19,6 +19,7 @@ use crate::async_context::{
 
 pub mod assimilate;
 pub mod async_step;
+mod await_reaction;
 pub mod checked_dispatch;
 pub mod combinators;
 mod job_queue;
