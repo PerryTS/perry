@@ -459,6 +459,11 @@ impl<'a> Gen<'a> {
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
                 if foreign {
                     self.m.foreign_calls.insert(call);
+                    // What foreign code returns is its ⊤: it may be a
+                    // function foreign code made, so a call of ⊤ may run
+                    // foreign code, as when the extern itself is read as a
+                    // value (`extern_value`).
+                    self.m.foreign_fn_value = true;
                 }
                 if let Some(i) = rec {
                     self.call_sites_at[i].call = call;

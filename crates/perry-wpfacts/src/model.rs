@@ -3304,7 +3304,8 @@ pub struct Model {
     /// outside the program, `Module::extern_funcs`) that no all-primitive
     /// manifest describes (`Gen::native_extern`): foreign code.
     pub foreign_calls: crate::pts::FxHashSet<CallId>,
-    /// Such an extern is read as a value: any call of ⊤ may be its call.
+    /// Such an extern is read as a value, or called (its result may be a
+    /// function foreign code made): any call of ⊤ may be foreign code.
     pub foreign_fn_value: bool,
     /// The escape reason of a value handed to foreign code.
     pub foreign_reason: Option<u32>,
