@@ -888,7 +888,26 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     let own = !modeled && origin != TOP && !m.is_marker(origin) && !m.is_chain_proto(origin);
     if modeled || own {
         let key = if own { m.atom(crate::STAR_KEY) } else { key };
+        // One holder per (call, own, setter): the rules below read the
+        // holder's tokens as they come (ThisFrom edges from it, Accessor
+        // installs on each), and the call's key and arguments are the
+        // same for every receiver, so a receiver of the same call is one
+        // more token of that holder, not a copy of its rules. Generation in
+        // an inert body (D2) makes its own: its rules wait for the body's
+        // activation, and a receiver outside it must not wait with them.
+        #[cfg(test)]
+        let packet = m.packet_scope.is_some();
+        #[cfg(not(test))]
+        let packet = false;
+        let memo = !packet && !m.gen_inert(m.cur_fn);
+        if let Some(&holder) = m.annexb_holders.get(&(call, own, setter)).filter(|_| memo) {
+            m.add_tok(holder, origin);
+            return;
+        }
         let holder = m.node_l("annexb-holder");
+        if memo {
+            m.annexb_holders.insert((call, own, setter), holder);
+        }
         m.add_tok(holder, origin);
         if own {
             // The getter / setter runs with `this` = the receiver.

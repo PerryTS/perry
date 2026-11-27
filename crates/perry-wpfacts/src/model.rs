@@ -2919,6 +2919,10 @@ pub struct Model {
     /// A spread source node -> the one node holding its elements
     /// (`Model::spread_elems_of`).
     pub spread_elems: FxHashMap<NodeId, NodeId>,
+    /// An Annex B define call (`annexb_define`) -> its holder node per
+    /// (own receiver, setter): every receiver of the call that defines the
+    /// same way is a token of that one node.
+    pub annexb_holders: FxHashMap<(CallId, bool, bool), NodeId>,
     /// The rules attached to each node (`cons_untagged`): a node's rules
     /// are a set; the value is the rule's index in the node's list.
     pub cons_seen: crate::pts::FxHashMap<(NodeId, Cons), u32>,
