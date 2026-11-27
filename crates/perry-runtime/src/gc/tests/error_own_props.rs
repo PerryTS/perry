@@ -1,8 +1,5 @@
-//! Error side-table GC integration (2026-07-02 audit, GC deep set).
-//!
-//! Node diagnostics live in one record keyed by the movable ErrorHeader and
-//! follow its `ErrorSideTables` move/finalize hook. User-assigned properties
-//! live on `ObjectMeta.expando` and follow ordinary heap tracing.
+//! Node diagnostics and user-assigned properties are the Error's own
+//! properties on `ObjectMeta.expando`, and follow ordinary heap tracing.
 
 use super::super::*;
 use super::support::*;
@@ -43,41 +40,36 @@ fn test_error_code_survives_message_and_error_move() {
         after_message, before_message,
         "test premise: the message must move"
     );
+    let moved_error = after_error as *const crate::error::ErrorHeader;
     assert_eq!(
-        crate::node_submodules::error_code_for_error(
-            after_error as *const crate::error::ErrorHeader,
-        ),
+        crate::node_submodules::error_code_for_error(moved_error).as_deref(),
         Some("ERR_TEST_9530"),
         "the moved error must retain its registered Node code"
     );
-    let moved_error = after_error as *const crate::error::ErrorHeader;
+    let keys: Vec<String> = crate::node_submodules::error_user_props(after_error)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
     assert_eq!(
-        crate::node_submodules::error_syscall_for_error(moved_error),
-        Some("open")
-    );
-    assert_eq!(
-        crate::node_submodules::error_errno_for_error(moved_error),
-        Some(-2)
-    );
-    assert_eq!(
-        crate::node_submodules::error_path_for_error(moved_error).as_deref(),
-        Some("/missing/source")
+        keys,
+        ["errno", "code", "syscall", "path", "dest", "hostname"],
+        "Node's uvException order"
     );
     assert_eq!(
-        crate::node_submodules::error_dest_for_error(moved_error).as_deref(),
-        Some("/missing/dest")
+        crate::node_submodules::error_user_prop(after_error, "errno"),
+        Some(-2.0)
     );
-    assert_eq!(
-        crate::node_submodules::error_hostname_for_error(moved_error).as_deref(),
-        Some("missing.test")
-    );
-    assert!(
-        crate::node_submodules::error_code_for_error(
-            before_error as *const crate::error::ErrorHeader,
-        )
-        .is_none(),
-        "the stale pre-move owner key must be gone"
-    );
+    for (key, value) in [
+        ("syscall", "open"),
+        ("path", "/missing/source"),
+        ("dest", "/missing/dest"),
+        ("hostname", "missing.test"),
+    ] {
+        assert_eq!(
+            crate::node_submodules::error_own_string(moved_error, key).as_deref(),
+            Some(value)
+        );
+    }
 
     // Exercise the actual `err.code` property path, not only the table API.
     // Suppress new automatic collections after the explicit positive-control
@@ -100,8 +92,6 @@ fn test_error_code_survives_message_and_error_move() {
         frames.contains("    at "),
         "report lost its frames: {report:?}"
     );
-
-    crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(after_error);
 }
 
 /// A real ENOENT Error keeps its enumerable Node fields through relocation and
@@ -180,42 +170,6 @@ fn test_error_user_props_survive_copied_minor_move() {
     );
 }
 
-/// A DEAD error's side-table entries must be dropped by the copied-minor
-/// from-space finalize so a fresh error at the recycled address doesn't
-/// inherit them.
-#[test]
-fn test_dead_error_side_table_entries_cleared() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-
-    let message = crate::string::js_string_from_bytes(b"dead".as_ptr(), 4);
-    crate::node_submodules::register_error_code_pub(message, "ERR_DEAD_9530");
-    let err = crate::error::js_error_new_with_message(message) as usize;
-    crate::node_submodules::diagnostics::set_error_user_prop(
-        err,
-        "inherited",
-        f64::from_bits(crate::value::TAG_TRUE),
-    );
-    // Not rooted: dead at the first minor.
-    js_shadow_slot_set(0, 0);
-
-    let _ = gc_collect_minor();
-
-    assert!(
-        crate::node_submodules::error_code_for_error(err as *const crate::error::ErrorHeader,)
-            .is_none(),
-        "dead error's diagnostic record must be cleared, not left for a \
-         fresh error at the recycled address to inherit"
-    );
-    // User properties live in the error's ordinary metadata. Check a fresh
-    // error instead of dereferencing the dead error's unswept bytes.
-    let fresh = crate::error::js_error_new() as usize;
-    assert!(
-        crate::node_submodules::diagnostics::error_user_prop(fresh, "inherited").is_none(),
-        "dead error's user-prop entry must be cleared, not left for a \
-         fresh error at the recycled address to inherit"
-    );
-}
-
 /// An OBJECT-valued user prop must keep its referent alive across a
 /// copied-minor and must read back at the referent's moved address.
 #[test]
@@ -258,4 +212,70 @@ fn test_object_valued_user_prop_is_a_gc_root_and_rewrites() {
             "rewritten prop bits must point at the live moved object"
         );
     }
+}
+
+extern "C" fn moving_code_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let _ = gc_collect_minor();
+    let code = crate::string::js_string_from_bytes(b"ERR_TEST_REPORT".as_ptr(), 15);
+    f64::from_bits(string_bits(code as usize))
+}
+
+/// The uncaught report reads the error's code, an own-property lookup that
+/// can run user code and collect, before it reads the stack. A collection
+/// there must leave the report materialising the stack of the live error.
+#[test]
+fn uncaught_report_survives_a_collection_in_the_code_lookup() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = crate::gc::RuntimeHandleScope::new();
+
+    let message = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+    crate::node_submodules::register_error_code_pub(message, "ERR_TEST_REPORT");
+    let error = crate::error::js_error_new_with_message(message) as usize;
+    js_shadow_slot_set(0, error_bits(error));
+    let getter = scope.root_nanbox_f64(f64::from_bits(ptr_bits(crate::closure::js_closure_alloc(
+        crate::fn_info!(moving_code_getter, 0),
+        0,
+    ) as usize)));
+    let descriptor = scope.root_nanbox_f64(f64::from_bits(ptr_bits(
+        crate::object::js_object_alloc(0, 0) as usize,
+    )));
+    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+    crate::object::js_object_set_field_by_name(
+        (descriptor.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader,
+        get_key,
+        getter.get_nanbox_f64(),
+    );
+    let code_key = crate::string::js_string_from_bytes(b"code".as_ptr(), 4);
+    crate::object::js_object_define_property(
+        f64::from_bits(js_shadow_slot_get(0)),
+        f64::from_bits(string_bits(code_key as usize)),
+        descriptor.get_nanbox_f64(),
+    );
+
+    let before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let report = unsafe {
+        crate::exception::uncaught_native_error_report(before as *mut crate::error::ErrorHeader)
+    };
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        after, before,
+        "test premise: the getter must move the error"
+    );
+    assert!(
+        report.starts_with("Error [ERR_TEST_REPORT]: boom"),
+        "report: {report:?}"
+    );
+    assert!(
+        unsafe {
+            !(*(after as *const crate::error::ErrorHeader))
+                .stack
+                .is_null()
+        },
+        "the stack was materialised on the error's pre-collection address"
+    );
 }

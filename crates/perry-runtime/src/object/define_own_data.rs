@@ -77,6 +77,44 @@ pub(crate) unsafe fn define_own_data_from_shape(
     define_other(obj_value, key_value, value, record)
 }
 
+/// CreateDataProperty of a key `obj_value` does not hold as an own property,
+/// which the caller knows (a spread into a literal that held no key when the
+/// copy began, from a source whose key list names each key once): step 1,
+/// the creation through the learned key-add edge, without the own-key
+/// searches that answer a replacement. A creation the edge does not answer
+/// takes [`define_own_data_from_shape`], which asks every question.
+pub(crate) unsafe fn define_own_data_absent(
+    obj_value: f64,
+    key_value: f64,
+    value: f64,
+) -> Option<f64> {
+    let bits = obj_value.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || !crate::value::addr_class::is_above_handle_band(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        return None;
+    }
+    let (mut obj_value, mut value) = (obj_value, value);
+    if let Some(key) = super::store_key::interned_key_for_store(key_value) {
+        let obj = (bits & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let mut refreshed: Option<(f64, f64, f64)> = None;
+        if let Some(stored) = super::object_set_field_by_name_transition_chain_proven_value(
+            obj,
+            key,
+            value,
+            &mut refreshed,
+        ) {
+            return Some(stored);
+        }
+        if let Some((o, _, v)) = refreshed {
+            (obj_value, value) = (o, v);
+        }
+    }
+    define_own_data_from_shape(obj_value, key_value, value)
+}
+
 #[cold]
 #[inline(never)]
 #[optimize(size)]
