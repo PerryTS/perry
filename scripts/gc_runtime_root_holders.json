@@ -60,6 +60,24 @@
       "why": "Cell<u64> stores only minor-collection counts from note_cap_phase_reading and zero at start_cap_phase; no address or NaN-boxed value is stored."
     },
     {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_CLOCK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<FixedCostClock> holds only monotonic-clock nanosecond timestamps and durations (last_end_ns, begin_ns, drain_ns, returned_ns) written by the fixed_cost_note_* hooks and reset to START; no address, handle, JSValue or GC allocation enters any field."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_DIAL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<FixedCostDial> holds only retune_fixed_cost_scale's debounce state: parts-per-million shares, floor quarters (u8), reading counts, saved nanoseconds and Eden cap byte sizes in its FixedCostStep/FixedCostHold fields; no address, handle, JSValue or GC allocation enters any field."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_SCALE",
+      "verdict": "not_a_gc_pointer",
+      "why": "TriggerInput<u8> stores only the fixed-cost floor of the nursery-cap ladder in quarters (NURSERY_CAP_SCALE_MIN at start, moved by retune_fixed_cost_scale); a small integer, never an address or NaN-boxed value."
+    },
+    {
       "file": "crates/perry-runtime/src/object/global_this/async_generator_state.rs",
       "name": "BIRTH_SHAPE",
       "verdict": "not_a_gc_pointer",
