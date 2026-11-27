@@ -1172,6 +1172,8 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         "get [Symbol.species]",
         0,
     );
+    // A getter is a built-in non-constructor: no own `prototype` (ECMA-262 10.3).
+    super::super::native_module::set_builtin_closure_non_constructable(getter as usize);
     let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
     let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
     let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
