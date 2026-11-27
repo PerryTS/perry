@@ -20,6 +20,15 @@ Perry natively implements clients for MySQL, PostgreSQL, SQLite, MongoDB, and Re
 {{#include ../../examples/stdlib/database/snippets.ts:sqlite}}
 ```
 
+The CommonJS export of `better-sqlite3` is its database constructor. Its local
+binding does not need to be named `Database`:
+
+```js
+const Better = require("better-sqlite3");
+const db = new Better(":memory:");
+db.close();
+```
+
 ### better-sqlite3 statement reuse
 
 The stdlib better-sqlite3 provider uses the connection-owned rusqlite statement
