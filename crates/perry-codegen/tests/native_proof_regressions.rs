@@ -1639,21 +1639,30 @@ fn births_heap_object(ir: &str) -> bool {
 }
 
 /// Whether `symbol`'s address is materialised (`ptrtoint`) anywhere that could
-/// register it as a callable entry. The function-name metadata (the
-/// `__perry_function_name_descriptors` table and the `<sym>$info` records that
-/// name `$generic` / `$spec_*` clones for `Error.stack`) takes clone addresses
-/// by design: it holds them as names to resolve a return address, never as
-/// entries a caller can reach, so those lines do not count. Matching is exact
-/// (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
+/// register it as a callable entry. The function-name metadata (the `$info`
+/// constants that name `$generic` / `$spec_*` clones for `Error.stack`, and
+/// `symbol`'s own `$fnrec` record that lets the link keep it with its body)
+/// takes clone addresses by design: it holds them as names to resolve a return
+/// address, never as entries a caller can reach, so those lines do not count.
+/// Matching is exact (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
 fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
     let tokens = [
         format!("ptrtoint (ptr @{symbol} to"),
         format!("ptrtoint ptr @{symbol} to"),
     ];
-    ir.lines()
-        .filter(|line| {
-            !line.starts_with("@__perry_function_name_descriptors") && !line.contains("$info = ")
+    let own_record = format!("{symbol}$fnrec");
+    let defines_own_record = |line: &str| {
+        line.split_once(" = ").is_some_and(|(name, _)| {
+            let name = name.strip_prefix('@').unwrap_or(name);
+            let name = name
+                .strip_prefix("\"\\01l_")
+                .and_then(|quoted| quoted.strip_suffix('"'))
+                .unwrap_or(name);
+            name == own_record
         })
+    };
+    ir.lines()
+        .filter(|line| !line.contains("$info = ") && !defines_own_record(line))
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
 }
 
