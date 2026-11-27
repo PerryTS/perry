@@ -1,9 +1,12 @@
-//! Typed-ABI clone decisions: which top-level functions get a typed clone,
-//! and the native-reps record of every rejected one.
+//! Typed-ABI clone decisions: which top-level functions and closures get a
+//! typed clone, and the native-reps record of every rejected one.
 
 use perry_hir::Module as HirModule;
 
-use super::{split_regions, typed_abi};
+use super::{
+    split_regions, typed_abi, typed_f64_closure_name, typed_i1_closure_name,
+    typed_i32_closure_name, typed_string_closure_name, CrossModuleCtx,
+};
 
 /// The typed clone sets of a module's top-level functions, each field named
 /// for the local it binds.
@@ -173,5 +176,155 @@ pub(super) fn classify_typed_functions(
         typed_i1_functions,
         typed_string_functions,
         typed_i1_function_param_reps,
+    }
+}
+
+pub(super) fn classify_typed_closures(
+    cross_module: &mut CrossModuleCtx<'_>,
+    closures: &[(perry_hir::types::FuncId, perry_hir::Expr)],
+    typed_abi_local_types: &std::collections::HashMap<u32, perry_hir::types::Type>,
+    typed_clone_rejection_records: &mut Vec<crate::native_value::NativeRepRecord>,
+    module_prefix: &str,
+) {
+    cross_module.typed_f64_closures.clear();
+    cross_module.typed_i32_closures.clear();
+    cross_module.typed_i1_closures.clear();
+    cross_module.typed_string_closures.clear();
+    cross_module.typed_closure_capture_reps.clear();
+    cross_module.typed_i1_closure_param_reps.clear();
+    for (func_id, expr) in closures {
+        // A closure region is one body by design: no typed-ABI clone.
+        if cross_module.region_closures.contains(func_id) {
+            continue;
+        }
+        if let Some(captures) =
+            typed_abi::typed_f64_closure_capture_reps(expr, &typed_abi_local_types)
+        {
+            cross_module
+                .typed_closure_capture_reps
+                .insert(*func_id, captures.into_iter().map(|(_, rep)| rep).collect());
+        }
+        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
+            None => {
+                cross_module.typed_f64_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_f64_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_f64_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_f64_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
+            None => {
+                cross_module.typed_i1_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_i1_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i1_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_i1_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
+            None => {
+                cross_module.typed_i32_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_i32_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i32_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_i32_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_string_closure_rejection_reason_with_types(
+            expr,
+            &typed_abi_local_types,
+        ) {
+            None => {
+                cross_module.typed_string_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_string_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_string_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_string_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
     }
 }
