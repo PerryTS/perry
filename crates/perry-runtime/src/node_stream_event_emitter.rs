@@ -1567,28 +1567,28 @@ fn stream_event_names_array(stream: f64) -> *mut crate::array::ArrayHeader {
     match events_of(target.get_nanbox_f64()) {
         Some(events) if count > 0.0 => {
             let events = scope.root_nanbox_f64(events);
-            let keys = scope.root_nanbox_f64(crate::proxy::js_reflect_own_keys(
-                events.get_nanbox_f64(),
-            ));
+            let keys =
+                scope.root_nanbox_f64(crate::proxy::js_reflect_own_keys(events.get_nanbox_f64()));
             if !keeps_removed_keys(events.get_nanbox_f64()) {
                 return super::raw_ptr_from_value(keys.get_nanbox_f64())
                     as *mut crate::array::ArrayHeader;
             }
             // A removed listener leaves its key, `undefined`; it names no event.
-            let len = crate::array::js_array_length(
-                super::raw_ptr_from_value(keys.get_nanbox_f64()) as *const _,
-            );
-            let mut names = crate::array::js_array_alloc(len);
+            let keys_at = || super::raw_ptr_from_value(keys.get_nanbox_f64()) as *const _;
+            let len = crate::array::js_array_length(keys_at());
+            let names = scope.root_nanbox_f64(super::box_pointer(
+                crate::array::js_array_alloc(len) as *const u8,
+            ));
             for i in 0..len {
-                let key = crate::array::js_array_get_f64(
-                    super::raw_ptr_from_value(keys.get_nanbox_f64()) as *const _,
-                    i,
-                );
+                let key = crate::array::js_array_get_f64(keys_at(), i);
                 if !is_undefined(get_key(events.get_nanbox_f64(), key)) {
-                    names = crate::array::js_array_push_f64(names, key);
+                    let names_ptr = super::raw_ptr_from_value(names.get_nanbox_f64())
+                        as *mut crate::array::ArrayHeader;
+                    // The allocation reserved `len` slots, so the push never moves it.
+                    crate::array::js_array_push_f64(names_ptr, key);
                 }
             }
-            names
+            super::raw_ptr_from_value(names.get_nanbox_f64()) as *mut crate::array::ArrayHeader
         }
         _ => crate::array::js_array_alloc(0),
     }
