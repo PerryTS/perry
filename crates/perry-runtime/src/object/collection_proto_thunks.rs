@@ -126,7 +126,7 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                crate::fn_info!(#[realm("Map.prototype.size.<get>", effects = { returns(prim(num)) }, constructible = true)] export crate::object::collection_proto_thunks::map_proto_size_getter_thunk, 0; with_name("get size"), with_declared(0)),
+                crate::fn_info!(#[realm("Map.prototype.size.<get>", effects = { returns(prim(num)) })] export crate::object::collection_proto_thunks::map_proto_size_getter_thunk, 0; with_name("get size"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             );
             ipm(
                 proto_obj,
@@ -195,7 +195,7 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                crate::fn_info!(#[realm("Set.prototype.size.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::object::collection_proto_thunks::set_proto_size_getter_thunk, 0; with_name("get size"), with_declared(0)),
+                crate::fn_info!(#[realm("Set.prototype.size.<get>", effects = { returns(prim(num)) })] export crate::object::collection_proto_thunks::set_proto_size_getter_thunk, 0; with_name("get size"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             );
             let add_value = ipm(
                 proto_obj,

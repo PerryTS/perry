@@ -769,6 +769,7 @@ pub(crate) unsafe fn install_builtin_accessor(
             .apply(0),
     );
     ensure_key_in_keys_array_with_entry(proto, key_str, entry);
+    mark_builtin_accessor_functions_non_constructable(getter_bits, setter_bits);
     // The `.name` of the getter and of the setter (`"get " + key`) is static
     // data of their function records (`with_name`); nothing is named here.
     set_builtin_accessor_descriptor(
@@ -780,6 +781,34 @@ pub(crate) unsafe fn install_builtin_accessor(
         },
         BUILTIN_GETTER_ATTRS,
     );
+}
+
+/// The getter and setter of a built-in accessor are built-in functions that
+/// are not constructors (ECMA-262 10.3: only the functions a spec step names
+/// a constructor have `[[Construct]]` and an own `prototype`). Birth them in
+/// the non-constructor family, as `Object.prototype.__proto__`'s pair already
+/// is, so `Reflect.ownKeys(getter)` and `getOwnPropertyDescriptor` agree.
+fn mark_builtin_accessor_functions_non_constructable(getter_bits: u64, setter_bits: u64) {
+    for bits in [getter_bits, setter_bits] {
+        if bits == 0 {
+            continue;
+        }
+        let value = crate::value::JSValue::from_bits(bits);
+        if !value.is_pointer() {
+            continue;
+        }
+        let ptr = value.as_pointer::<u8>() as usize;
+        // A body whose record carries FN_NON_CONSTRUCTOR already says so for
+        // every closure of it (the realm declares it that way); only a shared
+        // body without the bit needs the per-closure mark.
+        if crate::closure::is_closure_ptr(ptr)
+            && !crate::closure::closure_body_is_non_constructor(
+                ptr as *const crate::closure::ClosureHeader,
+            )
+        {
+            super::super::native_module::set_builtin_closure_non_constructable(ptr);
+        }
+    }
 }
 
 /// Install a built-in accessor as an OWN property of a freshly allocated
@@ -803,6 +832,7 @@ pub(crate) unsafe fn install_own_builtin_accessor(
             .apply(0),
     );
     ensure_key_in_keys_array_with_entry(obj, key_str, entry);
+    mark_builtin_accessor_functions_non_constructable(getter_bits, setter_bits);
     set_builtin_accessor_descriptor(
         obj as usize,
         key.to_string(),

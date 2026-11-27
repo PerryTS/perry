@@ -78,6 +78,15 @@ pub(crate) extern "C" fn map_constructor_call_thunk(
     super::super::object_ops::throw_object_type_error(b"Constructor Map requires 'new'")
 }
 
+// ECMA-262 28.2.1.1 step 1: `Proxy(...)` without `new` throws a TypeError.
+pub(crate) extern "C" fn proxy_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    super::super::object_ops::throw_object_type_error(b"Constructor Proxy requires 'new'")
+}
+
 pub(crate) extern "C" fn set_constructor_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,

@@ -279,7 +279,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         ("asyncResource", 2),
     ] {
         let closure = js_closure_alloc(
-            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(prim(num)) }; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(fresh(node:async_hooks.AsyncResource.prototype)) }; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(prim(num)) }; })] export crate::node_stream::dispatch::ns_ee_async_resource_getter, 0; with_declared(0)),
+            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(prim(num)) }; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(fresh(node:async_hooks.AsyncResource.prototype)) }; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property], effects = { returns(prim(num)) }; })] export crate::node_stream::dispatch::ns_ee_async_resource_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             2,
         );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);

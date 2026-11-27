@@ -45,6 +45,7 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 "named_serial" => "named_serial",
                 "instance" => "instance_identity",
                 "prototype_callable" => "prototype_callable",
+                "no_prototype" => "no_prototype",
                 "length" => continue,
                 // When the runtime births the family (setup or first ask),
                 // not what it declares: no manifest fact.
@@ -58,7 +59,7 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
                 "statics" => continue,
                 other => return Err(format!("unknown constructor family field {other}")),
             };
-            let value = if field == "prototype_callable" {
+            let value = if field == "prototype_callable" || field == "no_prototype" {
                 match info::text(&clause[1..]).as_str() {
                     "true" => Value::Bool(true),
                     "false" => Value::Bool(false),

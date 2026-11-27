@@ -26,7 +26,7 @@ extern "C" fn zlib_closed_getter(
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name), effects = { returns(prim(bool)) })] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name), effects = { returns(prim(bool)) })] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     ));
     getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, realm_zlib_closed_get_name!(name)));
@@ -1130,12 +1130,12 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         (
             "defaultMaxListeners",
             10.0,
-            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_name("set defaultMaxListeners"), with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_name("set defaultMaxListeners"), with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         ),
         (
             "captureRejections",
             f64::from_bits(crate::value::TAG_FALSE),
-            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_name("set captureRejections"), with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_name("set captureRejections"), with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         ),
     ] {
         // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists

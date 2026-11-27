@@ -2736,7 +2736,6 @@ native	Proxy	revocable	Proxy.revocable
 native	Proxy	toLocaleString	Object.prototype.toLocaleString
 native	Proxy	toString	Function.prototype.toString
 native	Proxy	valueOf	Object.prototype.valueOf
-native	Proxy.prototype	constructor	Proxy
 native	RangeError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	RangeError	__defineGetter__	Object.prototype.__defineGetter__
 native	RangeError	__defineSetter__	Object.prototype.__defineSetter__
@@ -10635,7 +10634,6 @@ ns	Promise	try
 ns	Promise	withResolvers
 ns	Proxy	length
 ns	Proxy	name
-ns	Proxy	prototype
 ns	Proxy	revocable
 ns	RangeError	length
 ns	RangeError	name

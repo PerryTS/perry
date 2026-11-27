@@ -1021,7 +1021,7 @@ pub extern "C" fn js_generator_attach_closure_prototype(
             async_iterator_proto,
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]")] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         );
         let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
         super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
