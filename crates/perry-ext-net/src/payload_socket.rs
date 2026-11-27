@@ -23,14 +23,45 @@ pub(crate) fn is_callback(value: f64) -> bool {
     unsafe { js_value_is_closure(value.to_bits() as i64) != 0 }
 }
 
+/// The `Error` a socket emits: `.code`, plus `.errno` and `.syscall` when the
+/// message has libuv's `"<syscall> <CODE>"` shape, in Node's property order.
 pub(crate) fn error(code: &str, message: &str) -> f64 {
     let scope = TransientRootScope::enter();
-    // SAFETY: Error allocation runs on this agent with no payload borrow; its result is rooted
-    // before the code string is allocated.
-    let value = scope.root_nanbox(unsafe { crate::build_error_object(message) });
-    let code = events::string(code);
-    p::own_set(value.get(), "code", code);
-    value.get()
+    let value = perry_ffi::error_value_with_code(message, "", perry_ffi::ErrorKind::Error);
+    let error = scope.root_nanbox(f64::from_bits(value.bits()));
+    let libuv = libuv_message_parts(message);
+    // Looked up in the runtime's table so `code` and `errno` cannot disagree
+    // across platforms; Node leaves `errno` off a code libuv does not know.
+    if let Some(errno) = libuv
+        .map(|(_, code)| tl::errno_for_code(code))
+        .filter(|&e| e != 0)
+    {
+        p::own_set(error.get(), "errno", f64::from(errno));
+    }
+    p::own_set(error.get(), "code", events::string(code));
+    if let Some((syscall, _)) = libuv {
+        p::own_set(error.get(), "syscall", events::string(syscall));
+    }
+    error.get()
+}
+
+/// Split libuv's socket-error message shape, `"<syscall> <CODE>"`, into its
+/// two halves. Parsing the message keeps it the one source of truth for
+/// `.syscall` and `.errno` instead of threading them through every event.
+fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
+    let mut parts = msg.split(' ');
+    let syscall = parts.next()?;
+    let code = parts.next()?;
+    let is_code = code.len() >= 2
+        && code.starts_with('E')
+        && code
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    let is_syscall = !syscall.is_empty()
+        && syscall
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    (is_code && is_syscall).then_some((syscall, code))
 }
 
 pub(crate) fn link(owner: f64) -> OwnerLink {
@@ -761,15 +792,17 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     if p::socket_link(wrapper.get()).is_ok() {
         p::own_set(close_record.get(), "tlsWrapper", wrapper.get());
     }
-    let had_handle = own != socket
-        || parts.is_some()
-        // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
-        // and field/core access ends before allocation or JS.
-        || unsafe {
-            p::socket_ptr(socket)
-                .ok()
-                .is_some_and(|payload| (*payload).ext.connecting)
-        };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+    // and field/core access ends before allocation or JS.
+    let (connecting, submitted) = unsafe {
+        p::socket_ptr(socket)
+            .ok()
+            .map_or((false, false), |payload| {
+                let fields = &(*payload).ext;
+                (fields.connecting, fields.queued > fields.cork_bytes.len())
+            })
+    };
+    let had_handle = own != socket || parts.is_some() || connecting;
     p::own_set(
         close_record.get(),
         "hadHandle",
@@ -818,13 +851,20 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     if own != socket {
         cache_before_release(parent.get(), socket);
     }
+    // Data handed to the transport fails every pending callback as Node's
+    // handle does: ERR_SOCKET_CLOSED_BEFORE_CONNECTION while connecting,
+    // ECANCELED once open. Otherwise each callback gets its own stream error.
     let callback_error = if had_error {
         error_value.get()
-    } else {
+    } else if submitted && connecting {
         error(
-            "ERR_STREAM_DESTROYED",
-            "Cannot call write after a stream was destroyed",
+            "ERR_SOCKET_CLOSED_BEFORE_CONNECTION",
+            "Socket closed before the connection was established",
         )
+    } else if submitted {
+        super::payload_io::socket_error_value("write", "ECANCELED", None)
+    } else {
+        p::undefined()
     };
     cancel_callbacks(owner.get(), state.get(), callback_error);
     // Logical failure follows pending callbacks, independently of the native
@@ -993,8 +1033,20 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
     let callbacks = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
-    let error = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
+    let failure = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
     let resource = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 3));
+    // An undefined failure is the stream's own destroyed error, named for the
+    // call each callback belongs to.
+    let failure_for = |end: bool| {
+        if !JsValue::from_bits(failure.get().to_bits()).is_undefined() {
+            return failure.get();
+        }
+        let call = if end { "end" } else { "write" };
+        error(
+            "ERR_STREAM_DESTROYED",
+            &format!("Cannot call {call} after a stream was destroyed"),
+        )
+    };
     // End callbacks use their actual dispatch array as `this`, as Node does.
     // Move them out of the detached queue entries, leaving only their indices;
     // the array below is the invocation source, not a receiver-only copy.
@@ -1035,7 +1087,7 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
             events::call(
                 callback.get(),
                 JsThis::from_f64(p::boxed_addr(end_callbacks.get())),
-                &[error.get()],
+                &[failure_for(true)],
             );
         } else {
             let callback = scope.root_nanbox(f64::from_bits(
@@ -1045,7 +1097,7 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
                 resource.get(),
                 callback.get(),
                 JsThis::UNDEFINED,
-                &[error.get()],
+                &[failure_for(false)],
             );
         }
     }

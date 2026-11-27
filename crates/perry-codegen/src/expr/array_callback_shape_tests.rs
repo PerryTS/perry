@@ -78,6 +78,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
     }
 
     let callback = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: CLOSURE_ID,
         params: callback_params,
@@ -193,6 +194,7 @@ fn callback_source_array_alias_keeps_the_shape_guard() {
 
 fn module_with_some_callback(captures_this: bool) -> Module {
     let callback = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: CLOSURE_ID,
         params: vec![param(ELEMENT_ID, "row", Type::Named("Row".to_string()))],

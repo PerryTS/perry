@@ -191,7 +191,7 @@ pub unsafe extern "C" fn js_static_this_resolve_class(class_id: i32, slot: *mut 
 }
 
 /// OrdinaryCallBindThis for a non-strict body: `undefined`/`null` become
-/// `globalThis`, a boolean/string/number its wrapper object; objects and
+/// `globalThis`, a boolean/string/number/BigInt its wrapper object; objects and
 /// class refs are unchanged. Emitted at the entry of a sloppy body that reads
 /// its receiver (the `this` parameter, `perry_abi::JS_BODY_THIS_PARAM`) —
 /// only on the non-object path. Can allocate: a GC safepoint.
@@ -206,6 +206,9 @@ pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
     }
     if jv.is_any_string() {
         return crate::builtins::js_boxed_string_new(value, 1);
+    }
+    if jv.is_bigint() {
+        return crate::builtins::js_boxed_bigint_new(value);
     }
     // #5515: a class reference is an INT32-tagged class id, but it is
     // conceptually the class constructor OBJECT, not a primitive number.

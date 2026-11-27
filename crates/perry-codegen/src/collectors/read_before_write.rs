@@ -1163,6 +1163,7 @@ mod tests {
 
     fn closure(func_id: u32, captures: Vec<u32>, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params: Vec::new(),

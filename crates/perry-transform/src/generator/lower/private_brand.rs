@@ -269,6 +269,7 @@ mod tests {
 
     fn closure(is_arrow: bool, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 40,
             params: vec![],

@@ -291,12 +291,18 @@ unsafe fn structural(source: f64, tail: u32) -> Option<f64> {
     let inline = record.live_inline_slot_count();
     let table = overflow::table(src);
     if record.spread_same_layout() {
-        // Layout keys past the inline slots live in the receiver's spill,
-        // which a structural copy does not carry: the result, born on the
-        // same layout word, would read those keys from its own (empty)
-        // spill. r2b_order: 9 layout keys, 2 inline slots.
+        // Layout keys past the inline slots live in the receiver's spill:
+        // the result, born on the same layout word, reads them from its own
+        // spill, so it gets a copy of the source's spill words (r2b_order: 9
+        // layout keys, 2 inline slots). A table's slot-referencing entries
+        // may name spill positions too: that source takes the generic copy.
         if count > inline {
-            return None;
+            if !table.is_null()
+                || !super::spill::spill_positions_present(src, inline as usize, count as usize)
+            {
+                return None;
+            }
+            return Some(same_layout_spilled(src, id, inline, count, tail));
         }
         let copied = if table.is_null() {
             inline
@@ -342,6 +348,31 @@ unsafe fn same_layout(
     if !table.is_null() {
         overflow::clone_plain_into(object, table);
     }
+    crate::value::js_nanbox_pointer(object as i64)
+}
+
+/// [`same_layout`] for a source whose layout keys `inline..count` live in
+/// its spill: the result's inline run is copied the same way and its own
+/// spill holds a copy of the source's spill words, each stored with the
+/// spill's layout note and write barrier. No collection runs mid-copy.
+#[inline(never)]
+unsafe fn same_layout_spilled(
+    src: *const ObjectHeader,
+    id: u32,
+    inline: u32,
+    count: u32,
+    tail: u32,
+) -> f64 {
+    let _suppress = crate::gc::GcSuppressScope::new();
+    let width = birth_width(inline, tail);
+    let raw =
+        crate::arena::arena_alloc_gc(meta_form_alloc_bytes(width), 8, crate::gc::GC_TYPE_OBJECT);
+    let object = finish_header(raw.cast(), LayoutWord(id));
+    for slot in 0..inline as usize {
+        copy_value(object, slot, *fields(src).add(slot));
+    }
+    initialize_slack(object, inline as usize, width);
+    super::spill::spill_copy_into_fresh(object, src, inline as usize, count as usize);
     crate::value::js_nanbox_pointer(object as i64)
 }
 

@@ -352,6 +352,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: STAGE_FUNC_BASE + i,
                 params: Vec::new(),

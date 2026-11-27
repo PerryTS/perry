@@ -1,0 +1,1 @@
+`import.meta.resolve(specifier, parent)` with a `file:` URL parent no longer throws `The "parent" argument must be of type string` in a program that does not otherwise use the `url` module: the runtime installs the URL decoder before reading the parent.

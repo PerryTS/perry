@@ -1,4 +1,7 @@
 use super::*;
+use crate::lower_types::{
+    extract_param_type_with_ctx, extract_ts_type_with_ctx, extract_type_params,
+};
 
 fn function_has_use_strict(func: &ast::Function) -> bool {
     let Some(block) = func.body.as_ref() else {
@@ -78,6 +81,14 @@ pub(super) fn lower_nested_fn_decl(
     };
     ctx.record_local_source_span(local_id, fn_decl.ident.span);
 
+    let type_params = fn_decl
+        .function
+        .type_params
+        .as_ref()
+        .map(|tp| extract_type_params(tp))
+        .unwrap_or_default();
+    ctx.enter_type_param_scope(&type_params);
+
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -95,14 +106,15 @@ pub(super) fn lower_nested_fn_decl(
             continue;
         }
         let is_rest = is_rest_param(&param.pat);
-        let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
+        let param_ty = extract_param_type_with_ctx(&param.pat, Some(ctx));
+        let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
-            ty: Type::Any,
+            ty: param_ty,
             default: None,
             decorators: Vec::new(),
             is_rest,
@@ -225,8 +237,16 @@ pub(super) fn lower_nested_fn_decl(
         .split_off(class_expr_capture_mark);
     crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
+    let return_type = fn_decl
+        .function
+        .return_type
+        .as_ref()
+        .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
+        .unwrap_or(Type::Any);
+
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
+    ctx.exit_type_param_scope();
 
     // Detect captured variables
     let mut all_refs = Vec::new();
@@ -316,7 +336,8 @@ pub(super) fn lower_nested_fn_decl(
         byte_offset: fn_decl.function.span.lo.0,
         func_id,
         params,
-        return_type: Type::Any,
+        type_params,
+        return_type,
         body,
         captures,
         mutable_captures,
@@ -352,3 +373,7 @@ pub(super) fn lower_nested_fn_decl(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "nested_fn_decl_tests.rs"]
+mod tests;

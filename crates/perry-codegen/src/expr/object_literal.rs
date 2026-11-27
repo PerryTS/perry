@@ -537,6 +537,7 @@ mod by_name_method_closure_tests {
                 body.insert(0, Stmt::Expr(Expr::LocalGet(captures[0])));
             }
             Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id,
                 params: vec![Param {
