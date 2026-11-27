@@ -48,7 +48,7 @@ crates/perry-transform/src/inline/call_inliner.rs	2146
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
 crates/perry-stdlib/src/streams.rs	2171
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
-crates/perry-runtime/src/gc/policy.rs	2892
+crates/perry-runtime/src/gc/policy.rs	2877
 # Shape registry table and publication invariants require a coordinated split.
 crates/perry-runtime/src/object/shapes.rs	5642
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
