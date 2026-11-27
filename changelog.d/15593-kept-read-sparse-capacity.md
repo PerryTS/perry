@@ -1,0 +1,1 @@
+An in-bounds element read of a holey Array keeps its capacity test. A fresh `new Array(k)` longer than 1,000,000 has length `k` over an empty store, and a loop over it no longer reads past the allocation and crashes.
