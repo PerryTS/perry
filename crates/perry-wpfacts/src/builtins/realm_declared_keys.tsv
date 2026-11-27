@@ -7,6 +7,22 @@ accessor	%Global%	crypto	crypto.<get>
 accessor	%Global%	localStorage	localStorage.<get>	localStorage.<set>
 accessor	%Global%	navigator	navigator.<get>
 accessor	%Global%	sessionStorage	sessionStorage.<get>	sessionStorage.<set>
+accessor	%ReadableStatePrototype%	autoDestroy	%ReadableStatePrototype%.autoDestroy.<get>	%ReadableStatePrototype%.autoDestroy.<set>
+accessor	%ReadableStatePrototype%	closeEmitted	%ReadableStatePrototype%.closeEmitted.<get>	%ReadableStatePrototype%.closeEmitted.<set>
+accessor	%ReadableStatePrototype%	closed	%ReadableStatePrototype%.closed.<get>	%ReadableStatePrototype%.closed.<set>
+accessor	%ReadableStatePrototype%	dataEmitted	%ReadableStatePrototype%.dataEmitted.<get>	%ReadableStatePrototype%.dataEmitted.<set>
+accessor	%ReadableStatePrototype%	destroyed	%ReadableStatePrototype%.destroyed.<get>	%ReadableStatePrototype%.destroyed.<set>
+accessor	%ReadableStatePrototype%	emitClose	%ReadableStatePrototype%.emitClose.<get>	%ReadableStatePrototype%.emitClose.<set>
+accessor	%ReadableStatePrototype%	encoding	%ReadableStatePrototype%.encoding.<get>	%ReadableStatePrototype%.encoding.<set>
+accessor	%ReadableStatePrototype%	endEmitted	%ReadableStatePrototype%.endEmitted.<get>	%ReadableStatePrototype%.endEmitted.<set>
+accessor	%ReadableStatePrototype%	ended	%ReadableStatePrototype%.ended.<get>	%ReadableStatePrototype%.ended.<set>
+accessor	%ReadableStatePrototype%	errorEmitted	%ReadableStatePrototype%.errorEmitted.<get>	%ReadableStatePrototype%.errorEmitted.<set>
+accessor	%ReadableStatePrototype%	errored	%ReadableStatePrototype%.errored.<get>	%ReadableStatePrototype%.errored.<set>
+accessor	%ReadableStatePrototype%	flowing	%ReadableStatePrototype%.flowing.<get>	%ReadableStatePrototype%.flowing.<set>
+accessor	%ReadableStatePrototype%	objectMode	%ReadableStatePrototype%.objectMode.<get>	%ReadableStatePrototype%.objectMode.<set>
+accessor	%ReadableStatePrototype%	pipesCount	%ReadableStatePrototype%.pipesCount.<get>	%ReadableStatePrototype%.pipesCount.<set>
+accessor	%ReadableStatePrototype%	readableListening	%ReadableStatePrototype%.readableListening.<get>	%ReadableStatePrototype%.readableListening.<set>
+accessor	%ReadableStatePrototype%	resumeScheduled	%ReadableStatePrototype%.resumeScheduled.<get>	%ReadableStatePrototype%.resumeScheduled.<set>
 accessor	%TypedArray%	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	%TypedArray%	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	%TypedArray%	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
@@ -14,6 +30,22 @@ accessor	%TypedArray%.prototype	buffer	%TypedArray%.prototype.buffer.<get>
 accessor	%TypedArray%.prototype	byteLength	%TypedArray%.prototype.byteLength.<get>
 accessor	%TypedArray%.prototype	byteOffset	%TypedArray%.prototype.byteOffset.<get>
 accessor	%TypedArray%.prototype	length	%TypedArray%.prototype.length.<get>
+accessor	%WritableStatePrototype%	autoDestroy	%WritableStatePrototype%.autoDestroy.<get>	%WritableStatePrototype%.autoDestroy.<set>
+accessor	%WritableStatePrototype%	closeEmitted	%WritableStatePrototype%.closeEmitted.<get>	%WritableStatePrototype%.closeEmitted.<set>
+accessor	%WritableStatePrototype%	closed	%WritableStatePrototype%.closed.<get>	%WritableStatePrototype%.closed.<set>
+accessor	%WritableStatePrototype%	decodeStrings	%WritableStatePrototype%.decodeStrings.<get>	%WritableStatePrototype%.decodeStrings.<set>
+accessor	%WritableStatePrototype%	defaultEncoding	%WritableStatePrototype%.defaultEncoding.<get>	%WritableStatePrototype%.defaultEncoding.<set>
+accessor	%WritableStatePrototype%	destroyed	%WritableStatePrototype%.destroyed.<get>	%WritableStatePrototype%.destroyed.<set>
+accessor	%WritableStatePrototype%	emitClose	%WritableStatePrototype%.emitClose.<get>	%WritableStatePrototype%.emitClose.<set>
+accessor	%WritableStatePrototype%	ended	%WritableStatePrototype%.ended.<get>	%WritableStatePrototype%.ended.<set>
+accessor	%WritableStatePrototype%	ending	%WritableStatePrototype%.ending.<get>	%WritableStatePrototype%.ending.<set>
+accessor	%WritableStatePrototype%	errorEmitted	%WritableStatePrototype%.errorEmitted.<get>	%WritableStatePrototype%.errorEmitted.<set>
+accessor	%WritableStatePrototype%	errored	%WritableStatePrototype%.errored.<get>	%WritableStatePrototype%.errored.<set>
+accessor	%WritableStatePrototype%	finalCalled	%WritableStatePrototype%.finalCalled.<get>	%WritableStatePrototype%.finalCalled.<set>
+accessor	%WritableStatePrototype%	finished	%WritableStatePrototype%.finished.<get>	%WritableStatePrototype%.finished.<set>
+accessor	%WritableStatePrototype%	needDrain	%WritableStatePrototype%.needDrain.<get>	%WritableStatePrototype%.needDrain.<set>
+accessor	%WritableStatePrototype%	objectMode	%WritableStatePrototype%.objectMode.<get>	%WritableStatePrototype%.objectMode.<set>
+accessor	%WritableStatePrototype%	writable	%WritableStatePrototype%.writable.<get>	%WritableStatePrototype%.writable.<set>
 accessor	AbortController	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	AbortController	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	AbortController	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
@@ -577,6 +609,8 @@ accessor	node:buffer.default.constants	__proto__	Object.prototype.__proto__.<get
 accessor	node:child_process.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:cluster.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:cluster.default._events	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:cluster.settings	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	node:cluster.workers	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:console.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:constants.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:crypto.Certificate	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
@@ -2702,7 +2736,6 @@ native	Proxy	revocable	Proxy.revocable
 native	Proxy	toLocaleString	Object.prototype.toLocaleString
 native	Proxy	toString	Function.prototype.toString
 native	Proxy	valueOf	Object.prototype.valueOf
-native	Proxy.prototype	constructor	Proxy
 native	RangeError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	RangeError	__defineGetter__	Object.prototype.__defineGetter__
 native	RangeError	__defineSetter__	Object.prototype.__defineSetter__
@@ -4047,6 +4080,28 @@ native	node:cluster.default._events	propertyIsEnumerable	Object.prototype.proper
 native	node:cluster.default._events	toLocaleString	Object.prototype.toLocaleString
 native	node:cluster.default._events	toString	Object.prototype.toString
 native	node:cluster.default._events	valueOf	Object.prototype.valueOf
+native	node:cluster.settings	__defineGetter__	Object.prototype.__defineGetter__
+native	node:cluster.settings	__defineSetter__	Object.prototype.__defineSetter__
+native	node:cluster.settings	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:cluster.settings	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:cluster.settings	constructor	Object
+native	node:cluster.settings	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:cluster.settings	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:cluster.settings	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:cluster.settings	toLocaleString	Object.prototype.toLocaleString
+native	node:cluster.settings	toString	Object.prototype.toString
+native	node:cluster.settings	valueOf	Object.prototype.valueOf
+native	node:cluster.workers	__defineGetter__	Object.prototype.__defineGetter__
+native	node:cluster.workers	__defineSetter__	Object.prototype.__defineSetter__
+native	node:cluster.workers	__lookupGetter__	Object.prototype.__lookupGetter__
+native	node:cluster.workers	__lookupSetter__	Object.prototype.__lookupSetter__
+native	node:cluster.workers	constructor	Object
+native	node:cluster.workers	hasOwnProperty	Object.prototype.hasOwnProperty
+native	node:cluster.workers	isPrototypeOf	Object.prototype.isPrototypeOf
+native	node:cluster.workers	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
+native	node:cluster.workers	toLocaleString	Object.prototype.toLocaleString
+native	node:cluster.workers	toString	Object.prototype.toString
+native	node:cluster.workers	valueOf	Object.prototype.valueOf
 native	node:console	Console	console.Console
 native	node:console	assert	console.assert
 native	node:console	clear	console.clear
@@ -10579,7 +10634,6 @@ ns	Promise	try
 ns	Promise	withResolvers
 ns	Proxy	length
 ns	Proxy	name
-ns	Proxy	prototype
 ns	Proxy	revocable
 ns	RangeError	length
 ns	RangeError	name

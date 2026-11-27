@@ -31,3 +31,29 @@ for (const [n, f] of fns) {
   if (typeof f !== "function") { console.log(n, "NOT FUNCTION", typeof f); continue; }
   console.log(n, Reflect.ownKeys(f).includes("prototype"), Object.getOwnPropertyDescriptor(f, "prototype") !== undefined, Object.getOwnPropertyNames(f).includes("prototype"));
 }
+// RTKEYS2: the other install paths of built-in getters, symbol-keyed methods, and Proxy.
+const getter = (o: any, k: any) => (Object.getOwnPropertyDescriptor(o, k) as any).get;
+const more: [string, any][] = [
+  ["Map.prototype.size", getter(Map.prototype, "size")],
+  ["Set.prototype.size", getter(Set.prototype, "size")],
+  ["ArrayBuffer.prototype.byteLength", getter(ArrayBuffer.prototype, "byteLength")],
+  ["DataView.prototype.buffer", getter(DataView.prototype, "buffer")],
+  ["%TypedArray%.prototype.length", getter(Object.getPrototypeOf(Uint8Array.prototype), "length")],
+  ["%TypedArray%.prototype[@@toStringTag]", getter(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)],
+  ["RegExp.prototype.flags", getter(RegExp.prototype, "flags")],
+  ["RegExp.prototype.global", getter(RegExp.prototype, "global")],
+  ["RegExp.prototype[@@match]", (RegExp.prototype as any)[Symbol.match]],
+  ["RegExp.prototype[@@replace]", (RegExp.prototype as any)[Symbol.replace]],
+  ["Function.prototype[@@hasInstance]", (Function.prototype as any)[Symbol.hasInstance]],
+  ["Error.captureStackTrace", (Error as any).captureStackTrace],
+  ["Proxy", Proxy],
+  ["Proxy.revocable", Proxy.revocable],
+];
+for (const [n, f] of more) {
+  if (typeof f !== "function") { console.log(n, "NOT FUNCTION", typeof f); continue; }
+  console.log(n, Reflect.ownKeys(f).includes("prototype"), Object.getOwnPropertyDescriptor(f, "prototype") !== undefined, Object.getOwnPropertyNames(f).includes("prototype"));
+}
+console.log("Proxy keys", JSON.stringify(Reflect.ownKeys(Proxy).map(String)), "prototype" in Proxy, typeof (Proxy as any).prototype);
+try { const p: any = new Proxy({ x: 1 }, {}); console.log("new Proxy", p.x); } catch (e: any) { console.log("new Proxy threw"); }
+try { (Proxy as any)({}, {}); console.log("Proxy() did not throw"); } catch (e: any) { console.log("Proxy() threw TypeError", e instanceof TypeError); }
+try { const P: any = Proxy; class X extends P {} console.log("extends Proxy did not throw", typeof X); } catch (e: any) { console.log("extends Proxy threw TypeError", e instanceof TypeError); }
