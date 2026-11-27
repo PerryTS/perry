@@ -44,7 +44,7 @@ crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
 crates/perry-transform/src/inline/call_inliner.rs	2146
 # Shape registry table and publication invariants require a coordinated split.
-crates/perry-runtime/src/object/shapes.rs	5642
+crates/perry-runtime/src/object/shapes.rs	5645
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.
