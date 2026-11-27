@@ -156,7 +156,12 @@ fn analyze_loop(
         }
     }
 
-    classify_block(loop_body(loop_stmt), &block_scoped, out);
+    classify_block(
+        loop_body(loop_stmt),
+        &block_scoped,
+        suspends.then_some(&inside),
+        out,
+    );
 }
 
 /// Classify the `Stmt::Let`s of one block inside a loop.
@@ -168,20 +173,40 @@ fn analyze_loop(
 fn classify_block(
     block: &[Stmt],
     block_scoped: &dyn Fn(LocalId) -> bool,
+    suspending_loop_refs: Option<&HashMap<LocalId, usize>>,
     out: &mut HashSet<LocalId>,
 ) {
+    let block_refs = suspending_loop_refs.map(|_| {
+        let mut refs = HashMap::new();
+        for stmt in block {
+            count_local_refs_stmt(stmt, &mut refs);
+        }
+        refs
+    });
     for (i, stmt) in block.iter().enumerate() {
         if let Stmt::Let { id, init, .. } = stmt {
             // A `let __tmp = yield …;` IS the state split: the linearizer
             // assigns it in the resumed state, so it must stay a boxed
             // cross-state local.
             let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
-            if !splits_state && block_scoped(*id) && !used_after_suspend(*id, &block[i + 1..]) {
+            // Lowered destructuring can declare a binding inside an iterator
+            // cleanup try and read it in the enclosing loop after an await.
+            // The suffix of this block cannot prove that outside use safe.
+            let used_outside_block = suspending_loop_refs
+                .zip(block_refs.as_ref())
+                .is_some_and(|(loop_refs, block_refs)| loop_refs.get(id) != block_refs.get(id));
+            if !splits_state
+                && block_scoped(*id)
+                && !used_outside_block
+                && !used_after_suspend(*id, &block[i + 1..])
+            {
                 out.insert(*id);
             }
         }
         if !is_loop(stmt) {
-            each_child_stmt_list(stmt, &mut |list| classify_block(list, block_scoped, out));
+            each_child_stmt_list(stmt, &mut |list| {
+                classify_block(list, block_scoped, suspending_loop_refs, out);
+            });
         }
     }
 }
