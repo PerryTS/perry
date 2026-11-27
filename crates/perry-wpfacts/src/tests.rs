@@ -277,6 +277,7 @@ mod protocol_touch_births;
 mod proxy_get_key_instance;
 mod proxy_late_site;
 mod px1;
+mod pxtrap;
 mod quiet_sites;
 mod quiet_strings;
 mod r6defprop;
