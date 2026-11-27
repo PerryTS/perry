@@ -3,7 +3,7 @@
 //! `ToPrimitive` (`[Symbol.toPrimitive]`) dispatch.
 
 use super::*;
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object, in property creation order.
@@ -441,10 +441,11 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     val_h.get_nanbox_f64()
 }
 
-/// `ToPrimitive(value, hint)` — if `value` is an object with a
-/// `[Symbol.toPrimitive]` method registered in the symbol side-table, call
-/// it with the appropriate hint string ("number" / "string" / "default")
-/// and return the primitive result. Otherwise returns `value` unchanged.
+/// `ToPrimitive(value, hint)` step 1.b (§7.1.1) — if `value` is an object with
+/// a `[Symbol.toPrimitive]` method, call it with the hint string ("number" /
+/// "string" / "default") and return the primitive result; a method that is
+/// not callable, or an object result, throws a TypeError. Without a method,
+/// returns `value` unchanged and the caller runs OrdinaryToPrimitive.
 ///
 /// `hint`: 0 = default, 1 = number, 2 = string.
 ///
@@ -509,84 +510,14 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     if crate::date::is_date_value(value) {
         return value;
     }
-    // Look up obj[Symbol.toPrimitive].
-    let wk_ptr = well_known_symbol("toPrimitive");
-    let sym_f64 = f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
-    let current_value = value_handle.get_nanbox_f64();
-    let method = js_object_get_symbol_property(current_value, sym_f64);
-    if method.to_bits() == TAG_UNDEFINED {
-        return current_value;
-    }
-    // Method must be a closure pointer.
-    let method_bits = method.to_bits();
-    let method_tag = method_bits & 0xFFFF_0000_0000_0000;
-    if !crate::value::is_reference_bits(method_tag) {
-        return value_handle.get_nanbox_f64();
-    }
-    let method_handle = scope.root_nanbox_f64(method);
-    let hint_str: &[u8] = match hint {
+    let hint: &[u8] = match hint {
         1 => b"number",
         2 => b"string",
         _ => b"default",
     };
-    let hint_ptr = js_string_from_bytes(hint_str.as_ptr(), hint_str.len() as u32);
-    let hint_handle = scope.root_string_ptr(hint_ptr);
-
-    // #6320: `obj[Symbol.toPrimitive]` may hold a *Proxy* of a function. A
-    // proxy is a small registry id NaN-boxed under POINTER_TAG (`PROXY_ID_BAND_
-    // START + id`), NOT a `ClosureHeader*` — the CLOSURE_MAGIC probe below used
-    // to accept anything above an 0x1000 floor, so it read `*(0xF000D + 12)` and
-    // SIGSEGV'd (`EXC_BAD_ACCESS at 0x000f000d`). Node calls the proxy's
-    // `[[Call]]` here (`Call(method, obj, «hint»)`), so route it through the
-    // apply trap / target forwarding with `this` bound to the object, exactly
-    // like a closure method would be. A proxy whose (possibly nested) target is
-    // not callable falls through to the "not a method" return below, matching
-    // how this path already treats a non-callable `@@toPrimitive` value.
-    let method_now = method_handle.get_nanbox_f64();
-    if crate::proxy_hooks::proxy_is_proxy(method_now) == 1 {
-        if !crate::proxy_hooks::proxy_wraps_callable(method_now) {
-            return value_handle.get_nanbox_f64();
-        }
-        let hint_f64 = f64::from_bits(
-            STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
-        );
-        return crate::proxy_hooks::call_proxy_value_with_this(
-            method_handle.get_nanbox_f64(),
-            value_handle.get_nanbox_f64(),
-            &[hint_f64],
-        );
-    }
-
-    // Not a proxy: validate a real heap `ClosureHeader` (band-safe floor +
-    // CLOSURE_MAGIC) before calling. Every other small-handle band (fetch,
-    // zlib, stdlib registry ids) is rejected here too — none of them is a
-    // closure, and all of them fault when probed at `+12`.
-    // (`method_bits` above is stale — the hint-string allocation may have moved
-    // the closure — so re-read every operand from its handle.)
-    let method_bits = method_handle.get_nanbox_f64().to_bits();
-    if !crate::closure::is_closure_ptr((method_bits & POINTER_MASK) as usize) {
-        return value_handle.get_nanbox_f64();
-    }
-    let hint_f64 = f64::from_bits(
-        STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
-    );
-    let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
-
-    // Bind `this` to the object for the call. A class-instance
-    // `[Symbol.toPrimitive]` lives on the prototype and reads `this.field`
-    // (`class Temperature { [Symbol.toPrimitive](h){ return this.celsius } }`),
-    // reading its `this` parameter; without an explicit receiver
-    // `this.celsius` resolved to `undefined`, so `+t` was `NaN` and `` `${t}` ``
-    // was `undefined°C` (test_gap_symbols). The proxy arm above already binds
-    // `this`; mirror it for the closure method.
-    // Spec says the return value must be a primitive; if it's still an
-    // object pointer, that's a TypeError in JS, but we just return it
-    // as-is and let the caller fall back.
-    crate::closure::js_closure_call1(
-        closure_ptr,
-        crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
-        hint_f64,
-    )
+    crate::value::to_string_class_ref::custom_to_primitive(value_handle.get_nanbox_f64(), hint)
+        .primitive_or_throw()
+        .unwrap_or_else(|| value_handle.get_nanbox_f64())
 }
 
 #[cfg(test)]
