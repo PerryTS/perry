@@ -27,6 +27,11 @@ pub(in crate::object) struct ShapeExtras {
     /// Weak keyless receiver-birth ShapeId of this prototype's shape.
     /// Revalidated at use; no identity, width or GC edge.
     pub(in crate::object) created_birth_shape: std::sync::atomic::AtomicU32,
+    /// The runtime instance layout this shape descends from by key adds
+    /// (`shapes_runtime_base`): 0 not learned yet, `u32::MAX` none, else
+    /// that layout's word. A function of the two records' immutable facts,
+    /// learned on first ask; never identity, no GC edge.
+    pub(in crate::object) runtime_base: std::sync::atomic::AtomicU32,
     /// Weak forward DefineField edge. The target owns the key and slot;
     /// this scalar owns no GC pointer and is revalidated before use.
     pub(in crate::object) field_define_target: u32,
@@ -65,6 +70,35 @@ impl ShapeRecord {
                 .created_birth_shape
                 .load(std::sync::atomic::Ordering::Relaxed),
         )
+    }
+
+    /// The learned runtime base (`ShapeExtras::runtime_base`): 0 when not
+    /// learned yet.
+    #[inline]
+    pub(in crate::object) fn runtime_base(&self) -> u32 {
+        if !self.has_boxed_extras() {
+            return 0;
+        }
+        // SAFETY: this live record owns its stable Rust extension.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .runtime_base
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Learn the runtime base (`u32::MAX`: none). A plain record acquires
+    /// the extension, preserving its scalar rollback edge.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::object) fn note_runtime_base(&mut self, base: u32) {
+        if !self.has_boxed_extras() {
+            let rollback = self.rollback_parent();
+            self.extras = new_extras(&[], &[]);
+            self.note_rollback_parent(rollback);
+        }
+        // SAFETY: the present record owns this Rust extension, not GC storage.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .runtime_base
+            .store(base, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record a weak shape relationship on the prototype's shape. An

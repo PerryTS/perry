@@ -460,14 +460,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::Error,
         );
     }
-    if !http_is_valid_token(&name) {
-        perry_ffi::throw_with_code(
-            &format!("Header name must be a valid HTTP token [\"{name}\"]"),
-            "ERR_INVALID_HTTP_TOKEN",
-            perry_ffi::ErrorKind::TypeError,
-        );
-    }
-
+    // `validate` checks the name first (node's order), then the value.
     header_values::validate(&name, value_root.get());
     header_values::set(response_root.get(), &name, value_root.get());
 }
