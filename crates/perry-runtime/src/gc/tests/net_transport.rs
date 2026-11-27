@@ -52,6 +52,10 @@ struct Event {
     bytes: Vec<u8>,
     rerouted: bool,
     user: u64,
+    /// The pump step it arrived in.
+    pump: usize,
+    /// Whether the socket still had an attempt handle installed.
+    attached: bool,
 }
 
 thread_local! {
@@ -61,6 +65,9 @@ thread_local! {
     static INSTALL_ACCEPTED: Cell<bool> = const { Cell::new(false) };
     static REROUTED: Cell<bool> = const { Cell::new(false) };
     static CHILD: Cell<usize> = const { Cell::new(0) };
+    static PUMPS: Cell<usize> = const { Cell::new(0) };
+    /// Run inside the sink on each `NET_ATTEMPT`, as a binding's listener would.
+    static ON_ATTEMPT: Cell<Option<fn(OwnerLink, &NetCompletion)>> = const { Cell::new(None) };
 }
 
 extern "C" fn link_sink(completion: *const NetCompletion) {
@@ -85,6 +92,11 @@ extern "C" fn link_sink(completion: *const NetCompletion) {
         }
         CHILD.with(|slot| slot.set(child_link.0));
     }
+    let attached = owner.is_some_and(|owner| unsafe {
+        np::payload_mut::<Payload>(f64::from_bits(owner), &FAMILY).is_ok_and(|payload| {
+            transport::peer_addr(&mut payload.core as *mut TransportCore, link).is_some()
+        })
+    });
     EVENTS.with(|events| {
         events.borrow_mut().push(Event {
             kind: c.kind,
@@ -97,8 +109,15 @@ extern "C" fn link_sink(completion: *const NetCompletion) {
             },
             rerouted: REROUTED.with(Cell::get),
             user: c.user,
+            pump: PUMPS.with(Cell::get),
+            attached,
         })
     });
+    if c.kind == NET_ATTEMPT {
+        if let Some(hook) = ON_ATTEMPT.with(Cell::get) {
+            hook(link, c);
+        }
+    }
 }
 
 extern "C" fn alternate_sink(completion: *const NetCompletion) {
@@ -173,6 +192,7 @@ fn pump_until(want: impl Fn() -> bool) -> bool {
         if Instant::now() >= limit {
             return false;
         }
+        PUMPS.with(|pumps| pumps.set(pumps.get() + 1));
         crate::event_pump::pump_net_for_test(Duration::from_millis(5));
     }
 }
@@ -196,6 +216,7 @@ impl Fixture {
         EVENTS.with(|events| events.borrow_mut().clear());
         INSTALL_ACCEPTED.with(|f| f.set(false));
         CHILD.with(|c| c.set(0));
+        ON_ATTEMPT.with(|hook| hook.set(None));
         assert!(
             crate::event_pump::install_net_loop_for_test(),
             "the host must provide a turnloop loop"
@@ -932,7 +953,7 @@ fn a_racing_connect_moves_past_a_stalled_attempt_and_disarms_its_timer_on_connec
 }
 
 #[test]
-fn closing_during_a_racing_attempt_cancels_its_timer_and_reports_nothing_after() {
+fn closing_during_a_racing_attempt_closes_its_timer_and_reports_nothing_after() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _fixture = Fixture::start();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -954,9 +975,7 @@ fn closing_during_a_racing_attempt_cancels_its_timer_and_reports_nothing_after()
         .unwrap();
     }
     assert_eq!(attempts(link)[0].0, NET_ATTEMPT_START);
-    unsafe {
-        transport::connect_cancel(core(socket.get_nanbox_f64()), link).unwrap();
-    }
+    // `close()` alone closes the attempt timer.
     let reported = attempts(link).len();
     destroy(link);
     assert!(
@@ -974,5 +993,185 @@ fn closing_during_a_racing_attempt_cancels_its_timer_and_reports_nothing_after()
         "nothing is reported after close"
     );
     assert_eq!(count(NET_CONNECT, link), 0);
+    assert_eq!(crate::turnloop_net::live_handles(), 0);
+}
+
+/// The full event record of a racing connect's attempts.
+fn attempt_events(link: OwnerLink) -> Vec<Event> {
+    EVENTS.with(|events| {
+        events
+            .borrow()
+            .iter()
+            .filter(|e| e.kind == NET_ATTEMPT && e.link == link.0)
+            .cloned()
+            .collect()
+    })
+}
+
+#[test]
+fn an_abandoned_attempt_is_detached_before_it_is_reported_and_the_next_starts_at_once() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let live = listener.local_addr().unwrap();
+    let refused = {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        closed.local_addr().unwrap()
+    };
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect_addrs(
+            core(socket.get_nanbox_f64()),
+            link,
+            vec![std::net::SocketAddr::from((BLACKHOLE, 9)), refused, live],
+            true,
+            Some(Duration::from_millis(20)),
+        )
+        .unwrap();
+    }
+    assert!(pump_until(|| count(NET_CONNECT, link) == 1));
+    let events = attempt_events(link);
+    let kinds: Vec<u64> = events.iter().map(|e| e.user).collect();
+    assert_eq!(
+        kinds.len(),
+        5,
+        "two abandoned attempts and the one that connects: {kinds:?}"
+    );
+    for pair in events[..4].chunks(2) {
+        let (start, end) = (&pair[0], &pair[1]);
+        assert_eq!(start.user, NET_ATTEMPT_START);
+        assert!(
+            matches!(end.user, NET_ATTEMPT_FAILED | NET_ATTEMPT_TIMEOUT),
+            "{kinds:?}"
+        );
+        assert!(!end.attached, "a reported attempt has no handle installed");
+    }
+    // Each failure or timeout is followed by the next attempt in the same
+    // dispatch, before the loop runs anything else.
+    assert_eq!(events[1].pump, events[2].pump);
+    assert_eq!(events[3].pump, events[4].pump);
+    assert_eq!(events[4].user, NET_ATTEMPT_START);
+    let _peer = listener.accept().unwrap();
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(link) == 0));
+    assert_eq!(crate::turnloop_net::live_handles(), 0);
+}
+
+#[test]
+fn a_racing_attempt_keeps_the_loop_alive_after_the_socket_is_unrefd() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        let c = core(socket.get_nanbox_f64());
+        transport::tcp_connect_addrs(
+            c,
+            link,
+            vec![
+                std::net::SocketAddr::from((BLACKHOLE, 9)),
+                std::net::SocketAddr::from(([192, 0, 2, 2], 9)),
+            ],
+            true,
+            Some(Duration::from_millis(200)),
+        )
+        .unwrap();
+        transport::set_ref(c, link, false).unwrap();
+    }
+    assert!(
+        crate::turnloop_net::loop_alive(),
+        "Node's attempt timer is ref'd, so an unref'd racing socket keeps the loop"
+    );
+    destroy(link);
+    assert!(pump_until(|| refs(link) == 0));
+    assert_eq!(crate::turnloop_net::live_handles(), 0);
+}
+
+thread_local! {
+    static REPLACEMENT: Cell<Option<std::net::SocketAddr>> = const { Cell::new(None) };
+}
+
+/// On the first attempt, close the socket and connect it again elsewhere, as
+/// a `'connectionAttempt'` listener can.
+fn reconnect_on_first_attempt(link: OwnerLink, c: &NetCompletion) {
+    if c.user != NET_ATTEMPT_START || REPLACEMENT.with(Cell::get).is_none() {
+        return;
+    }
+    let addr = REPLACEMENT.with(|slot| slot.take()).unwrap();
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(unsafe { np::link_event_owner(link) }.unwrap());
+    destroy(link);
+    np::attach(
+        value.get_nanbox_f64(),
+        &FAMILY,
+        Payload {
+            core: TransportCore::new(ROUTE),
+            ext: Ext,
+        },
+        0,
+    )
+    .unwrap();
+    unsafe {
+        transport::tcp_connect_addrs(core(value.get_nanbox_f64()), link, vec![addr], true, None)
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_reconnect_from_the_attempt_sink_leaves_the_old_plan_unstarted() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let live = listener.local_addr().unwrap();
+    let old = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    old.set_nonblocking(true).unwrap();
+    REPLACEMENT.with(|slot| slot.set(Some(live)));
+    ON_ATTEMPT.with(|hook| hook.set(Some(reconnect_on_first_attempt)));
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect_addrs(
+            core(socket.get_nanbox_f64()),
+            link,
+            vec![old.local_addr().unwrap(), old.local_addr().unwrap()],
+            true,
+            Some(Duration::from_millis(20)),
+        )
+        .unwrap();
+    }
+    assert!(
+        pump_until(|| count(NET_CONNECT, link) == 1),
+        "the replacement connect connects"
+    );
+    assert_eq!(
+        attempts(link).len(),
+        1,
+        "the old plan never ran past its first report"
+    );
+    assert_eq!(
+        old.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "the old plan's address was never dialed"
+    );
+    let _peer = loop {
+        if let Ok(peer) = listener.accept() {
+            break peer;
+        }
+        crate::event_pump::pump_net_for_test(Duration::from_millis(5));
+    };
+    assert!(destroy(link));
+    // The close inside the sink owes a `Closed` from the close-callbacks phase.
+    assert!(pump_until(|| {
+        crate::turnloop_net::close_phase();
+        refs(link) == 0
+    }));
     assert_eq!(crate::turnloop_net::live_handles(), 0);
 }

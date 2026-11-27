@@ -912,22 +912,6 @@ pub unsafe extern "C" fn js_perry_net_link_tcp_connect_addrs(
     )
 }
 
-/// Link form of [`transport::connect_cancel`].
-///
-/// # Safety
-/// As [`js_perry_net_link_tcp_listen`].
-#[no_mangle]
-pub unsafe extern "C" fn js_perry_net_link_connect_cancel(
-    core: *mut c_void,
-    link: usize,
-    err: *mut PerryNetError,
-) -> i32 {
-    finish(
-        unsafe { transport::connect_cancel(core.cast(), link_arg(link)) },
-        err,
-    )
-}
-
 /// Link form of [`js_perry_net_pipe_connect`].
 ///
 /// # Safety

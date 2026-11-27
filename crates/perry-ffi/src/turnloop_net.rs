@@ -1137,11 +1137,7 @@ extern "C" {
         attempt_timeout_ms: u32,
         err: *mut RawNetError,
     ) -> i32;
-    fn js_perry_net_link_connect_cancel(
-        core: *mut std::ffi::c_void,
-        link: usize,
-        err: *mut RawNetError,
-    ) -> i32;
+
     fn js_perry_net_link_pipe_connect(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1396,9 +1392,14 @@ struct RawSocketAddr {
 /// Connect a TCP client to addresses already resolved, tried in order. With
 /// `attempt_timeout_ms` and more than one address, a pending attempt gives
 /// way to the next when it expires, and each attempt arrives as
-/// [`NET_ATTEMPT`].
-pub fn link_tcp_connect_addrs(
-    core: &mut TransportCore,
+/// [`NET_ATTEMPT`]. The first attempt is reported before this returns, so the
+/// binding's listeners may run, and close the socket, during the call.
+///
+/// # Safety
+/// `core` is `link`'s live payload core on this thread, and the caller holds
+/// no reference into that payload across the call.
+pub unsafe fn link_tcp_connect_addrs(
+    core: *mut TransportCore,
     link: OwnerLink,
     addrs: &[std::net::SocketAddr],
     nodelay: bool,
@@ -1423,7 +1424,7 @@ pub fn link_tcp_connect_addrs(
                 .collect();
             link_call(|err| unsafe {
                 js_perry_net_link_tcp_connect_addrs(
-                    core.raw(),
+                    core.cast(),
                     link.raw(),
                     addrs.as_ptr(),
                     addrs.len(),
@@ -1435,21 +1436,6 @@ pub fn link_tcp_connect_addrs(
         },
         {
             let _ = (core, link, addrs, nodelay, attempt_timeout_ms);
-            Err(unavailable())
-        }
-    )
-}
-
-/// Disarm a connect's attempt timer before the socket closes.
-pub fn link_connect_cancel(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
-    runtime_call!(
-        {
-            link_call(|err| unsafe {
-                js_perry_net_link_connect_cancel(core.raw(), link.raw(), err)
-            })
-        },
-        {
-            let _ = (core, link);
             Err(unavailable())
         }
     )

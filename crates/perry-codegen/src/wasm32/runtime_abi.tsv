@@ -2354,6 +2354,7 @@ js_net_socket_write	void	i64,i64
 js_net_subclass_init	f64	f64,f64,f64,i32u
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
+js_net_validate_connect_attempt_timeout	i32s	f64
 js_net_validate_connect_port	void	f64
 js_net_validate_create_server_options	void	f64
 js_net_validate_default_auto_select_family	i32s	f64
@@ -3052,7 +3053,6 @@ js_perry_net_link_accept_start	i32s	ptr,usize,ptr
 js_perry_net_link_adopt_descriptor	i32s	ptr,usize,i32s,ptr
 js_perry_net_link_adopt_stream	i32s	ptr,usize,i64,ptr
 js_perry_net_link_close	i32s	ptr,usize,ptr,ptr
-js_perry_net_link_connect_cancel	i32s	ptr,usize,ptr
 js_perry_net_link_deadline_arm	i32s	ptr,usize,i64,ptr
 js_perry_net_link_deadline_cancel	i32s	ptr,usize,ptr
 js_perry_net_link_deadline_park	i32s	ptr,usize,ptr

@@ -482,17 +482,19 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
     };
     let callback = scope.root_nanbox(callback);
     let lookup = scope.root_nanbox(lookup);
-    let wanted = super::payload_lookup::wanted(arg1.get());
-    let custom_lookup = path.is_none()
-        && crate::ip::classify_ip(&host) == 0
-        && super::payload_lookup::validate(lookup.get());
     if path.is_none() {
         // SAFETY: The validator consumes scalar arguments on this agent; no payload borrow is held
         // when it throws.
         unsafe {
             js_net_validate_connect_port(port);
         }
+        // Node validates the attempt timeout of every TCP connect, IP hosts included.
+        super::payload_lookup::attempt_timeout(arg1.get());
     }
+    let wanted = super::payload_lookup::wanted(arg1.get());
+    let custom_lookup = path.is_none()
+        && crate::ip::classify_ip(&host) == 0
+        && super::payload_lookup::validate(lookup.get());
     let own = p::socket_link(owner.get()).unwrap_or_else(super::payload_prototype::throw_miss);
     // SAFETY: This owner retains a stable cell on its agent; lifecycle lookup validates the family
     // without dereferencing a disposed payload.
@@ -605,13 +607,7 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
     }
     let family = crate::ip::classify_ip(&host);
     if path_connect.is_none() && family != 0 {
-        // Node's `internalConnect` for an IP host runs on the next tick.
-        let address = scope.root_nanbox(events::string(&host));
-        events::queue_emit(
-            owner.get(),
-            "connectionAttempt",
-            &[address.get(), port, f64::from(family)],
-        );
+        super::payload_lookup::queue_attempt(owner.get(), &host, port, family);
     }
     let snapshot = super::payload_io::snapshot(socket);
     if needs_tcp {
@@ -860,12 +856,11 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         let group = scope.root_nanbox(p::record_get(state.get(), "serverGroup"));
         p::own_set(close_record.get(), "serverGroup", group.get());
     }
-    super::payload_lookup::cancel_attempt(owner.get(), socket);
+    let cancelled = super::payload_lookup::pending_attempt(owner.get(), socket);
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let result = unsafe {
         let core = p::socket_core(socket).unwrap_or_else(super::payload_prototype::throw_miss);
-        let _ = tl::link_connect_cancel(&mut *core, socket);
         tl::link_close(&mut *core, socket)
     };
     let owed = match result {
@@ -903,6 +898,9 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     // close acknowledgement. The one-shot lifecycle owns this publication.
     if had_error {
         events::queue_emit(owner.get(), "error", &[error_value.get()]);
+    }
+    if let Some(target) = cancelled {
+        super::payload_lookup::cancel_attempt(owner.get(), &target);
     }
     super::native_transport::release_codec(owner.get());
     #[cfg(test)]

@@ -15,6 +15,7 @@ extern "C" {
     fn js_is_truthy(value: f64) -> i32;
     fn js_queue_next_tick(callback: i64);
     fn js_array_is_array(value: f64) -> f64;
+    fn js_net_validate_connect_attempt_timeout(value: f64) -> i32;
     fn js_aggregateerror_new(
         errors: *mut perry_ffi::ArrayHeader,
         message: *mut perry_ffi::StringHeader,
@@ -78,14 +79,16 @@ fn wanted_for(family: f64, options: f64) -> Wanted {
     }
 }
 
-/// `options.autoSelectFamilyAttemptTimeout`, which Node raises to 10 ms.
-fn attempt_timeout(options: f64) -> u32 {
-    let value = JsValue::from_bits(field(options, "autoSelectFamilyAttemptTimeout").to_bits());
-    if value.is_number() && value.to_number() >= 1.0 {
-        (value.to_number() as u32).max(10)
-    } else {
-        crate::ip::auto_select_family_attempt_timeout_default()
+/// `options.autoSelectFamilyAttemptTimeout`, validated as Node's
+/// `lookupAndConnect` does and raised to 10 ms.
+pub(crate) fn attempt_timeout(options: f64) -> u32 {
+    let value = field(options, "autoSelectFamilyAttemptTimeout");
+    let present = JsValue::from_bits(value.to_bits());
+    if present.is_undefined() || present.is_null() {
+        return crate::ip::auto_select_family_attempt_timeout_default();
     }
+    // SAFETY: The validator reads a JS value on this agent and throws on a bad one.
+    unsafe { js_net_validate_connect_attempt_timeout(value) as u32 }
 }
 
 /// Node's attempt order: each address once, families alternating from the
@@ -535,14 +538,58 @@ fn connect(owner: f64, endpoints: &[SocketAddr], wanted: Wanted) {
     } else {
         endpoints
     };
-    // SAFETY: The retained link belongs to this agent; the core access ends before the runtime
-    // reports any attempt.
+    // SAFETY: The retained link belongs to this agent. The runtime may report an attempt, and so
+    // run listeners that close the socket, before the call returns; only the raw core pointer
+    // crosses it.
     let result = unsafe {
         p::socket_core(link)
-            .map(|core| tl::link_tcp_connect_addrs(&mut *core, link, endpoints, true, timeout))
+            .map(|core| tl::link_tcp_connect_addrs(core, link, endpoints, true, timeout))
     };
     if let Ok(Err(failure)) = result {
         socket::destroy(owner.get(), error(&failure.code, &failure.message()));
+    }
+}
+
+unsafe extern "C" fn attempt_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let token = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
+    let address = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
+    if is_current(owner.get(), token.get()) {
+        events::emit(
+            owner.get(),
+            "connectionAttempt",
+            &[
+                address.get(),
+                perry_ffi::closure_capture_f64(closure, 3),
+                perry_ffi::closure_capture_f64(closure, 4),
+            ],
+        );
+    }
+    undefined()
+}
+
+/// An IP host's attempt, reported on the next tick as Node's `internalConnect`
+/// runs there, and only while that connect is still pending.
+pub(crate) fn queue_attempt(owner: f64, address: &str, port: f64, family: i32) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let token = scope.root_nanbox(connection(owner.get()));
+    let address = scope.root_nanbox(events::string(address));
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(attempt_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        5,
+    ) as i64);
+    // SAFETY: The rooted job was allocated above with five capture slots, which trace the
+    // owner, token and address until it runs.
+    unsafe {
+        let job_ptr = job.get() as *mut RawClosureHeader;
+        perry_ffi::set_closure_capture_f64(job_ptr, 0, owner.get());
+        perry_ffi::set_closure_capture_f64(job_ptr, 1, token.get());
+        perry_ffi::set_closure_capture_f64(job_ptr, 2, address.get());
+        perry_ffi::set_closure_capture_f64(job_ptr, 3, port);
+        perry_ffi::set_closure_capture_f64(job_ptr, 4, f64::from(family));
+        js_queue_next_tick(job.get());
     }
 }
 
@@ -652,28 +699,37 @@ pub(crate) fn attempted(owner: f64, event: &tl::NetCompletion) {
 
 /// A racing connect destroyed mid-attempt reports that attempt as failed
 /// with `ECANCELED`, as Node's cancelled connect request does.
-pub(crate) fn cancel_attempt(owner: f64, link: perry_ffi::native_payload::OwnerLink) {
+/// The attempt a destroy cancels, read before the transport closes: the
+/// racing connect's installed handle, which the runtime detaches before it
+/// reports an attempt failed or timed out.
+pub(crate) fn pending_attempt(
+    owner: f64,
+    link: perry_ffi::native_payload::OwnerLink,
+) -> Option<tl::Endpoint> {
     let errors = p::record_get(socket::state(owner), ERRORS);
     // SAFETY: The projection checks family and lifecycle; the reads end before any allocation.
-    let target = unsafe {
+    unsafe {
         let racing = JsValue::from_bits(errors.to_bits()).is_pointer()
             && p::socket_ptr(link).is_ok_and(|payload| (*payload).ext.connecting);
         if !racing {
-            return;
+            return None;
         }
         p::socket_core(link)
             .ok()
             .and_then(|core| tl::link_peer_address(&mut *core, link))
-    };
-    let Some(target) = target.filter(|target| !target.address.is_empty()) else {
-        return;
-    };
+            .filter(|target| !target.address.is_empty())
+    }
+}
+
+/// Report the attempt [`pending_attempt`] found, after the destroy's own
+/// `'error'`, as Node's cancelled connect request completes after it.
+pub(crate) fn cancel_attempt(owner: f64, target: &tl::Endpoint) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let error = scope.root_nanbox(super::payload_io::socket_error_value(
         "connect",
         "ECANCELED",
-        Some(&target),
+        Some(target),
     ));
     let address = scope.root_nanbox(events::string(&target.address));
     events::queue_emit(

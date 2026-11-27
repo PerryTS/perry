@@ -113,6 +113,8 @@ const OP_RESOLVE: u64 = 7;
 const OP_TIMER: u64 = 8;
 /// A link connect attempt's `autoSelectFamilyAttemptTimeout` timer.
 const OP_ATTEMPT: u64 = 11;
+/// The close of a racing connect's abandoned attempt handle.
+const OP_ABANDON: u64 = 12;
 #[cfg(windows)]
 const OP_PIPE_DRAIN: u64 = 9;
 #[cfg(windows)]
