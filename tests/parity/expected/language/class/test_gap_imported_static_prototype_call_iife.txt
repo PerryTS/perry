@@ -1,2 +1,4 @@
 DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
 DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+TypeError: Cannot read properties of undefined (reading 'prototype')
+thisArg 1 8
