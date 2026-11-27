@@ -959,9 +959,10 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
                 typed_array_set_property_by_name(owner, name, value);
             }
             return value;
-        } else if key.is_finite() {
-            typed_array_set_numeric_index(owner, key, value);
         }
+        // Every Number key is a CanonicalNumericIndex: NaN and the infinities
+        // are invalid indices, whose store still runs ToNumber on the value.
+        typed_array_set_number_key(owner, key, value);
         value
     }
 }
@@ -1385,3 +1386,7 @@ pub(crate) unsafe fn typed_array_delete_own_property(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "typedarray_props_tests.rs"]
+mod tests;
