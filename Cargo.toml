@@ -89,6 +89,7 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
+    "third_party/url",
     "tests/integration/wasi/p1-host",
 ]
 
@@ -647,3 +648,11 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
+
+# The url crate is vendored with four WHATWG URL Standard fixes (file: path
+# start and leading empty segments, Windows drive letters against a file base,
+# special relative slashes, opaque-path spaces): see third_party/url/VENDORED.md.
+# One patched copy serves every crate in the graph, so `new URL` and the HTTP
+# stack agree.
+[patch.crates-io]
+url = { path = "third_party/url" }
