@@ -7,8 +7,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-// Hold a recognizable graph alive so the dump must contain it.
+// Hold a recognizable graph alive so the dump must contain it. It escapes to
+// the global object: a literal read only for its length is folded away.
 const heapMarkerArray = ["__heap_marker_string_4916__", { heapMarkerKey4916: 1 }];
+(globalThis as any).heapMarker4916 = heapMarkerArray;
 
 const file = path.join(os.tmpdir(), `perry-heapsnap-${process.pid}.heapsnapshot`);
 const written = v8.writeHeapSnapshot(file);
