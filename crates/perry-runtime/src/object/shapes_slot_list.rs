@@ -587,8 +587,10 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.hole_count = hole_count;
-    // The hole count is an input of the positional bit.
+    // The hole count is an input of the positional bit; the key count is
+    // one of the runtime base.
     record.refresh_positional();
+    record.refresh_runtime_base(id);
     super::debug_assert_object_shape_parity(obj);
     Some(id.0)
 }
