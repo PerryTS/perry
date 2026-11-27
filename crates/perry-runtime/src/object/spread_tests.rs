@@ -386,3 +386,101 @@ fn spread_of_a_spilled_source_copies_its_spill() {
         assert_eq!(get(source, &names[5]), 5.0);
     }
 }
+
+thread_local! {
+    static ACCESSOR_SOURCE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    static GETTER_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+unsafe fn closure_value(c: *mut crate::closure::ClosureHeader) -> f64 {
+    crate::value::js_nanbox_pointer(c as i64)
+}
+
+unsafe fn define_getter(target: f64, name: &str, get: f64) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::object_ops::js_object_define_get_accessor(
+        target,
+        f64::from_bits(crate::value::JSValue::string_ptr(key).bits()),
+        get,
+    );
+}
+
+unsafe fn key_names(value: f64) -> Vec<String> {
+    let keys = object_keys(receiver(value));
+    (0..keys.count())
+        .map(|i| {
+            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+            String::from_utf8(
+                crate::string::js_string_key_bytes(keys.get(i), &mut scratch)
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
+extern "C" fn seven(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    GETTER_CALLS.with(|c| c.set(c.get() + 1));
+    7.0
+}
+
+extern "C" fn delete_later(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let source = ACCESSOR_SOURCE.with(|s| s.get());
+    let name = "later";
+    unsafe {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_delete_field(receiver(source), key);
+    }
+    1.0
+}
+
+#[test]
+fn accessor_spread_calls_each_getter_once_and_births_data_keys_in_order() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let source = object(&[("first", 1.0)]);
+        define_getter(source, "got", closure_value(crate::closure::js_closure_alloc(crate::fn_info!(seven, 0), 0)));
+        js_object_set_field_by_name(receiver(source), key_ptr("last"), 3.0);
+        GETTER_CALLS.with(|c| c.set(0));
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 1);
+        assert_eq!(GETTER_CALLS.with(|c| c.get()), 1);
+        assert_eq!(key_names(result), ["first", "got", "last"]);
+        assert_eq!(get(result, "got"), 7.0);
+        assert_eq!(get(result, "last"), 3.0);
+        assert_eq!(
+            shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(result)))
+                .unwrap()
+                .summary(),
+            0,
+            "the result's keys are plain data"
+        );
+    }
+}
+
+#[test]
+fn accessor_spread_skips_a_key_its_getter_deleted() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let source = object(&[("first", 1.0)]);
+        define_getter(source, "deleter", closure_value(crate::closure::js_closure_alloc(crate::fn_info!(delete_later, 0), 0)));
+        js_object_set_field_by_name(receiver(source), key_ptr("later"), 2.0);
+        js_object_set_field_by_name(receiver(source), key_ptr("end"), 4.0);
+        ACCESSOR_SOURCE.with(|s| s.set(source));
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        assert_eq!(key_names(result), ["first", "deleter", "end"]);
+        assert_eq!(get(result, "end"), 4.0);
+    }
+}
+
+unsafe fn key_ptr(name: &str) -> *mut crate::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
