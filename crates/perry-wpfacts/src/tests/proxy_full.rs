@@ -703,3 +703,14 @@ fn pxclass_own_gate_value_is_no_operand() {
         "(Object as any).hasOwn = px;\nconst o: any = { x: 1 };\nconst k: string = String(Date.now());\nif (Object.hasOwn(o, k)) console.log(o[k] === 1);",
     );
 }
+
+/// `IdxOwnLoad` on a Proxy receiver: `px[k]` after `Object.hasOwn(px, k)`
+/// is p.[[Get]]( k ) (10.5.8), the IdxLoad arm's get trap and forward.
+#[test]
+fn pxclass_own_guarded_read_of_a_proxy_runs_the_get_trap() {
+    let op = "const k: string = String(Date.now());\nif (Object.hasOwn(px, k)) console.log(px[k] === 1);";
+    pxclass("{ a: payload }", op);
+    // The get trap runs: what it hands to unknown code escapes.
+    let get = "get(t: any, k: any) { external(payload); return 1; }";
+    site("{ a: 1 }", get, op, false).unwrap();
+}

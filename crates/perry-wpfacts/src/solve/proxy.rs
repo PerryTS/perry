@@ -1650,6 +1650,12 @@ impl Model {
             Cons::InterpRuns { .. } => {}
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
             Cons::IdxLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
+            // The read after an own-property test of the same key
+            // (`gen/own_guard.rs`): a Proxy is no program object with own
+            // fields; the read is p.[[Get]]( k ) (10.5.8), the IdxLoad arm.
+            // The test itself is its own rule (`OwnTest`, the
+            // getOwnPropertyDescriptor trap of `hasOwn`).
+            Cons::IdxOwnLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
             // `p.m( ... )` / `p[k]( ... )`: [[Get]], then Call( f, p, args ).
             Cons::MCall { key, call } => {
                 let f = self.proxy_get(p, key, NO_NODE);
@@ -2497,7 +2503,6 @@ impl Model {
             | Cons::ForInBody { .. }
             | Cons::Fulfil { .. }
             | Cons::HandOver { .. }
-            | Cons::IdxOwnLoad { .. }
             | Cons::Miss { .. }
             | Cons::NativeParent { .. }
             | Cons::NativeThis { .. }
