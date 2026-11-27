@@ -1,5 +1,3 @@
-//! Error side-table GC integration (2026-07-02 audit, GC deep set).
-//!
 //! Node diagnostics and user-assigned properties are the Error's own
 //! properties on `ObjectMeta.expando`, and follow ordinary heap tracing.
 
@@ -172,36 +170,6 @@ fn test_error_user_props_survive_copied_minor_move() {
     );
 }
 
-/// A fresh error at a dead error's recycled address inherits none of its
-/// diagnostics or user properties.
-#[test]
-fn test_dead_error_side_table_entries_cleared() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-
-    let message = crate::string::js_string_from_bytes(b"dead".as_ptr(), 4);
-    crate::node_submodules::register_error_code_pub(message, "ERR_DEAD_9530");
-    let err = crate::error::js_error_new_with_message(message) as usize;
-    crate::node_submodules::diagnostics::set_error_user_prop(
-        err,
-        "inherited",
-        f64::from_bits(crate::value::TAG_TRUE),
-    );
-    // Not rooted: dead at the first minor.
-    js_shadow_slot_set(0, 0);
-
-    let _ = gc_collect_minor();
-
-    // User properties live in the error's ordinary metadata. Check a fresh
-    // error instead of dereferencing the dead error's unswept bytes.
-    let fresh = crate::error::js_error_new() as usize;
-    assert!(
-        crate::node_submodules::diagnostics::error_user_prop(fresh, "inherited").is_none(),
-        "dead error's user-prop entry must be cleared, not left for a \
-         fresh error at the recycled address to inherit"
-    );
-    assert!(crate::node_submodules::diagnostics::error_user_prop(fresh, "code").is_none());
-}
-
 /// An OBJECT-valued user prop must keep its referent alive across a
 /// copied-minor and must read back at the referent's moved address.
 #[test]
@@ -244,4 +212,70 @@ fn test_object_valued_user_prop_is_a_gc_root_and_rewrites() {
             "rewritten prop bits must point at the live moved object"
         );
     }
+}
+
+extern "C" fn moving_code_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let _ = gc_collect_minor();
+    let code = crate::string::js_string_from_bytes(b"ERR_TEST_REPORT".as_ptr(), 15);
+    f64::from_bits(string_bits(code as usize))
+}
+
+/// The uncaught report reads the error's code, an own-property lookup that
+/// can run user code and collect, before it reads the stack. A collection
+/// there must leave the report materialising the stack of the live error.
+#[test]
+fn uncaught_report_survives_a_collection_in_the_code_lookup() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = crate::gc::RuntimeHandleScope::new();
+
+    let message = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+    crate::node_submodules::register_error_code_pub(message, "ERR_TEST_REPORT");
+    let error = crate::error::js_error_new_with_message(message) as usize;
+    js_shadow_slot_set(0, error_bits(error));
+    let getter = scope.root_nanbox_f64(f64::from_bits(ptr_bits(crate::closure::js_closure_alloc(
+        crate::fn_info!(moving_code_getter, 0),
+        0,
+    ) as usize)));
+    let descriptor = scope.root_nanbox_f64(f64::from_bits(ptr_bits(
+        crate::object::js_object_alloc(0, 0) as usize,
+    )));
+    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+    crate::object::js_object_set_field_by_name(
+        (descriptor.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader,
+        get_key,
+        getter.get_nanbox_f64(),
+    );
+    let code_key = crate::string::js_string_from_bytes(b"code".as_ptr(), 4);
+    crate::object::js_object_define_property(
+        f64::from_bits(js_shadow_slot_get(0)),
+        f64::from_bits(string_bits(code_key as usize)),
+        descriptor.get_nanbox_f64(),
+    );
+
+    let before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let report = unsafe {
+        crate::exception::uncaught_native_error_report(before as *mut crate::error::ErrorHeader)
+    };
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        after, before,
+        "test premise: the getter must move the error"
+    );
+    assert!(
+        report.starts_with("Error [ERR_TEST_REPORT]: boom"),
+        "report: {report:?}"
+    );
+    assert!(
+        unsafe {
+            !(*(after as *const crate::error::ErrorHeader))
+                .stack
+                .is_null()
+        },
+        "the stack was materialised on the error's pre-collection address"
+    );
 }

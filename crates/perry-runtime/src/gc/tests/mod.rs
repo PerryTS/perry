@@ -40,7 +40,7 @@ mod debt_pacer;
 mod dirty_page_cache;
 mod dirty_scan_custody;
 mod env_knob_parse;
-mod error_side_tables;
+mod error_own_props;
 mod evacuation;
 mod fetch_handle_trace;
 mod filehandle_owner_fd;

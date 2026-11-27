@@ -56,8 +56,8 @@ pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
 pub(crate) const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
 pub(crate) const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
 const ERROR_FLAG_HAS_ERRORS: u32 = 1 << 2;
-/// One of Node's internal (`ERR_*`) errors, whose stack and `toString` name
-/// the code: `TypeError [ERR_X]: message`.
+/// One of Node's internal (`ERR_*`) errors, whose stack, `toString` and
+/// inspect headline name the code: `TypeError [ERR_X]: message`.
 const ERROR_FLAG_NODE_INTERNAL: u32 = 1 << 3;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
