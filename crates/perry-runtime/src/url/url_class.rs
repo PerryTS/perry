@@ -85,29 +85,73 @@ pub extern "C" fn js_url_parse_with_base(
         .map_or(std::ptr::null_mut(), |p| href::new_url_object(&p))
 }
 
-macro_rules! url_component_getter {
-    ($($fn_name:ident => $component:ident;)*) => {$(
-        #[no_mangle]
-        pub extern "C" fn $fn_name(url: *mut ObjectHeader) -> f64 {
-            if url.is_null() {
-                return create_string_f64("");
-            }
-            href::component_value(url, Component::$component)
-        }
-    )*};
+/// A component getter's value; "" for a null receiver. The getters are
+/// written out one by one so the runtime ABI scan sees each export.
+fn component(url: *mut ObjectHeader, component: Component) -> f64 {
+    if url.is_null() {
+        return create_string_f64("");
+    }
+    href::component_value(url, component)
 }
 
-url_component_getter! {
-    js_url_get_href => Href;
-    js_url_get_protocol => Protocol;
-    js_url_get_username => Username;
-    js_url_get_password => Password;
-    js_url_get_host => Host;
-    js_url_get_hostname => Hostname;
-    js_url_get_port => Port;
-    js_url_get_pathname => Pathname;
-    js_url_get_search => Search;
-    js_url_get_hash => Hash;
+/// `url.href`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_href(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Href)
+}
+
+/// `url.protocol`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_protocol(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Protocol)
+}
+
+/// `url.username`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_username(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Username)
+}
+
+/// `url.password`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_password(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Password)
+}
+
+/// `url.host`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_host(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Host)
+}
+
+/// `url.hostname`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_hostname(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Hostname)
+}
+
+/// `url.port`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_port(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Port)
+}
+
+/// `url.pathname`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_pathname(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Pathname)
+}
+
+/// `url.search`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_search(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Search)
+}
+
+/// `url.hash`: sliced from href.
+#[no_mangle]
+pub extern "C" fn js_url_get_hash(url: *mut ObjectHeader) -> f64 {
+    component(url, Component::Hash)
 }
 
 /// `url.origin`.
@@ -128,30 +172,103 @@ pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
     super::search_params::url_search_params(url)
 }
 
-macro_rules! url_setter {
-    ($($fn_name:ident => $setter:ident;)*) => {$(
-        /// WHATWG setter: a rejected value leaves the URL unchanged.
-        #[no_mangle]
-        pub extern "C" fn $fn_name(url: *mut ObjectHeader, value: f64) {
-            if url.is_null() {
-                return;
-            }
-            let value = coerce_url_setter_value(value);
-            let _ = href::set(url, Setter::$setter(&value));
-        }
-    )*};
+/// `url.protocol = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_protocol(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Protocol(&value));
 }
 
-url_setter! {
-    js_url_set_protocol => Protocol;
-    js_url_set_username => Username;
-    js_url_set_password => Password;
-    js_url_set_host => Host;
-    js_url_set_hostname => Hostname;
-    js_url_set_port => Port;
-    js_url_set_pathname => Pathname;
-    js_url_set_search => Search;
-    js_url_set_hash => Hash;
+/// `url.username = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_username(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Username(&value));
+}
+
+/// `url.password = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_password(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Password(&value));
+}
+
+/// `url.host = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_host(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Host(&value));
+}
+
+/// `url.hostname = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Hostname(&value));
+}
+
+/// `url.port = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_port(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Port(&value));
+}
+
+/// `url.pathname = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_pathname(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Pathname(&value));
+}
+
+/// `url.search = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_search(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Search(&value));
+}
+
+/// `url.hash = value`.
+#[no_mangle]
+pub extern "C" fn js_url_set_hash(url: *mut ObjectHeader, value: f64) {
+    // WHATWG setter: a rejected value leaves the URL unchanged.
+    if url.is_null() {
+        return;
+    }
+    let value = coerce_url_setter_value(value);
+    let _ = href::set(url, Setter::Hash(&value));
 }
 
 /// `url.href = value`: parse a full replacement URL or throw.

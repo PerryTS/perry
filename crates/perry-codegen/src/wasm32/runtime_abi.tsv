@@ -4517,11 +4517,13 @@ js_url_get_host	f64	ptr
 js_url_get_hostname	f64	ptr
 js_url_get_href	f64	ptr
 js_url_get_origin	f64	ptr
+js_url_get_password	f64	ptr
 js_url_get_pathname	f64	ptr
 js_url_get_port	f64	ptr
 js_url_get_protocol	f64	ptr
 js_url_get_search	f64	ptr
 js_url_get_search_params	f64	ptr
+js_url_get_username	f64	ptr
 js_url_href_if_url	f64	f64
 js_url_legacy_parse	f64	f64,f64,f64
 js_url_legacy_resolve	f64	f64,f64
