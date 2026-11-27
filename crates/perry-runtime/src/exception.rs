@@ -652,25 +652,20 @@ fn emit_uncaught_backtrace() {
 /// prefix (#616), and `Error.stack` already starts with that head, so the
 /// stack IS the report; the head is rebuilt only when there is no stack.
 ///
-/// # Every read off `eh` happens BEFORE the stack is materialised
+/// # `eh` is rooted across every allocating read
 ///
-/// `js_error_get_stack` allocates: since #9486 the string is built on first
-/// read, not at construction. That allocation is a GC point, and an
-/// evacuating scavenge moves the error out from under `eh` — a plain Rust
-/// local, which perry's collector neither scans nor pins, so afterwards it
-/// names from-space. Reading `eh` there to resolve the `ERR_*` code is an
-/// unsound read whose result is whatever the collector left in the vacated
-/// cell.
-/// Reading everything first costs nothing and needs no root, which is why
-/// this is an ordering fix rather than a `RuntimeHandleScope`.
-///
-/// (Before #9486 the stack came from a plain field load, so no GC point
-/// existed between the reads at all.)
+/// `js_error_get_stack` allocates (the string is built on first read), and so
+/// does the `ERR_*` code lookup (its key string). Either can run an evacuating
+/// scavenge that moves the error, so `eh`, a plain Rust local the collector
+/// neither scans nor pins, is rooted and re-read after each of them.
 pub(crate) unsafe fn uncaught_native_error_report(eh: *mut crate::error::ErrorHeader) -> String {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error = scope.root_raw_mut_ptr(eh);
     let name_str = string_header_to_string((*eh).name);
     let msg_str = string_header_to_string((*eh).message);
-    let code = crate::node_submodules::error_code_for_error(eh);
-    // Nothing may read `eh` past this line.
+    let (code, eh) = error.across_mut::<crate::error::ErrorHeader, _>(|| {
+        error.with_mut_ptr(|eh| crate::node_submodules::error_code_for_error(eh))
+    });
     let stack_str = string_header_to_string(crate::error::js_error_get_stack(eh));
 
     let name_display = if name_str.is_empty() {

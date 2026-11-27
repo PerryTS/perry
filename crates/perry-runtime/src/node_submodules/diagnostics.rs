@@ -457,7 +457,9 @@ pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool 
 pub(crate) struct ErrorDiagnostics {
     code: Option<&'static str>,
     syscall: Option<&'static str>,
-    errno: Option<i32>,
+    /// A number, or `undefined` for an error Node gives an `errno` key it
+    /// cannot fill (c-ares).
+    errno: Option<f64>,
     path: Option<String>,
     dest: Option<String>,
     hostname: Option<String>,
@@ -519,7 +521,7 @@ pub(crate) unsafe fn install_error_diagnostics(
         put(key, value.get_nanbox_f64());
     };
     if let Some(errno) = diagnostics.errno {
-        put("errno", errno as f64);
+        put("errno", errno);
     }
     if let Some(code) = diagnostics.code {
         put_str("code", code);
@@ -582,7 +584,16 @@ pub fn register_error_syscall(message_ptr: *const StringHeader, syscall: &'stati
 /// Stage a Node-style negative libuv errno for the Error constructed from this
 /// message.
 pub fn register_error_errno(message_ptr: *const StringHeader, errno: i32) {
-    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.errno = Some(errno));
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.errno = Some(errno as f64)
+    });
+}
+
+/// Stage an `errno` key whose value is `undefined`, as on Node's c-ares errors.
+pub fn register_error_errno_undefined(message_ptr: *const StringHeader) {
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.errno = Some(f64::from_bits(JSValue::undefined().bits()))
+    });
 }
 
 /// Stage a Node-style `path` string for the Error constructed from this
@@ -605,20 +616,6 @@ pub fn register_error_hostname(message_ptr: *const StringHeader, hostname: Strin
 /// symlink) alongside `path`.
 pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.dest = Some(dest));
-}
-
-/// A user-assigned own property value on an `Error` object. String values are
-/// stored as an owned `String` (GC-safe — reconstructed into a fresh
-/// `StringHeader` on read, exactly like diagnostic `path` values); everything
-/// else is stored as raw NaN-box bits. Immediates (number/bool/null/undefined)
-/// carry no live heap reference so this is fully safe for the common cases
-/// (`err.code = "X"`, `err.errno = -2`). Heap-object-valued props are stored
-/// by bits as a best-effort and may not survive a GC move of the referent;
-/// errors rarely carry object-valued own properties.
-#[derive(Clone)]
-pub enum ErrUserProp {
-    Str(String),
-    Bits(u64),
 }
 
 mod user_props;

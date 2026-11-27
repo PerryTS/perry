@@ -945,13 +945,7 @@ extern "C" fn ns_readable_iterator_return(
             let stream = scope.root_nanbox_f64(stream);
             call_source_iterator_return(stream.get_nanbox_f64());
             let reason = if uses_async_generator_ordering(stream.get_nanbox_f64()) {
-                let msg =
-                    crate::string::js_string_from_bytes(b"The operation was aborted".as_ptr(), 25);
-                crate::node_submodules::register_error_code_pub(msg, "ABORT_ERR");
-                crate::value::js_nanbox_pointer(crate::error::js_error_new_with_name_message(
-                    b"AbortError",
-                    msg,
-                ) as i64)
+                crate::event_target::abort::js_abort_error_value()
             } else {
                 f64::from_bits(TAG_UNDEFINED)
             };
