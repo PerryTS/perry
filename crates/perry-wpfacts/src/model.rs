@@ -2919,6 +2919,9 @@ pub struct Model {
     /// A spread source node -> the one node holding its elements
     /// (`Model::spread_elems_of`).
     pub spread_elems: FxHashMap<NodeId, NodeId>,
+    /// The rules attached to each node (`cons_untagged`): a node's rules
+    /// are a set; the value is the rule's index in the node's list.
+    pub cons_seen: crate::pts::FxHashMap<(NodeId, Cons), u32>,
     /// Solver-made call → the call its chain of solver-made calls started
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.

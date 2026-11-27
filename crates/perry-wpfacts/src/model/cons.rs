@@ -3,7 +3,7 @@
 use super::*;
 
 /// What an own-property test's gate node (`Cons::OwnGate`) holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OwnGateAt {
     /// The callee `H` of `H.call(o, k)` or the member `o.hasOwnProperty`:
     /// `Object.prototype.hasOwnProperty` / `propertyIsEnumerable` pass (and
@@ -25,7 +25,7 @@ pub enum OwnGateAt {
 
 /// Where a program observes the identity of what a node holds
 /// (`Cons::Identity`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IdentityRoute {
     /// `===` / `!==` between two values neither of which is a primitive
     /// literal (a comparison with one is a presence test).
@@ -95,7 +95,7 @@ pub enum MetaOp {
 }
 
 /// Complex constraints, attached to the node whose new tokens trigger them.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cons {
     /// The program observes the identity of every object the node holds
     /// (`route`). No flow and no effect on the solve: a fact the value-record

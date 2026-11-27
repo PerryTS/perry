@@ -1010,6 +1010,44 @@ impl Model {
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;
         }
+        // A node's rules are a set: the rule it already has, attached
+        // again (by the next copy of a call, the next receiver a native
+        // method runs on), adds no rule and no replay (its replay is
+        // idempotent). What the attach itself records still holds of the
+        // second one: made inside a clause it joins that clause's reach
+        // mask, outside every clause it is every run's (rule M1, as
+        // `note_edge_reach`); made in a generation region it raises there
+        // too; it is a consumer of a watched cell. A rule of an inert
+        // body's foreign node waits for the activation, which replays what
+        // it recorded.
+        if !self.foreign_rule(n) {
+            let next = self.nodes[n as usize].cons.len() as u32;
+            match self.cons_seen.entry((n, c)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let ci = *e.get();
+                    match self.clause {
+                        Some((f, m)) if self.cur_fn == f => {
+                            if let Some(r) = self.cons_reach.get_mut(&(n, ci)) {
+                                *r |= m;
+                            }
+                        }
+                        _ => {
+                            self.cons_reach.remove(&(n, ci));
+                        }
+                    }
+                    if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
+                        self.cons(n, Cons::Raise { region });
+                    }
+                    if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+                        self.cell_woken.push(n);
+                    }
+                    return;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(next);
+                }
+            }
+        }
         self.stats_cons += 1;
         if let Cons::FieldTruthy { dst, .. } = c {
             if self.ft_check.is_none() && std::env::var_os("PERRY_WPF_FILTER_CHECK").is_some() {
