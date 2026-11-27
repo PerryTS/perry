@@ -1,0 +1,1 @@
+A method a program adds to `Symbol.prototype` runs when it is called on a symbol primitive (`sym.m()`, `sym["m"]()`): a sloppy body sees the Symbol wrapper object, a strict body the symbol itself, and a missing or non-callable name throws a `TypeError`. The call used to evaluate to `undefined` without running the method.
