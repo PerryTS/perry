@@ -380,6 +380,16 @@ mod parse_float_tests {
     }
 
     #[test]
+    fn to_number_throws_for_bigint_that_number_call_converts() {
+        let big = crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(7) as i64);
+        let wrapped = crate::builtins::js_boxed_bigint_new(big);
+        for value in [big, wrapped] {
+            assert!(crate::exception::catch_js_throw(|| super::js_number_coerce(value)).is_err());
+            assert_eq!(super::js_number_from_value(value), 7.0);
+        }
+    }
+
+    #[test]
     fn number_coerce_arrays_via_tostring() {
         // Number(array) = ToNumber(array.join(",")): [] -> "" -> 0,
         // [5] -> "5" -> 5, [1,2] -> "1,2" -> NaN.
@@ -434,11 +444,6 @@ mod parse_float_tests {
     }
 }
 
-/// Number(value) -> number
-/// Converts a value to a number.
-///
-/// Marked `#[inline]` so the bitcode-link path can inline + DCE the
-/// branches when the input type is statically known.
 #[no_mangle]
 /// ECMA-262 ToIntegerOrInfinity (§7.1.5): ToNumber, then map NaN→0, truncate
 /// toward zero, preserving ±Infinity. Exposed for codegen so Array index
@@ -455,8 +460,21 @@ pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
     }
 }
 
+/// ECMA-262 ToNumber (§7.1.4): a BigInt or Symbol throws a TypeError, as does
+/// a BigInt that ToPrimitive returns for an object operand.
 #[no_mangle]
 pub extern "C" fn js_number_coerce(value: f64) -> f64 {
+    to_number::<false>(value)
+}
+
+/// `Number(value)` (§21.1.1.1): ToNumeric, and a BigInt result converts.
+#[no_mangle]
+pub extern "C" fn js_number_from_value(value: f64) -> f64 {
+    to_number::<true>(value)
+}
+
+#[inline(always)]
+fn to_number<const BIGINT_CONVERTS: bool>(value: f64) -> f64 {
     // #5525 hot fast path: a plain IEEE-754 double (top 16 bits, sign stripped,
     // below the 0x7FF9 Perry NaN-box tag band) is already a Number — ToNumber is
     // identity. Returns before the undefined/null/bool/string/int32/bigint/
@@ -469,14 +487,15 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
         return value;
     }
-    number_coerce_non_plain(value)
+    number_coerce_non_plain::<BIGINT_CONVERTS>(value)
 }
 
 // Keep the primitive identity path free of the coercion body's callee-saved
 // registers and stack frame. The boxed path keeps the same ToPrimitive order
-// and rooting; its recursive coercions re-enter the public classifier.
+// and rooting; its recursive coercions keep the caller's BigInt policy, so a
+// BigInt that ToPrimitive returns converts only for `Number(value)`.
 #[inline(never)]
-extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
+fn number_coerce_non_plain<const BIGINT_CONVERTS: bool>(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {
@@ -555,23 +574,24 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
             f64::NAN
         }
     } else if jsval.is_bigint() {
-        // BigInt → number conversion
-        let ptr = jsval.as_bigint_ptr();
-        crate::bigint_hooks::js_bigint_to_f64(ptr)
+        if !BIGINT_CONVERTS {
+            crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+        }
+        crate::bigint_hooks::js_bigint_to_f64(jsval.as_bigint_ptr())
     } else if jsval.is_handle() {
         // HANDLE_TAG carries a native registry id, not a heap pointer. It is
         // still a JavaScript object and follows ToPrimitive/ToNumber, but
         // must never enter the pointer-only object-header paths below.
         match unsafe { crate::value::to_string_primitive::to_primitive_number(value) } {
             crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::Primitive(p) => {
-                js_number_coerce(p)
+                to_number::<BIGINT_CONVERTS>(p)
             }
             crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
                 let str_ptr = crate::value::js_jsvalue_to_string(value);
                 if str_ptr.is_null() {
                     f64::NAN
                 } else {
-                    js_number_coerce(crate::value::js_nanbox_string(str_ptr as i64))
+                    to_number::<BIGINT_CONVERTS>(crate::value::js_nanbox_string(str_ptr as i64))
                 }
             }
             crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
@@ -584,10 +604,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
         // the object/toPrimitive path below and stringify to "Symbol(...)" or
         // produce NaN. Throw before any of the pointer-shape handling. This
         // covers both explicit `Number(sym)` and the implicit arithmetic
-        // ToNumber the codegen routes here (`sym * 2`, `-sym`, etc.). BigInt is
-        // intentionally NOT thrown here: `Number(1n)` converts (handled in the
-        // is_bigint arm above); the arithmetic-throws-on-BigInt rule lives at
-        // the arithmetic call sites (see dynamic_arith.rs both_bigint_or_throw).
+        // ToNumber the codegen routes here (`sym * 2`, `-sym`, etc.).
         if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
             crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
         }
@@ -622,7 +639,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
             let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
             let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
             let joined = crate::array::js_array_join(arr_ptr, comma);
-            return js_number_coerce(crate::value::js_nanbox_string(joined as i64));
+            return to_number::<BIGINT_CONVERTS>(crate::value::js_nanbox_string(joined as i64));
         }
         // TypedArray → OrdinaryToPrimitive(number): a *patched own*
         // `valueOf`/`toString` expando (stored in the typed-array own-props
@@ -634,7 +651,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
             if let Some(p) = unsafe {
                 crate::typedarray_props::typed_array_own_to_primitive_number(id as usize, value)
             } {
-                return js_number_coerce(p);
+                return to_number::<BIGINT_CONVERTS>(p);
             }
         }
         // Object → consult [Symbol.toPrimitive]("number") first; if the
@@ -642,7 +659,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
         let primitive = unsafe { crate::symbol::js_to_primitive(value, 1) };
         if primitive.to_bits() != value.to_bits() {
             // toPrimitive returned something different — re-coerce.
-            return js_number_coerce(primitive);
+            return to_number::<BIGINT_CONVERTS>(primitive);
         }
         // No custom [Symbol.toPrimitive]: OrdinaryToPrimitive(O, "number") =
         // try `valueOf` THEN `toString` (ES2024 §7.1.1.1). Previously this
@@ -655,7 +672,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
         match unsafe { crate::value::ordinary_to_primitive_number_for_add(value) } {
             crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => {
                 if p.to_bits() != value.to_bits() {
-                    return js_number_coerce(p);
+                    return to_number::<BIGINT_CONVERTS>(p);
                 }
                 return f64::NAN;
             }
@@ -675,7 +692,7 @@ extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
         if str_ptr.is_null() {
             return f64::NAN;
         }
-        js_number_coerce(crate::value::js_nanbox_string(str_ptr as i64))
+        to_number::<BIGINT_CONVERTS>(crate::value::js_nanbox_string(str_ptr as i64))
     } else {
         // Already a number
         value

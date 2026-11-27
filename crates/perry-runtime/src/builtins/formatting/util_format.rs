@@ -235,11 +235,16 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         let bs = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bs).unwrap_or("").to_string()
     }
-    fn util_number_placeholder_coerce(val: f64) -> f64 {
+    // Node's `%d` is `Number(value)`, `%i` is `parseInt(value)` and `%f` is
+    // `parseFloat(value)`; a Symbol formats as `NaN` for all three.
+    fn util_number_placeholder_coerce(val: f64, spec: u8) -> f64 {
         if unsafe { crate::symbol::js_is_symbol(val) } != 0 {
-            f64::NAN
-        } else {
-            js_number_coerce(val)
+            return f64::NAN;
+        }
+        match spec {
+            b'd' => crate::builtins::js_number_from_value(val),
+            b'i' => crate::builtins::js_parse_int_value(val, 0.0),
+            _ => crate::builtins::js_parse_float(crate::builtins::js_string_coerce(val)),
         }
     }
     if arr_ptr.is_null() {
@@ -247,8 +252,14 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
     }
     unsafe {
         let length = (*arr_ptr).length as usize;
-        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-            as *const f64;
+        // A placeholder conversion can run user code that moves the argument
+        // array, so every read goes through the rooted handle.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let args = scope.root_raw_const_ptr(arr_ptr);
+        let arg = |i: usize| -> f64 {
+            let header = args.get_raw_const_ptr::<crate::array::ArrayHeader>();
+            *(crate::array::array_elements_ptr(header) as *const f64).add(i)
+        };
 
         // No format string → empty result. Node returns "" for
         // `util.format()`.
@@ -259,12 +270,12 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         // If arg[0] isn't a string, fall back to space-joining every
         // arg with `format_jsvalue` (matches Node's non-string-first
         // util.format codepath).
-        let first = *data_ptr;
+        let first = arg(0);
         let first_jv = JSValue::from_bits(first.to_bits());
         if !first_jv.is_any_string() {
             let mut parts: Vec<String> = Vec::with_capacity(length);
             for i in 0..length {
-                parts.push(format_jsvalue(*data_ptr.add(i), 0));
+                parts.push(format_jsvalue(arg(i), 0));
             }
             return boxed_string(&parts.join(" "));
         }
@@ -315,7 +326,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                 i += 2;
                 continue;
             }
-            let val = *data_ptr.add(arg_idx);
+            let val = arg(arg_idx);
             arg_idx += 1;
             let jv = JSValue::from_bits(val.to_bits());
             match spec {
@@ -336,7 +347,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = util_number_placeholder_coerce(val);
+                        let f = util_number_placeholder_coerce(val, b'd');
                         out.push_str(&format_util_number(f));
                     }
                 }
@@ -346,15 +357,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = if jv.is_any_string()
-                            && jsvalue_string_content(val)
-                                .map(|s| s.is_empty())
-                                .unwrap_or(false)
-                        {
-                            f64::NAN
-                        } else {
-                            util_number_placeholder_coerce(val)
-                        };
+                        let f = util_number_placeholder_coerce(val, b'i');
                         if f.is_nan() {
                             out.push_str("NaN");
                         } else {
@@ -387,15 +390,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                             out.push_str(&format_finite_number_js(f));
                         }
                     } else {
-                        let f = if jv.is_any_string()
-                            && jsvalue_string_content(val)
-                                .map(|s| s.is_empty())
-                                .unwrap_or(false)
-                        {
-                            f64::NAN
-                        } else {
-                            util_number_placeholder_coerce(val)
-                        };
+                        let f = util_number_placeholder_coerce(val, b'f');
                         if f.is_nan() {
                             out.push_str("NaN");
                         } else {
@@ -449,7 +444,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         // Node: `util.format("hi", "x", "y")` → `"hi x y"`.
         while arg_idx < length {
             out.push(' ');
-            out.push_str(&format_jsvalue(*data_ptr.add(arg_idx), 0));
+            out.push_str(&format_jsvalue(arg(arg_idx), 0));
             arg_idx += 1;
         }
 
