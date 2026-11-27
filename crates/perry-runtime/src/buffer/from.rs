@@ -384,8 +384,9 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
         buf
     } else if let Some(buf) = unsafe { buffer_from_object_to_primitive(value_f64, encoding) } {
         buf
+    } else if crate::array::clean_arr_ptr(ptr as *const ArrayHeader).is_null() {
+        throw_invalid_buffer_from_first_arg()
     } else {
-        // Assume it's an array of numbers
         js_buffer_from_array(ptr as *const ArrayHeader)
     }
 }
