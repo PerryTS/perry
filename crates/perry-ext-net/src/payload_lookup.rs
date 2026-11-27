@@ -45,7 +45,15 @@ pub(crate) enum Wanted {
 }
 
 pub(crate) fn wanted(options: f64) -> Wanted {
-    let family = family_number(dns_family(options));
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let family = scope.root_nanbox(dns_family(options.get()));
+    wanted_for(family.get(), options.get())
+}
+
+/// [`wanted`] for the `family` already read from `options`.
+fn wanted_for(family: f64, options: f64) -> Wanted {
+    let family = family_number(family);
     let auto_select = JsValue::from_bits(field(options, "autoSelectFamily").to_bits());
     let auto_select = if auto_select.is_bool() {
         auto_select.to_bool()
@@ -87,13 +95,19 @@ pub(crate) fn resolved(owner: f64, addresses: &[u8]) {
     let family = |ip: &IpAddr| if ip.is_ipv4() { 4 } else { 6 };
     let reported: Vec<IpAddr> = match wanted {
         Wanted::All => ips,
-        Wanted::One(want) => ips
-            .iter()
-            .find(|ip| want == 0 || family(ip) == want)
-            .or(ips.first())
-            .copied()
-            .into_iter()
-            .collect(),
+        Wanted::One(0) => ips.first().copied().into_iter().collect(),
+        Wanted::One(want) => match ips.iter().find(|ip| family(ip) == want) {
+            Some(&ip) => vec![ip],
+            // The resolver is not asked for one family; Node's is, and finds nothing.
+            None => {
+                let error = super::payload_io::socket_error_value("getaddrinfo", "ENOTFOUND", None);
+                let scope = TransientRootScope::enter();
+                let error = scope.root_nanbox(error);
+                failed(owner, error.get());
+                socket::destroy(owner, error.get());
+                return;
+            }
+        },
     };
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
@@ -142,7 +156,7 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
     let lookup = scope.root_nanbox(lookup);
     let family = scope.root_nanbox(dns_family(options.get()));
     let hints = scope.root_nanbox(field(options.get(), "hints"));
-    let all = matches!(wanted(options.get()), Wanted::All);
+    let all = matches!(wanted_for(family.get(), options.get()), Wanted::All);
     let dns_options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     p::own_set(dns_options.get(), "family", family.get());
     // SAFETY: Truthiness reads a rooted JS value on this agent.
