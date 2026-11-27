@@ -52,11 +52,6 @@ pub const ANY_MEMBER: &str = "*";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PatchedBuiltins {
     entries: BTreeSet<(String, String)>,
-    /// NXCALL5: static member names the program stores onto targets the
-    /// scan does not resolve (`m.basename = f`). Not a patch by itself: it
-    /// only matters below a node-core namespace the program handed on
-    /// (`patched_builtins_node` module docs).
-    node_stored: BTreeSet<String>,
     pub dynamic_code_reach: crate::dynamic_code::DynamicCodeReach,
     /// MATHB1: lower every direct namespace call as the pair
     /// `NamespacePatched(ns) ? <generic> : <intrinsic>`, so the whole-program
@@ -299,6 +294,10 @@ struct Scanner<'a> {
     /// by name for the same reason: a write through one is a store into the
     /// global object.
     global_aliases: BTreeSet<String>,
+    /// The module binds the name `process` somewhere (any declaration,
+    /// parameter or import): `global.process = process` may then store a
+    /// different value.
+    binds_process: bool,
     /// Identifiers bound to a node-core module namespace (NXCALL3).
     node_bindings: node_ns::NodeBindings,
 }
@@ -380,8 +379,6 @@ impl Scanner<'_> {
                 Some(_) => {}
                 None => self.add(GLOBAL_ANY_KEY.into(), None),
             }
-        } else if let Some(name) = member.filter(|_| !node_ns::fresh_value(target)) {
-            self.out.node_stored.insert(name);
         }
     }
 
@@ -550,6 +547,14 @@ impl Visit for Scanner<'_> {
 
     fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
         match &a.left {
+            // `global.process = process` with the global `process` (no binding
+            // of that name in the module) stores the value the slot holds.
+            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m))
+                if a.op == ast::AssignOp::Assign
+                    && !self.binds_process
+                    && is_global_object(&m.obj)
+                    && static_member_name(&m.prop).as_deref() == Some("process")
+                    && matches!(peel(&a.right), ast::Expr::Ident(id) if id.sym == "process") => {}
             ast::AssignTarget::Simple(t) => self.record_simple_target(t),
             ast::AssignTarget::Pat(p) => match p {
                 ast::AssignTargetPat::Array(a) => {
@@ -652,6 +657,43 @@ impl Visit for Scanner<'_> {
     }
 }
 
+/// Does the module bind `name` anywhere (by name, not by scope)?
+struct BindsName {
+    name: &'static str,
+    found: bool,
+}
+
+impl Visit for BindsName {
+    fn visit_binding_ident(&mut self, b: &ast::BindingIdent) {
+        self.found |= b.id.sym == self.name;
+    }
+    fn visit_fn_decl(&mut self, f: &ast::FnDecl) {
+        self.found |= f.ident.sym == self.name;
+        f.visit_children_with(self);
+    }
+    fn visit_fn_expr(&mut self, f: &ast::FnExpr) {
+        self.found |= f.ident.as_ref().is_some_and(|i| i.sym == self.name);
+        f.visit_children_with(self);
+    }
+    fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
+        self.found |= c.ident.sym == self.name;
+        c.visit_children_with(self);
+    }
+    fn visit_class_expr(&mut self, c: &ast::ClassExpr) {
+        self.found |= c.ident.as_ref().is_some_and(|i| i.sym == self.name);
+        c.visit_children_with(self);
+    }
+    fn visit_import_default_specifier(&mut self, s: &ast::ImportDefaultSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+    fn visit_import_star_as_specifier(&mut self, s: &ast::ImportStarAsSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+    fn visit_import_named_specifier(&mut self, s: &ast::ImportNamedSpecifier) {
+        self.found |= s.local.sym == self.name;
+    }
+}
+
 /// Collect every built-in member write in `module`.
 pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
     let mut proto_aliases = BTreeMap::new();
@@ -671,14 +713,15 @@ pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
         proto_aliases,
         ns_aliases,
         global_aliases,
-        node_bindings: node_bindings.clone(),
-    });
-    // NXCALL3: a node-core namespace handed on is recorded as an escape,
-    // with the facts on as well (`node_ns`): not a write by itself.
-    module.visit_with(&mut node_ns::EscapeScan {
-        bindings: &node_bindings,
-        out: &mut out.entries,
-        open_arm: false,
+        node_bindings,
+        binds_process: {
+            let mut b = BindsName {
+                name: "process",
+                found: false,
+            };
+            module.visit_with(&mut b);
+            b.found
+        },
     });
     let mut escaped = BTreeSet::new();
     module.visit_with(&mut EscapeScan { out: &mut escaped });
@@ -800,11 +843,10 @@ pub fn node_member_patched(module: &str, path: &[&str]) -> bool {
     with_set(|s| node_ns::member_patched(s, module, path)).unwrap_or(false)
 }
 
-/// NXCALL3: the program is an open CommonJS program (`cjs_link`): the
-/// loader escapes the wrapper recorded under its open arm count. True when
-/// that grew the set (the driver then re-lowers).
-pub fn promote_open_node_escapes(set: &mut PatchedBuiltins) -> bool {
-    node_ns::promote_open_escapes(&mut set.entries)
+/// The recorded program write behind [`node_member_patched`] (for
+/// `PERRY_NODE_NS_REPORT`).
+pub fn node_member_patch_entry(module: &str, path: &[&str]) -> Option<(String, String)> {
+    with_set(|s| node_ns::patch_entry(s, module, path)).flatten()
 }
 
 /// May the program rebind the global function `name` ([`GLOBAL_FUNCTIONS`])?

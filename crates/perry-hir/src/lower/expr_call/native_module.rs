@@ -377,13 +377,18 @@ pub(super) fn node_namespace_call_patched(ctx: &LoweringContext, callee: &ast::E
     path.push(name.to_string());
     let path: Vec<&str> = path.iter().map(String::as_str).collect();
     let patched = crate::patched_builtins::node_member_patched(&module, &path);
-    // `PERRY_NODE_NS_REPORT=1`: one line per node-core namespace call site.
+    // `PERRY_NODE_NS_REPORT=1`: one line per node-core namespace call site,
+    // with the recorded program write that makes it generic.
     if std::env::var_os("PERRY_NODE_NS_REPORT").is_some() {
-        eprintln!(
-            "node-ns-call {module} {} {}",
-            path.join("."),
-            if patched { "generic" } else { "direct" }
-        );
+        match crate::patched_builtins::node_member_patch_entry(&module, &path) {
+            Some((ns, member)) => {
+                eprintln!(
+                    "node-ns-call {module} {} generic {ns}:{member}",
+                    path.join(".")
+                )
+            }
+            None => eprintln!("node-ns-call {module} {} direct", path.join(".")),
+        }
     }
     patched
 }

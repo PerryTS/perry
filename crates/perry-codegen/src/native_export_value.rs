@@ -63,6 +63,15 @@ pub(crate) fn prepare(
     if source.strip_prefix("node:").unwrap_or(source) == "fs/promises" && export == "constants" {
         return prepare(strings, "fs", "constants", observe_writes);
     }
+    // `require("path/posix")` IS `require("path").posix` (and the same for
+    // win32) on every host: the default import is that one value.
+    if export == "default" {
+        match source.strip_prefix("node:").unwrap_or(source) {
+            "path/posix" => return prepare(strings, "path", "posix", observe_writes),
+            "path/win32" => return prepare(strings, "path", "win32", observe_writes),
+            _ => {}
+        }
+    }
     if export != "default" {
         if let Some(symbol) =
             perry_dispatch::native_submodule_exports::export_value_symbol(source, export)

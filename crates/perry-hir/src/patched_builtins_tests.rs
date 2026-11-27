@@ -666,7 +666,7 @@ fn dynamic_code_reach_rebinds_only_global_functions() {
 
 // NXCALL3: node-core namespaces under the same program-wide no-store fact.
 #[test]
-fn node_core_namespace_writes_and_escapes() {
+fn node_core_namespace_writes() {
     let s = scan(
         r#"
         const path = require("path");
@@ -689,7 +689,6 @@ fn node_core_namespace_writes_and_escapes() {
         ("node:path", "relative"),
         ("node:fs", "existsSync"),
         ("node:fs", "promises.readFile"),
-        ("node:os", "$esc"),
     ] {
         assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
     }
@@ -719,7 +718,7 @@ fn node_core_namespace_writes_and_escapes() {
 }
 
 #[test]
-fn node_core_namespace_handed_on_is_an_escape_not_a_write() {
+fn node_core_namespace_handed_on_is_not_a_write() {
     let s = scan(
         r#"
         import path from "path";
@@ -730,20 +729,7 @@ fn node_core_namespace_handed_on_is_an_escape_not_a_write() {
         take(process);
         "#,
     );
-    // `path.win32` folds into the root on the host it equals.
-    for (k, m) in [
-        ("node:path", "$esc"),
-        ("node:fs", "$esc"),
-        ("node:util", "$esc"),
-        ("node:process", "$esc"),
-    ] {
-        assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
-    }
-    assert!(
-        !s.iter()
-            .any(|(k, m)| k.starts_with("node:") && m.ends_with('*')),
-        "{s:?}"
-    );
+    assert!(!s.iter().any(|(k, _)| k.starts_with("node:")), "{s:?}");
     assert!(!node_ns::member_patched(&s, "path", &["join"]));
     assert!(!node_ns::member_patched(
         &s,
@@ -757,37 +743,42 @@ fn node_core_namespace_handed_on_is_an_escape_not_a_write() {
     ));
 }
 
+/// The scan counts stores onto the targets it resolves (a binding, an alias,
+/// a member chain, a literal `require`, a destructured member). A store onto
+/// a target it does not resolve is the gap the module docs name (the same
+/// as the #10848 globals scan): it does not make a same-named member generic.
 #[test]
-fn node_core_store_through_a_handed_namespace_is_a_write() {
+fn node_core_store_counts_only_through_resolved_targets() {
     let s = scan(
         r#"
         const path = require("path"), fs = require("fs");
-        function patch(m) { m.basename = () => "x"; }
+        const p = path;
+        p.basename = () => "x";
+        require("os").cpus = () => [];
+        const { promises: fsp } = fs;
+        fsp.stat = async () => 0;
+        process.hrtime.bigint = () => 0n;
+        function patch(m) { m.join = () => "x"; }
         patch(path);
         const holder = { f: fs };
         holder.f.existsSync = () => true;
-        Object.defineProperty(other(), "readdirSync", { value: 1 });
-        ({}).dirname = 1;
-        Object.assign({}, { relative: 1 });
+        thing.cwd = 1;
         "#,
     );
     assert!(node_ns::member_patched(&s, "path", &["basename"]));
     assert!(node_ns::member_patched(&s, "path", &["posix", "basename"]));
+    assert!(node_ns::member_patched(&s, "os", &["cpus"]));
+    assert!(node_ns::member_patched(&s, "fs", &["promises", "stat"]));
+    assert!(node_ns::member_patched(&s, "fs/promises", &["stat"]));
+    assert!(node_ns::member_patched(
+        &s,
+        "process",
+        &["hrtime", "bigint"]
+    ));
+    assert!(!node_ns::member_patched(&s, "process", &["hrtime"]));
     assert!(!node_ns::member_patched(&s, "path", &["join"]));
-    assert!(node_ns::member_patched(&s, "fs", &["existsSync"]));
-    assert!(node_ns::member_patched(&s, "fs", &["readdirSync"]));
-    // A store onto a value the expression creates reaches no namespace.
-    assert!(!node_ns::member_patched(&s, "path", &["dirname"]));
-    assert!(!node_ns::member_patched(&s, "path", &["relative"]));
-    // `os` never escaped: a same-named store elsewhere does not reach it.
-    let t = scan(
-        r#"
-        const os = require("os");
-        os.cpus();
-        thing.cpus = 1;
-        "#,
-    );
-    assert!(!node_ns::member_patched(&t, "os", &["cpus"]));
+    assert!(!node_ns::member_patched(&s, "fs", &["existsSync"]));
+    assert!(!node_ns::member_patched(&s, "process", &["cwd"]));
 }
 
 #[test]
@@ -811,24 +802,30 @@ fn node_core_namespace_reads_are_not_patches() {
     assert!(!node_ns::member_patched(&s, "process", &["nextTick"]));
 }
 
+/// `global.process = process` stores the global `process` into its own slot;
+/// with a binding named `process` in the module it may store another value.
 #[test]
-fn node_core_escape_in_the_open_loader_arm_counts_only_when_open() {
-    let mut s = scan(
+fn global_process_stored_into_itself_is_not_a_write() {
+    let s = scan(
         r#"
-        import _path from "path";
-        function require(specifier) {
-            if (__perry_cjs_open()) { if (specifier === "path") { return _path; } }
-            throw new Error("closed");
-        }
-        require(name).join = () => "";
+        if (process !== global.process) { process.env = global.process.env; global.process = process; }
         "#,
     );
-    assert!(s.contains(&pair("node:path", "$open")), "{s:?}");
-    assert!(!node_ns::member_patched(&s, "path", &["join"]));
-    assert!(promote_open_node_escapes(&mut s));
-    assert!(s.contains(&pair("node:path", "$esc")), "{s:?}");
-    // The computed require hands `path` to program code that stores `join`.
-    assert!(node_ns::member_patched(&s, "path", &["join"]));
-    assert!(!node_ns::member_patched(&s, "path", &["resolve"]));
-    assert!(!promote_open_node_escapes(&mut s));
+    assert!(
+        !node_ns::member_patched(&s, "process", &["nextTick"]),
+        "{s:?}"
+    );
+    assert!(
+        node_ns::member_patched(&s, "process", &["env", "X"]),
+        "{s:?}"
+    );
+    let t = scan(
+        r#"
+        function f(process) { global.process = process; }
+        "#,
+    );
+    assert!(
+        node_ns::member_patched(&t, "process", &["nextTick"]),
+        "{t:?}"
+    );
 }
