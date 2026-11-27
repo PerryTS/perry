@@ -9,6 +9,7 @@ use crate::object::{js_object_set_field_f64, js_object_set_keys};
 use crate::{js_object_alloc, js_string_from_bytes, ArrayHeader, ObjectHeader, StringHeader};
 
 pub mod abort;
+pub(crate) mod href;
 pub mod node_compat;
 pub mod parse;
 pub(crate) mod prototype;
@@ -302,6 +303,4 @@ pub(crate) use crate::value::boxed_text::{
     string_from_header,
 };
 
-pub(crate) use crate::url_hooks::{
-    idna_domain_to_ascii, idna_domain_to_unicode, whatwg_canonicalize_host,
-};
+pub(crate) use crate::url_hooks::{idna_domain_to_unicode, whatwg_canonicalize_host};
