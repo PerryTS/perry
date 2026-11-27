@@ -1101,7 +1101,7 @@ pub(crate) struct FnCtx<'a> {
     /// built-in constructors. See issue #602.
     pub imported_class_sources: &'a std::collections::HashMap<String, String>,
     /// Per-module alias → original imported export name (renamed named imports
-    /// only). Used by `lower_new` to recover the canonical built-in constructor
+    /// and the native SQLite default constructor). Used by `lower_new` to recover the canonical built-in constructor
     /// name when a bundle aliases the import (`import { AsyncLocalStorage as xQ5
     /// }`). See `CompileOptions::imported_class_original_names`.
     pub imported_class_original_names: &'a std::collections::HashMap<String, String>,

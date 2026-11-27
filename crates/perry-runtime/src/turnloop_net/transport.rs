@@ -1044,7 +1044,7 @@ pub unsafe fn adopt_descriptor(
     .unwrap_or_else(|| Err(no_loop()))
 }
 
-/// Start the multishot read.
+/// Start the multishot read, or restart one [`read_stop`] stopped.
 ///
 /// # Safety
 /// See [`bind`].
@@ -1052,14 +1052,36 @@ pub unsafe fn read_start(core: *mut TransportCore, link: OwnerLink) -> NetResult
     let (c, name) = bind(core, link, "read")?;
     with_driver(|driver| {
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
-        if entry.read_op.is_some() || entry.closing {
+        if entry.read_op.is_some() || entry.closing || entry.read_halt == ReadHalt::Eof {
             return Ok(());
         }
         let op = driver
             .read_start(entry.handle, name.token(OP_READ))
             .map_err(|e| map_error(e, "read"))?;
         entry.read_op = Some(op);
+        entry.read_halt = ReadHalt::Running;
         census::note_submit(OP_READ);
+        settle_ref(driver, c);
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
+/// libuv's `readStop`: stop the multishot read until [`read_start`]. Results
+/// the stopped operation already produced are still delivered. Fails when no
+/// read is running (an EOF already ended it), so a caller never records a
+/// stop it would later try to undo.
+///
+/// # Safety
+/// See [`bind`].
+pub unsafe fn read_stop(core: *mut TransportCore, link: OwnerLink) -> NetResult<()> {
+    let (c, _) = bind(core, link, "read")?;
+    with_driver(|driver| {
+        let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
+        let op = entry.read_op.take().ok_or_else(|| not_found("read"))?;
+        driver.stop(op);
+        entry.read_halt = ReadHalt::Stopped;
+        settle_ref(driver, c);
         Ok(())
     })
     .unwrap_or_else(|| Err(no_loop()))
@@ -1207,15 +1229,16 @@ pub unsafe fn set_ref(
         .unwrap_or_else(|| Err(no_loop()))
 }
 
-/// libuv's active handle: an ended stream keeps the loop alive only while a
-/// write, a shutdown or a close is owed. The driver counts an open socket
-/// itself, so the core's reference is withdrawn in between.
+/// libuv's active handle: a stream that is ended or stopped reading keeps the
+/// loop alive only while a write, a shutdown or a close is owed. The driver
+/// counts an open socket itself, so the core's reference is withdrawn in
+/// between.
 fn holds_loop(entry: &Entry, backlog: &Backlog) -> bool {
     #[cfg(windows)]
     if entry.pipe_drain.is_some() || entry.pipe_eof_timer.is_some() {
         return true;
     }
-    !entry.ended
+    !(entry.ended || entry.read_halt == ReadHalt::Stopped)
         || entry.closing
         || entry.posted
         || entry.inflight > 0
@@ -1223,9 +1246,9 @@ fn holds_loop(entry: &Entry, backlog: &Backlog) -> bool {
         || !backlog.is_idle()
 }
 
-/// Re-derive an ended stream's reference after its owed work changed.
+/// Re-derive a stream's reference after its reading or owed work changed.
 fn settle_ref(driver: &mut turnloop::Loop, c: &mut TransportCore) {
-    let Some(entry) = c.entry.as_mut().filter(|entry| entry.ended) else {
+    let Some(entry) = c.entry.as_mut() else {
         return;
     };
     let wanted = c.referenced && holds_loop(entry, &c.backlog);
@@ -1587,6 +1610,9 @@ unsafe fn complete_posted(link: OwnerLink) {
             retire_posted(entry, &mut retired);
         }
         emit_wrote(route, link, &retired);
+        if let Some(c) = core_of(link) {
+            with_driver(|driver| settle_ref(driver, c));
+        }
     }
     release(link);
 }
@@ -1712,14 +1738,14 @@ pub(super) fn dispatch(completion: Completion) {
             #[cfg(windows)]
             OP_PIPE_DRAIN => dispatch_pipe_drain(link, op_id, terminal, result),
             _ => {
-                let ended = core_of(link)
+                let idle = core_of(link)
                     .and_then(|c| c.entry.as_ref())
-                    .is_some_and(|entry| entry.ended);
-                if ended {
+                    .is_some_and(|entry| entry.ended || entry.read_halt == ReadHalt::Stopped);
+                if idle {
                     hold(link);
                 }
-                dispatch_stream(route, op, link, handle, terminal, result);
-                if ended {
+                dispatch_stream(route, op, op_id, link, handle, terminal, result);
+                if idle {
                     if let Some(c) = core_of(link) {
                         with_driver(|driver| settle_ref(driver, c));
                     }
@@ -1984,11 +2010,12 @@ unsafe fn close_attempt(c: &mut TransportCore, link: OwnerLink) {
     }
 }
 
-fn clear_op(c: &mut TransportCore, op_class: u64) {
+/// A restarted read's operation survives the stopped one's last completion.
+fn clear_op(c: &mut TransportCore, op_class: u64, op_id: Option<OpId>) {
     if let Some(entry) = c.entry.as_mut() {
         match op_class {
             OP_ACCEPT => entry.accept_op = None,
-            OP_READ => entry.read_op = None,
+            OP_READ if entry.read_op == op_id => entry.read_op = None,
             _ => {}
         }
     }
@@ -2001,6 +2028,7 @@ fn close_null(conn: Handle) {
 unsafe fn dispatch_stream(
     route: u8,
     op: u64,
+    op_id: Option<OpId>,
     link: OwnerLink,
     handle: Option<Handle>,
     terminal: bool,
@@ -2110,7 +2138,11 @@ unsafe fn dispatch_stream(
                     };
                     let _ = with_driver(|driver| windows_pipe::cancel_eof(driver, name, entry));
                 }
-                entry.read_op = None;
+                entry.read_halt = ReadHalt::Eof;
+                // A stopped read's EOF ends a read restarted behind it.
+                if let Some(restarted) = entry.read_op.take().filter(|&id| Some(id) != op_id) {
+                    let _ = with_driver(|driver| driver.cancel(restarted));
+                }
             }
             if defer_eof::park(defer_eof::Key::Link(link.0), route, handle) {
                 // Pins the cell until the parked EOF is delivered or dropped.
@@ -2172,7 +2204,7 @@ unsafe fn dispatch_stream(
             };
             let queued = total_queued(c);
             if terminal {
-                clear_op(c, op);
+                clear_op(c, op, op_id);
             }
             let mapped = map_error(err, syscall_for(op));
             if op == OP_CONNECT && connect_failed(c, link, mapped) {
@@ -2182,7 +2214,7 @@ unsafe fn dispatch_stream(
         }
         OpResult::Cancelled | OpResult::Stopped => {
             if let Some(c) = current(link, handle) {
-                clear_op(c, op);
+                clear_op(c, op, op_id);
                 if op == OP_WRITE || op == OP_SHUTDOWN {
                     retire(c, op);
                 }
