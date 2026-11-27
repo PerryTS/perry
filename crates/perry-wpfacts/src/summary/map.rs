@@ -379,6 +379,7 @@ pub fn map_cons(
             kept,
         },
         EnumLoad { key, dst } => EnumLoad { key, dst: n(dst) },
+        MapEntryAt { value, dst } => MapEntryAt { value, dst: n(dst) },
         EnumChain { key, dst, of, from } => EnumChain {
             key,
             dst: n(dst),
@@ -794,6 +795,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxLoad { .. }
             | EnumChain { .. }
             | EnumLoad { .. }
+            | MapEntryAt { .. }
             | ForInAcc { .. }
             | OwnDescAcc { .. }
             | ForInMeet { .. }
@@ -858,6 +860,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }
         | EnumLoad { dst, .. }
+        | MapEntryAt { dst, .. }
         | IdxKey { dst, .. }
         | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }

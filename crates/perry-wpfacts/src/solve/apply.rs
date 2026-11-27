@@ -137,6 +137,24 @@ impl Model {
                     self.index_kept(t);
                 }
             }
+            Cons::MapEntryAt { value, dst } => {
+                let ek = self.elem_key();
+                for &t in toks {
+                    self.prov_tok(pv, t);
+                    if self.keyed_collection(t) {
+                        let part = match value {
+                            true => self.map_vals(t),
+                            false => self.map_keys(t),
+                        };
+                        self.edge(part, dst);
+                    } else {
+                        self.load_from(t, t, ek, dst);
+                    }
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, ek, dst));
+                }
+            }
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {

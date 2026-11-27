@@ -263,6 +263,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         Cons::Load { .. }
         | Cons::ProtoKey { .. }
         | Cons::OwnValues { .. }
+        | Cons::MapEntryAt { .. }
         | Cons::OwnDescValues { .. }
         | Cons::Chain { .. }
         | Cons::EnumChain { .. }

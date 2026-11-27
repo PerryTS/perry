@@ -260,6 +260,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         Cons::IdxLoad { .. }
         | Cons::IdxOwnLoad { .. }
         | Cons::OwnGate { .. }
+        | Cons::MapEntryAt { .. }
         | Cons::EnumLoad { .. } => {
             Reject(R5Load("[computed]".into()))
         }
@@ -451,9 +452,10 @@ fn array_use(c: &Cons, m: &Model) -> Use {
             op(named(key))
         }
         Cons::Fulfil { .. } => op("then".into()),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
-            op("[index]".into())
-        }
+        Cons::IdxLoad { .. }
+        | Cons::IdxOwnLoad { .. }
+        | Cons::EnumLoad { .. }
+        | Cons::MapEntryAt { .. } => op("[index]".into()),
         Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => {
             Use::Reject(R6Store("hole".into()))
         }

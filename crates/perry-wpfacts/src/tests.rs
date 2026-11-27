@@ -97,6 +97,7 @@ mod declared_effects;
 mod declared_getter_results;
 mod default_params;
 mod define_through_unknown;
+mod destr;
 pub(crate) mod delivery_boundaries;
 pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;

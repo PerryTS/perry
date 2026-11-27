@@ -1563,6 +1563,16 @@ impl Model {
         }
         self.arr_len_top(t);
         self.map_open(t);
+        // A delete, a definition or a `with` may remove or redefine an
+        // index: no slot of `t` stays exact (`index_slots_merge`).
+        if t != TOP
+            && matches!(
+                kind,
+                Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+            )
+        {
+            self.index_slots_merge(t);
+        }
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);
