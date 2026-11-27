@@ -64,8 +64,6 @@ crates/perry-wpfacts/src/gen_expr.rs	2508
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/diagnostics.rs	2102
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/gen/walk.rs	2086
-# Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/solve/lookup.rs	2013
 EOF
 )
