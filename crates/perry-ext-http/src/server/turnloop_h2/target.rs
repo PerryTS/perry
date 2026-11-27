@@ -52,7 +52,16 @@ impl Target {
     pub(super) fn destroy(self) {
         match self {
             Self::Client(id) => {
-                let _ = tl::close(id);
+                // No transport is left to report the close (a connect still
+                // resolving): the session's `'close'` is owed now.
+                if tl::close(id).is_err() && super::conn::owns(id) {
+                    let session_handle = super::conn::release(id);
+                    crate::server::http2_server::push_h2_event(
+                        crate::server::http2_server::Http2PendingEvent::ClientClose {
+                            session_handle,
+                        },
+                    );
+                }
             }
             Self::Session(_) => {
                 if let Some(socket) = self.socket() {

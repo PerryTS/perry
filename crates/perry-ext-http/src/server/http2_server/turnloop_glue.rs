@@ -133,29 +133,13 @@ pub(crate) fn mark_turnloop_client_connected(session_handle: i64, protocol: &str
     push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
 }
 
+/// The session's protocol is done and its transport is ending. It is
+/// destroyed, and emits `'close'`, only when the transport has closed
+/// ([`emit_session_close`]).
 pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
-    if session_handle == 0 {
-        return;
-    }
-    let notify = match get_handle_mut::<Http2SessionHandle>(session_handle) {
-        // A server session is destroyed, and emits `'close'`, from its
-        // socket's `'close'` listener (`native_server`), which runs in the
-        // close-callbacks phase.
-        Some(session) if session.session_type == 0 => false,
-        Some(session) => {
-            let first = !session.closed;
-            session.mark_closed();
-            session.connecting = false;
-            session.turnloop_conn = 0;
-            first
-        }
-        None => false,
-    };
-    if notify {
-        push_h2_event(Http2PendingEvent::ClientClose {
-            session_handle,
-            callback: 0,
-        });
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+        session.connecting = false;
+        session.turnloop_conn = 0;
     }
 }
 

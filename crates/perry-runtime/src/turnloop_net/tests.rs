@@ -98,11 +98,13 @@ impl Drop for Fixture {
 }
 
 /// One loop iteration's net work: a turn, then the check phase that follows
-/// it in the generated loop (which delivers an EOF parked behind data).
+/// it in the generated loop (which delivers an EOF parked behind data) and the
+/// close-callbacks phase (which delivers `Closed`).
 fn pump() {
     turn_only();
     super::check_phase_begin();
     super::check_phase_end();
+    super::close_phase();
 }
 
 /// A turn with no check phase after it.
@@ -574,6 +576,36 @@ fn unix_domain_sockets_carry_the_same_lifecycle() {
     pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_dir(&dir);
+}
+
+/// An id socket's `Closed` reaches its binding only in the close phase,
+/// newest close first, as a link socket's does.
+#[test]
+fn an_id_sockets_closed_waits_for_the_close_phase_newest_first() {
+    let _fixture = Fixture::start();
+    let (server, client, conn) = connected_pair();
+    super::close(client).expect("close client");
+    super::close(conn).expect("close conn");
+    assert!(super::close_queued());
+    let limit = Instant::now() + Duration::from_secs(5);
+    while !super::close_ready() && Instant::now() < limit {
+        turn_only();
+    }
+    assert_eq!(
+        events().iter().filter(|e| e.kind == NET_CLOSED).count(),
+        0,
+        "the poll phase does not emit it"
+    );
+    super::close_phase();
+    let closed: Vec<i64> = events()
+        .iter()
+        .filter(|e| e.kind == NET_CLOSED)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(closed, [conn, client]);
+    assert!(!super::close_queued());
+    super::close(server).expect("close listener");
+    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_CLOSED && e.id == server)));
 }
 
 #[test]

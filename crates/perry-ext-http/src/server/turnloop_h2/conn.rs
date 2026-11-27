@@ -63,7 +63,7 @@
 //! for it, so this module counts the SETTINGS frames it sent out of band and
 //! eats exactly that many acks before the core sees them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -304,25 +304,27 @@ fn conns() -> &'static Mutex<HashMap<i64, H2Conn>> {
     CONNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Ids this module owns, kept separately from [`conns`] so that [`owns`] stays
-/// truthful while a record is checked out by [`with_owned`].
-fn owned_ids() -> &'static Mutex<HashSet<i64>> {
-    static IDS: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
-    IDS.get_or_init(|| Mutex::new(HashSet::new()))
+/// Ids this module owns, with the session each carries, kept separately from
+/// [`conns`] so that [`owns`] stays truthful while a record is checked out by
+/// [`with_owned`], and the session is still found at the `NET_CLOSED` of a
+/// connection whose record is gone.
+fn owned_ids() -> &'static Mutex<HashMap<i64, i64>> {
+    static IDS: OnceLock<Mutex<HashMap<i64, i64>>> = OnceLock::new();
+    IDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub(crate) fn owns(id: i64) -> bool {
     owned_ids()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .contains(&id)
+        .contains_key(&id)
 }
 
 pub(crate) fn insert(conn: H2Conn) {
     owned_ids()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(conn.id);
+        .insert(conn.id, conn.session_handle);
     conns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -354,8 +356,8 @@ fn forget(id: i64) -> Option<H2Conn> {
 /// sink, which has never heard of the id: the terminal completion would reach
 /// nobody, the id would never go back to the shared band, and a `perry-ext-http`
 /// process that failed one write would leak a handle id per connection (the
-/// #6441 exhaustion class). [`forget`] is the only release, and [`on_closed`]
-/// is the only caller that can reach it for a live socket.
+/// #6441 exhaustion class). [`release`] is the only release of a live socket:
+/// at its `NET_CLOSED`, or when its close reaches no transport.
 pub(crate) fn with_owned<R>(id: impl Into<Target>, f: impl FnOnce(&mut H2Conn) -> R) -> Option<R> {
     let id = match id.into() {
         Target::Session(session) => return super::native_server::with_session(session, f),
@@ -1312,11 +1314,27 @@ pub(super) fn on_eof(id: impl Into<Target>) {
     finish_and_close(id);
 }
 
+/// The connection's terminal completion, delivered in the close-callbacks
+/// phase: the session it carried is destroyed and emits `'close'` here.
 fn on_closed(id: i64) {
-    // `forget` may find nothing — an earlier failed write dropped the record
-    // and left only the ownership entry — and the cleanup below still has to
-    // run, because it is the ownership entry and the id itself that leak.
-    if let Some(mut conn) = forget(id) {
+    let session = release(id);
+    crate::server::http2_server::emit_session_close(session);
+}
+
+/// Release a connection whose transport is gone, returning the session it
+/// carried. The ownership entry may be all that is left — an earlier failed
+/// write dropped the record — and it and the id still have to go.
+pub(super) fn release(id: i64) -> i64 {
+    let session = owned_ids()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id)
+        .unwrap_or(0);
+    let record = conns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    if let Some(mut conn) = record {
         conn.destroyed = true;
         let live: Vec<u32> = conn.streams.iter().map(|s| s.h2_id).collect();
         for stream_id in live {
@@ -1326,15 +1344,11 @@ fn on_closed(id: i64) {
         if conn.server_handle != 0 {
             crate::server::server::turnloop_connection_closed(id);
         }
-    } else {
-        owned_ids()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
     }
-    // The terminal completion: no completion can name this id again, so it goes
-    // back to the shared band rather than leaking one per connection.
+    // No completion can name this id again, so it goes back to the shared
+    // band rather than leaking one per connection.
     perry_ffi::free_handle_id(id);
+    session
 }
 
 pub(super) fn on_timer(id: impl Into<Target>) {

@@ -56,7 +56,7 @@ pub(crate) use controls::{
     numeric_value, queue_session_goaway, queue_session_ping, queue_session_settings,
 };
 pub(crate) use pump::{
-    has_active_h2_clients, process_pending_h2, process_pending_h2_events,
+    emit_session_close, has_active_h2_clients, process_pending_h2, process_pending_h2_events,
     try_recv_pending_h2_nonblocking,
 };
 #[cfg(test)]
@@ -115,8 +115,7 @@ pub(crate) fn scan_h2_pending_event_roots(visitor: &mut perry_ffi::GcRootVisitor
     ) {
         for event in events {
             match event {
-                Http2PendingEvent::ClientClose { callback, .. }
-                | Http2PendingEvent::SessionSettingsCallback { callback, .. }
+                Http2PendingEvent::SessionSettingsCallback { callback, .. }
                 | Http2PendingEvent::SessionPingCallback { callback, .. } => {
                     if *callback != 0 {
                         visitor.visit_i64_slot(callback);
@@ -276,9 +275,9 @@ pub(crate) enum Http2PendingEvent {
     ClientStreamClose {
         stream_handle: i64,
     },
+    /// The `'close'` of a session whose transport never reports its close.
     ClientClose {
         session_handle: i64,
-        callback: i64,
     },
     SessionSettingsEvent {
         session_handle: i64,

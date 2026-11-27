@@ -337,6 +337,11 @@ pub(super) fn begin_teardown() {
     TEARDOWN.with(|t| t.set(true));
 }
 
+/// Whether agent teardown began: no close-callbacks phase runs again.
+pub(super) fn tearing_down() -> bool {
+    TEARDOWN.with(Cell::get)
+}
+
 #[cfg(test)]
 pub(super) fn reset_for_test() {
     TEARDOWN.with(|t| t.set(false));
@@ -2060,10 +2065,12 @@ unsafe fn dispatch_stream(
             if retry {
                 // A failed attempt's handle, not the socket the caller sees.
                 attempt_next_address(link);
-            } else if !handle.is_some_and(|h| closing::mark_closed(link, h, stale)) {
+            } else if !handle
+                .is_some_and(|h| closing::mark_closed(closing::Owner::Cell(link.0), h, stale))
+            {
                 // A `Closed` no close queued still belongs to the phase.
                 hold(link);
-                closing::queue_closed(link, route, handle, stale);
+                closing::queue_closed(closing::Owner::Cell(link.0), route, handle, stale);
             }
             for _ in 0..defer_eof::purge(defer_eof::Key::Link(link.0), handle) {
                 release(link);
@@ -2253,7 +2260,7 @@ pub(super) fn is_queued_close(completion: &Completion) -> bool {
         && matches!(completion.result, OpResult::Closed)
         && completion
             .handle
-            .is_some_and(|h| closing::awaits(OwnerLink(cell), h))
+            .is_some_and(|h| closing::awaits(closing::Owner::Cell(cell), h))
 }
 
 /// Whether `earlier`, staged ahead of the queued `closed` of its cell, is

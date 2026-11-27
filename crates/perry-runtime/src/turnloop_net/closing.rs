@@ -1,15 +1,15 @@
-//! The close-callbacks phase of link sockets.
+//! The close-callbacks phase of net sockets, link and id routes alike.
 //!
 //! Node emits a socket's `'close'` from its handle's close callback, in the
 //! phase after check, and libuv runs that phase newest close first because it
 //! prepends each closing handle. A close the phase itself starts waits for the
-//! next one. Every link close is queued here, in call order: a handle's entry
-//! becomes ready when the driver's `Closed` arrives, and a connect still
+//! next one. Every close is queued here, in call order: a handle's entry
+//! becomes ready when the driver's `Closed` arrives, and a link connect still
 //! resolving has no handle, so its entry is ready at once. The end of each
 //! check phase turns the driver once for the `Closed` of handles closed since
 //! the last poll, then delivers the ready entries queued before it, newest
-//! first, each followed by a tick and microtask checkpoint. Each entry holds a
-//! resource ref on its cell until it is delivered.
+//! first, each followed by a tick and microtask checkpoint. A link entry holds
+//! a resource ref on its cell until it is delivered.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -17,8 +17,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use super::*;
 use crate::native_payload::OwnerLink;
 
+/// Who a queued close is delivered to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Owner {
+    /// A link route's payload cell.
+    Cell(usize),
+    /// An id route's binding id.
+    Id(i64),
+}
+
 struct Entry {
-    cell: usize,
+    owner: Owner,
+    /// The link route, or the id route's subsystem.
     route: u8,
     /// The handle whose `Closed` this entry waits for; `None` when the
     /// connect was still resolving.
@@ -37,7 +47,7 @@ struct Queue {
     next_seq: u64,
     entries: BTreeMap<u64, Entry>,
     ready: BTreeSet<u64>,
-    waiting: HashMap<(usize, [u32; 4]), u64>,
+    waiting: HashMap<(Owner, [u32; 4]), u64>,
 }
 
 impl Queue {
@@ -47,7 +57,7 @@ impl Queue {
         match (ready, entry.handle) {
             (false, Some(handle)) => {
                 self.waiting
-                    .insert((entry.cell, transport::handle_parts(handle)), seq);
+                    .insert((entry.owner, transport::handle_parts(handle)), seq);
             }
             _ => {
                 self.ready.insert(seq);
@@ -69,13 +79,20 @@ crate::perry_thread_local! {
 /// holds the ref that pins the cell. A handle already waiting keeps its entry,
 /// which only learns that the payload is released.
 pub(super) fn queue(link: OwnerLink, route: u8, handle: Option<Handle>, released: bool) -> bool {
+    queue_owner(Owner::Cell(link.0), route, handle, released)
+}
+
+/// Owe id `id`'s `Closed` for `handle` to the close-callbacks phase, which
+/// emits it to `subsystem`.
+pub(super) fn queue_id(id: i64, subsystem: u8, handle: Handle) {
+    queue_owner(Owner::Id(id), subsystem, Some(handle), false);
+}
+
+fn queue_owner(owner: Owner, route: u8, handle: Option<Handle>, released: bool) -> bool {
     QUEUE.with(|q| {
         let mut q = q.borrow_mut();
-        let waiting = handle.and_then(|h| {
-            q.waiting
-                .get(&(link.0, transport::handle_parts(h)))
-                .copied()
-        });
+        let waiting =
+            handle.and_then(|h| q.waiting.get(&(owner, transport::handle_parts(h))).copied());
         if let Some(seq) = waiting {
             if let Some(entry) = q.entries.get_mut(&seq) {
                 entry.released |= released;
@@ -83,7 +100,7 @@ pub(super) fn queue(link: OwnerLink, route: u8, handle: Option<Handle>, released
             return false;
         }
         let entry = Entry {
-            cell: link.0,
+            owner,
             route,
             handle,
             released,
@@ -95,9 +112,9 @@ pub(super) fn queue(link: OwnerLink, route: u8, handle: Option<Handle>, released
 }
 
 /// Owe the close phase a `Closed` that arrived without a queued close.
-pub(super) fn queue_closed(link: OwnerLink, route: u8, handle: Option<Handle>, stale: bool) {
+pub(super) fn queue_closed(owner: Owner, route: u8, handle: Option<Handle>, stale: bool) {
     let entry = Entry {
-        cell: link.0,
+        owner,
         route,
         handle,
         released: false,
@@ -108,10 +125,10 @@ pub(super) fn queue_closed(link: OwnerLink, route: u8, handle: Option<Handle>, s
 
 /// Mark the entry waiting for `handle`'s `Closed` ready. Returns whether one
 /// was waiting.
-pub(super) fn mark_closed(link: OwnerLink, handle: Handle, stale: bool) -> bool {
+pub(super) fn mark_closed(owner: Owner, handle: Handle, stale: bool) -> bool {
     QUEUE.with(|q| {
         let mut q = q.borrow_mut();
-        let Some(seq) = q.waiting.remove(&(link.0, transport::handle_parts(handle))) else {
+        let Some(seq) = q.waiting.remove(&(owner, transport::handle_parts(handle))) else {
             return false;
         };
         if let Some(entry) = q.entries.get_mut(&seq) {
@@ -122,13 +139,45 @@ pub(super) fn mark_closed(link: OwnerLink, handle: Handle, stale: bool) -> bool 
     })
 }
 
-/// Whether an entry waits for `handle`'s `Closed` on `link`.
-pub(super) fn awaits(link: OwnerLink, handle: Handle) -> bool {
+/// Whether an entry waits for `handle`'s `Closed` on `owner`.
+pub(super) fn awaits(owner: Owner, handle: Handle) -> bool {
     QUEUE.with(|q| {
         q.borrow()
             .waiting
-            .contains_key(&(link.0, transport::handle_parts(handle)))
+            .contains_key(&(owner, transport::handle_parts(handle)))
     })
+}
+
+/// The owner a net completion names.
+fn owner_of(completion: &Completion) -> Option<Owner> {
+    match transport::link_cell(completion) {
+        Some(cell) => Some(Owner::Cell(cell)),
+        None => Some(Owner::Id(token_parts(completion.token).1)),
+    }
+}
+
+/// Whether `completion` is the `Closed` of a handle a close queued.
+fn is_queued_close(completion: &Completion) -> bool {
+    if transport::owns(completion.token) {
+        return transport::is_queued_close(completion);
+    }
+    let (op, id) = token_parts(completion.token);
+    op == OP_CLOSE
+        && matches!(completion.result, OpResult::Closed)
+        && completion.handle.is_some_and(|h| awaits(Owner::Id(id), h))
+}
+
+/// Whether `earlier`, staged ahead of the queued `closed` of its owner, is
+/// dispatched with it. An id entry lives until its `Closed`, so every result
+/// of the closing handle still reaches its binding first.
+fn retires_with(earlier: &Completion, closed: &Completion) -> bool {
+    if transport::owns(closed.token) {
+        return transport::retires_with(earlier, closed);
+    }
+    matches!(
+        earlier.result,
+        OpResult::Closed | OpResult::Cancelled | OpResult::Stopped
+    ) || earlier.handle.is_some() && earlier.handle == closed.handle
 }
 
 /// Whether a close is owed at all: the loop stays alive for it.
@@ -146,12 +195,10 @@ pub(crate) fn ready() -> bool {
 pub(crate) fn run() {
     let waiting = QUEUE.with(|q| !q.borrow().waiting.is_empty());
     if waiting {
-        for completion in crate::event_pump::take_closed_completions(
-            transport::is_queued_close,
-            transport::link_cell,
-            transport::retires_with,
-        ) {
-            transport::dispatch(completion);
+        for completion in
+            crate::event_pump::take_closed_completions(is_queued_close, owner_of, retires_with)
+        {
+            super::dispatch(completion);
         }
     }
     let Some(horizon) = QUEUE.with(|q| q.borrow().next_seq.checked_sub(1)) else {
@@ -165,30 +212,40 @@ pub(crate) fn run() {
         q.ready.remove(&seq);
         q.entries.remove(&seq)
     }) {
-        // SAFETY: the entry's ref pins the cell until this call.
-        unsafe {
-            transport::deliver_closed(
-                OwnerLink(entry.cell),
-                entry.route,
-                entry.handle,
-                entry.released,
-                entry.stale,
-            )
-        };
+        match entry.owner {
+            // SAFETY: the entry's ref pins the cell until this call.
+            Owner::Cell(cell) => unsafe {
+                transport::deliver_closed(
+                    OwnerLink(cell),
+                    entry.route,
+                    entry.handle,
+                    entry.released,
+                    entry.stale,
+                )
+            },
+            Owner::Id(id) => sink::emit(entry.route, NetCompletion::closed(id)),
+        }
         crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
     }
 }
 
 /// Drop every queued close (agent teardown, test reset), returning the cells
-/// whose refs the caller releases.
-pub(super) fn take_all() -> Vec<usize> {
+/// whose refs the caller releases and the id closes already ready, which
+/// the caller emits. A waiting id close is emitted by its own `Closed`.
+pub(super) fn take_all() -> (Vec<usize>, Vec<(u8, i64)>) {
     QUEUE.with(|q| {
         let mut q = q.borrow_mut();
-        q.ready.clear();
+        let ready = std::mem::take(&mut q.ready);
         q.waiting.clear();
-        std::mem::take(&mut q.entries)
-            .into_values()
-            .map(|e| e.cell)
-            .collect()
+        let mut cells = Vec::new();
+        let mut ids = Vec::new();
+        for (seq, entry) in std::mem::take(&mut q.entries) {
+            match entry.owner {
+                Owner::Cell(cell) => cells.push(cell),
+                Owner::Id(id) if ready.contains(&seq) => ids.push((entry.route, id)),
+                Owner::Id(_) => {}
+            }
+        }
+        (cells, ids)
     })
 }

@@ -921,6 +921,8 @@ pub fn close(id: i64) -> NetResult<()> {
     with_driver(|driver| {
         NET.with(|net| {
             let mut net = net.borrow_mut();
+            // A failed attempt's `Closed` starts the next attempt, not a close.
+            let attempt = net.plans.get(&id).is_some_and(|plan| plan.retrying);
             let Some(entry) = net.entries.get_mut(&id) else {
                 // Nothing to close (a connect still resolving, or a second
                 // close): the connect and whatever was waiting to be written
@@ -943,7 +945,11 @@ pub fn close(id: i64) -> NetResult<()> {
             census::note_submit(OP_CLOSE);
             driver
                 .close(entry.handle, token(OP_CLOSE, id))
-                .map_err(|e| map_error(e, "close"))
+                .map_err(|e| map_error(e, "close"))?;
+            if !attempt && !transport::tearing_down() {
+                closing::queue_id(id, entry.subsystem, entry.handle);
+            }
+            Ok(())
         })
     })
     .unwrap_or_else(|| Err(no_loop()))
@@ -1018,7 +1024,7 @@ pub(crate) fn dispatch(completion: Completion) {
         result,
         terminal,
         op: _op,
-        handle: _handle,
+        handle,
         ..
     } = completion;
 
@@ -1254,8 +1260,13 @@ pub(crate) fn dispatch(completion: Completion) {
             if retrying {
                 // A failed connect attempt, not the socket the caller sees.
                 attempt_next_address(id);
-            } else {
+            } else if transport::tearing_down() {
                 sink::emit(subsystem, NetCompletion::closed(id));
+            } else if !handle
+                .is_some_and(|h| closing::mark_closed(closing::Owner::Id(id), h, false))
+            {
+                // A `Closed` no close queued still belongs to the phase.
+                closing::queue_closed(closing::Owner::Id(id), subsystem, handle, false);
             }
         }
         OpResult::Err(err) => {
@@ -1463,10 +1474,14 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
-    for cell in defer_eof::take_all().into_iter().chain(closing::take_all()) {
+    let (closing_cells, ready_ids) = closing::take_all();
+    for cell in defer_eof::take_all().into_iter().chain(closing_cells) {
         // SAFETY: each parked link EOF and queued Closed holds the ref that
         // pins its cell.
         unsafe { transport::release_parked_eof(cell) };
+    }
+    for (subsystem, id) in ready_ids {
+        sink::emit(subsystem, NetCompletion::closed(id));
     }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {

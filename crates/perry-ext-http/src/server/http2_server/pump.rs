@@ -166,6 +166,36 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
     }
 }
 
+/// A session's `'close'`: its listeners, then its `close(cb)` callbacks,
+/// which are Node's `once('close', cb)` and are not retained. It runs from its
+/// transport's close: a server session's socket `'close'`, a client session's
+/// `NET_CLOSED`, both in the close-callbacks phase.
+pub(crate) fn emit_session_close(session_handle: i64) {
+    if session_handle == 0 {
+        return;
+    }
+    // The events queued before the transport closed (its errors, its
+    // streams' ends) precede the session's `'close'`.
+    process_pending_h2_events();
+    emit_close_listeners(session_handle);
+}
+
+fn emit_close_listeners(session_handle: i64) {
+    let listeners = match get_handle_mut::<Http2SessionHandle>(session_handle) {
+        Some(session) => {
+            session.mark_destroyed();
+            let mut listeners = session.listeners.get("close").cloned().unwrap_or_default();
+            listeners.append(&mut session.close_callbacks);
+            listeners
+        }
+        None => return,
+    };
+    let scope = perry_ffi::TransientRootScope::enter();
+    for listener in scope.root_addrs(&listeners) {
+        call0(listener.get());
+    }
+}
+
 pub(crate) fn has_pending_h2_events() -> bool {
     H2_PENDING_EVENTS
         .lock()
@@ -321,32 +351,10 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     }
                 }
             }
-            Http2PendingEvent::ClientClose {
-                session_handle,
-                callback,
-            } => {
-                // Park the callback in the scanned stack across the
-                // listener fan-out (arbitrary JS + GC), and read the
-                // possibly-rewritten value back right before the call — a
-                // bare `callback` local would go stale on evacuation, and
-                // the retain-by-value below would then compare the STALE
-                // bits against the rewritten close_callbacks entries and
-                // remove nothing.
-                super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().push(callback));
-                let listeners = get_handle::<Http2SessionHandle>(session_handle)
-                    .and_then(|s| s.listeners.get("close").cloned())
-                    .unwrap_or_default();
-                for cb in listeners {
-                    call0(cb);
-                    unsafe {
-                        js_promise_run_microtasks();
-                    }
-                }
-                let callback =
-                    super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
-                call0(callback);
-                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                    session.close_callbacks.retain(|cb| *cb != callback);
+            Http2PendingEvent::ClientClose { session_handle } => {
+                emit_close_listeners(session_handle);
+                unsafe {
+                    js_promise_run_microtasks();
                 }
             }
             Http2PendingEvent::SessionSettingsEvent {

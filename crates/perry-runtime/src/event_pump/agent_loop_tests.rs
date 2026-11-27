@@ -1244,7 +1244,7 @@ fn the_close_phase_turn_retires_a_timer_expiry() {
     std::thread::spawn(|| {
         install_unrouted();
         STAGED.with(|staged| staged.borrow_mut().push(expiry()));
-        let taken = take_closed_completions(|_| true, |_| None, |_, _| true);
+        let taken = take_closed_completions(|_| true, |_| None::<usize>, |_, _| true);
         assert!(taken.is_empty());
         assert_eq!(stats().timer_expiries, 1);
         assert!(STAGED.with(|staged| staged.borrow().is_empty()));
