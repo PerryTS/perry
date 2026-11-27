@@ -368,8 +368,7 @@ fn spread_of_a_spilled_source_copies_its_spill() {
         let key = crate::string::js_string_from_bytes(names[9].as_ptr(), names[9].len() as u32);
         js_object_set_field_by_name(src, key, heap);
         let source = crate::value::js_nanbox_pointer(src as i64);
-        let record =
-            shapes::shape_record_for_word(shapes::object_shape_stamp(src)).unwrap();
+        let record = shapes::shape_record_for_word(shapes::object_shape_stamp(src)).unwrap();
         assert!(record.logical_key_count() > record.live_inline_slot_count());
         let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         assert_eq!(
