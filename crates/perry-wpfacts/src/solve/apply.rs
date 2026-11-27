@@ -2376,7 +2376,9 @@ impl Model {
                             let own = self.key_fields(t, Key::Any(shape));
                             self.bind_via(own, call, t);
                         }
-                        self.plain_key(t, ChainAct::Call(call));
+                        if self.shape_may_be_numeric(shape) {
+                            self.plain_key(t, ChainAct::Call(call));
+                        }
                         self.cons(
                             idx,
                             Cons::IdxKeyCall {

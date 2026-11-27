@@ -186,7 +186,9 @@ impl Model {
                     self.cons(len, c);
                 }
             }
-            self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
+            if self.shape_may_be_numeric(shape) {
+                self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
+            }
             self.cons(
                 idx,
                 Cons::IdxKey {
@@ -764,7 +766,9 @@ impl Model {
         // again here: the two keys may differ. ⊤ may be such an object.
         if !toks.is_empty() && self.idx_done.insert((n, obj, dst, IDX_OWN_ANY)) {
             self.own_read_census[2] += 1;
-            self.plain_key(obj, ChainAct::Load(dst, self.thrown));
+            if self.shape_may_be_numeric(shape) {
+                self.plain_key(obj, ChainAct::Load(dst, self.thrown));
+            }
             self.load_from(obj, obj, Key::Any(shape), dst);
         }
         let key = Key::Any(shape);

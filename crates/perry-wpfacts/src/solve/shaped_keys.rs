@@ -23,6 +23,17 @@
 use super::*;
 
 impl Model {
+    /// May a computed key of shape `s` name a number-named member? Its
+    /// ToPropertyKey (ECMA-262 7.1.19) is a canonical numeric String
+    /// (7.1.21) only when the shape may spell one (`may_be_numeric`; the
+    /// any-key shape 0 may). A key that may not reads no number-named field
+    /// and runs no accessor through the number-key path (`plain_key_from`):
+    /// its own shaped walk names every member it may spell, the
+    /// computed-name accessors among them (`accessor_hit`).
+    pub(crate) fn shape_may_be_numeric(&self, s: KeyShapeId) -> bool {
+        s == 0 || self.key_shapes[s as usize].may_be_numeric()
+    }
+
     pub(crate) fn shape_splits(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
         match key {
             Key::Any(s)
