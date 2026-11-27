@@ -1661,6 +1661,32 @@ fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
 }
 
+#[test]
+fn address_taken_outside_name_metadata_skips_only_the_bodys_own_record() {
+    let take =
+        |sym: &str| format!("i32 trunc (i64 sub (i64 ptrtoint (ptr @{sym} to i64), i64 0) to i32)");
+    for own in ["@f$generic$fnrec", "@\"\\01l_f$generic$fnrec\""] {
+        let ir = format!(
+            "{own} = internal constant {{ i32, i32 }} {{ {} }}\n",
+            take("f$generic")
+        );
+        assert!(
+            !address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
+    for other in [
+        "@g$fnrec = internal constant",
+        "@__perry_class_decl_members_C = constant",
+    ] {
+        let ir = format!("{other} {{ {} }}\n", take("f$generic"));
+        assert!(
+            address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
+}
+
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     let needle = format!("define double @{}(", symbol);
     let start = ir
