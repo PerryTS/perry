@@ -1,0 +1,9 @@
+<non-spec:/.//p> set hostname to <h>
+<non-spec:/.//p> set hostname to <>
+<foo:///some/path> set pathname to <>
+<file:///var/log/system.log> set href to <http://0300.168.0xF0>
+<non-spec:/> set pathname to </.//p>
+<non-spec:/> set pathname to </..//p>
+<non-spec:/> set pathname to <//p>
+<non-spec:/.//> set pathname to <p>
+<https://domain.com:3000> set port to <\n\n\t\t>

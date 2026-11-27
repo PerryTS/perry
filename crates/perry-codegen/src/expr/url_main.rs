@@ -83,7 +83,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let base_slot = rooting::call_rooted(
                     ctx,
                     I64,
-                    "js_url_coerce_string",
+                    "js_url_coerce_base",
                     &[Arg::Plain(DOUBLE, &base_v)],
                 );
                 let obj = rooting::call_with_roots(
@@ -151,8 +151,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         Expr::UrlGetSearchParams(u) => {
             // Runtime stores an already-NaN-boxed URLSearchParams pointer in
-            // the URL object's `searchParams` field (see create_url_object in
-            // perry-runtime/src/url.rs).
+            // the URL object's `searchParams` slot (made on the first read, see
+            // perry-runtime/src/url/search_params.rs url_search_params).
             lower_url_string_getter(ctx, u, "js_url_get_search_params")
         }
 
@@ -244,7 +244,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let base_slot = rooting::call_rooted(
                 ctx,
                 I64,
-                "js_url_coerce_string",
+                "js_url_coerce_base",
                 &[Arg::Plain(DOUBLE, &base_v)],
             );
             let result_i32 = rooting::call_with_roots(
@@ -303,7 +303,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let base_slot = rooting::call_rooted(
                 ctx,
                 I64,
-                "js_url_coerce_string",
+                "js_url_coerce_base",
                 &[Arg::Plain(DOUBLE, &base_v)],
             );
             let obj = rooting::call_with_roots(

@@ -54,14 +54,16 @@ unsafe fn validate_load_env_file_url(value: f64) {
     if obj.is_null() || !crate::object::url_layout::is_url_object_shape(obj) {
         return;
     }
-    let protocol = crate::value::boxed_text::get_string_content(
-        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+    let protocol = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Protocol,
     );
     if protocol != "file:" {
         throw_invalid_load_env_file_url_scheme();
     }
-    let pathname = crate::value::boxed_text::get_string_content(
-        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PATHNAME),
+    let pathname = crate::url::href::component_of(
+        obj as *mut crate::object::ObjectHeader,
+        crate::url::href::Component::Pathname,
     );
     if has_encoded_forward_slash(&pathname) {
         crate::fs::validate::throw_type_error_with_code(

@@ -91,6 +91,8 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     // `String(value)` coercion (throws TypeError for Symbols) for WHATWG URL
     // arguments — #3054/#3055. Returns a `*mut StringHeader` (I64).
     module.declare_function("js_url_coerce_string", I64, &[DOUBLE]);
+    // The optional `base`: null for `undefined` (no base), else as above.
+    module.declare_function("js_url_coerce_base", I64, &[DOUBLE]);
     module.declare_function("js_url_path_to_file_url", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_url_domain_to_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_url_domain_to_unicode", DOUBLE, &[DOUBLE]);
