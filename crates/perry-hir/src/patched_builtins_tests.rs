@@ -739,10 +739,22 @@ fn node_core_namespace_handed_on_is_an_escape_not_a_write() {
     ] {
         assert!(s.contains(&pair(k, m)), "{k} {m}: {s:?}");
     }
-    assert!(!s.iter().any(|(k, m)| k.starts_with("node:") && m.ends_with('*')), "{s:?}");
+    assert!(
+        !s.iter()
+            .any(|(k, m)| k.starts_with("node:") && m.ends_with('*')),
+        "{s:?}"
+    );
     assert!(!node_ns::member_patched(&s, "path", &["join"]));
-    assert!(!node_ns::member_patched(&s, "fs", &["promises", "readFile"]));
-    assert!(!node_ns::member_patched(&s, "process", &["hrtime", "bigint"]));
+    assert!(!node_ns::member_patched(
+        &s,
+        "fs",
+        &["promises", "readFile"]
+    ));
+    assert!(!node_ns::member_patched(
+        &s,
+        "process",
+        &["hrtime", "bigint"]
+    ));
 }
 
 #[test]

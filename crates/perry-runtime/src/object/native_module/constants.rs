@@ -590,9 +590,7 @@ pub(crate) unsafe fn selected_normalized_constant(
             "posix" if cfg!(not(windows)) && is_path_namespace(namespace_obj) => {
                 Some(namespace_obj)
             }
-            "win32" if cfg!(windows) && is_path_namespace(namespace_obj) => {
-                Some(namespace_obj)
-            }
+            "win32" if cfg!(windows) && is_path_namespace(namespace_obj) => Some(namespace_obj),
             "posix" => cjs_default_export_value("path.posix"),
             "win32" => cjs_default_export_value("path.win32"),
             _ => None,
