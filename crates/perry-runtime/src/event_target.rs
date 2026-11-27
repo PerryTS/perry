@@ -7,12 +7,12 @@ use crate::{
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 #[cfg(test)]
+mod birth_tests;
+#[cfg(test)]
 mod broadcast_channel_tests;
 pub(crate) mod message_event;
 #[cfg(test)]
 mod message_event_tests;
-#[cfg(test)]
-mod birth_tests;
 pub(crate) mod prototype;
 pub(crate) mod state;
 

@@ -667,7 +667,9 @@ pub(crate) unsafe fn born_on_record(
 /// `obj` and `proto` are live; nothing allocates in between.
 pub(crate) unsafe fn record_birth(class_id: u32, proto: *mut ObjectHeader, obj: *mut ObjectHeader) {
     let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 || super::overflow::has_overflow(obj) {
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+        || super::overflow::has_overflow(obj)
+    {
         return;
     }
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto));

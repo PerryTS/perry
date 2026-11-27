@@ -36,7 +36,14 @@ fn signal_and_target_births_replay_their_recorded_shape() {
         }
         let keys = own_symbols(first);
         assert_eq!(keys, own_symbols(second));
-        assert_eq!(keys.len(), if std::ptr::eq(birth, &state::ABORT_SIGNAL_BIRTH) { 7 } else { 4 });
+        assert_eq!(
+            keys.len(),
+            if std::ptr::eq(birth, &state::ABORT_SIGNAL_BIRTH) {
+                7
+            } else {
+                4
+            }
+        );
         assert_eq!(
             state::get(second, state::MAX_LISTENERS).to_bits(),
             state::get(first, state::MAX_LISTENERS).to_bits()
@@ -45,8 +52,14 @@ fn signal_and_target_births_replay_their_recorded_shape() {
         assert!(!state::has(third, state::CONTROLLER_SIGNAL));
     }
     use crate::object::BuiltinConstructorIdentity as Id;
-    assert!(recorded(Id::AbortSignal, crate::native_class_ids::ABORT_SIGNAL));
-    assert!(recorded(Id::EventTarget, crate::native_class_ids::EVENT_TARGET));
+    assert!(recorded(
+        Id::AbortSignal,
+        crate::native_class_ids::ABORT_SIGNAL
+    ));
+    assert!(recorded(
+        Id::EventTarget,
+        crate::native_class_ids::EVENT_TARGET
+    ));
 }
 
 #[test]
@@ -54,7 +67,10 @@ fn signal_state_is_its_own_slots() {
     let _gc = crate::gc::GcSuppressScope::new();
     let _ = state::born(&state::ABORT_SIGNAL_BIRTH);
     let signal = state::born(&state::ABORT_SIGNAL_BIRTH);
-    assert!(crate::value::JSValue::from_bits(state::get(signal, state::SIGNAL_ABORTED).to_bits()).is_bool());
+    assert!(
+        crate::value::JSValue::from_bits(state::get(signal, state::SIGNAL_ABORTED).to_bits())
+            .is_bool()
+    );
     assert_eq!(abort::js_abort_signal_is_aborted(signal), 0);
     let before = unsafe { crate::object::shapes::object_shape_stamp(signal) };
     state::set(signal, state::SIGNAL_ABORTED, bool_value(true));
@@ -62,7 +78,9 @@ fn signal_state_is_its_own_slots() {
     assert_eq!(abort::js_abort_signal_is_aborted(signal), 1);
     assert_eq!(state::get(signal, state::SIGNAL_REASON), 7.0);
     // A value store keeps the layout.
-    assert_eq!(before, unsafe { crate::object::shapes::object_shape_stamp(signal) });
+    assert_eq!(before, unsafe {
+        crate::object::shapes::object_shape_stamp(signal)
+    });
 }
 
 #[test]
