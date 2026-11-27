@@ -843,11 +843,25 @@ fn update_scalar_slot(ctx: &mut FnCtx<'_>, slot: &str, op: &BinaryOp, prefix: bo
         BinaryOp::Sub => "0",
         _ => "1",
     };
+    // A postfix BigInt result stays live across the allocating step, so it is
+    // held in a function-lifetime root and reloaded after the call.
+    let old_root = (!prefix).then(|| {
+        let root = ctx.func.alloca_entry(DOUBLE);
+        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &root);
+        super::root_entry_alloca(ctx, &root);
+        ctx.block().store(DOUBLE, &slow_old, &root);
+        root
+    });
     let slow_new = ctx.block().call(
         DOUBLE,
         "js_numeric_step",
         &[(DOUBLE, &slow_old), (I32, step)],
     );
+    let slow_old = match &old_root {
+        Some(root) => ctx.block().load(DOUBLE, root),
+        None => slow_old,
+    };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

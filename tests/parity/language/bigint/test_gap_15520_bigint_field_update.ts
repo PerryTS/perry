@@ -51,3 +51,13 @@ show("loop", () => {
   for (let i = 0; i < 3; i++) o.n++;
   return o.n;
 });
+show("valueOf returning a BigInt", () => {
+  const o = { x: { valueOf: () => 40n } as any };
+  o.x++;
+  return o.x;
+});
+show("Date field", () => {
+  const o = { d: new Date(5) as any };
+  o.d++;
+  return o.d;
+});
