@@ -12,7 +12,7 @@ use perry_hir::Expr;
 use super::get_raw_string_ptr;
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
-use crate::rooting::{any_operand_may_collect, with_rooted_group};
+use crate::rooting::any_operand_may_collect;
 use crate::types::{DOUBLE, I1, I64};
 
 /// Dispatch for the Web Fetch API family: Response/Headers/Request
@@ -780,14 +780,25 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
 
     // ─────────────────────────────────────────────────────────────────
     // Web Streams API (issue #237)
-    // The receivers are numeric registry-id handles carried as f64,
-    // mirroring the Blob/Response handle ABI. Locals are tagged
+    // The writable-side receivers are numeric registry-id handles carried
+    // as f64, mirroring the Blob/Response handle ABI; readable streams and
+    // their readers are GC objects (streams P2a). Locals are tagged
     // (module, class_name) by `register_native_instance` in
     // `destructuring.rs`.
     // ─────────────────────────────────────────────────────────────────
 
     if module == "readable_stream" {
-        let recv_handle_raw = lower_expr(ctx, recv)?;
+        // Streams P2a: a ReadableStream is a GC object, so the receiver is
+        // rooted across the arguments the method lowers after it (an
+        // `options()` call that collects moves it), and each argument across
+        // the ones after it. Read back below the last argument.
+        let lowered = match method {
+            "getReader" | "cancel" => args.len().min(1),
+            "pipeTo" | "pipeThrough" => args.len().min(2),
+            _ => 0,
+        };
+        let (recv_handle_raw, arg_values, arg_group) =
+            crate::lower_call::lower_operands_rooted(ctx, recv, &args[..lowered])?;
         // Issue #562: subclass instances stash the handle id under
         // `__perry_stream_handle__`; bare numeric handles pass through
         // unchanged. Cheap (one runtime call) and applied uniformly so
@@ -797,53 +808,35 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
             "js_stream_unwrap_handle",
             &[(DOUBLE, &recv_handle_raw)],
         );
-        match method {
+        let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let arg = |i: usize| arg_values.get(i).cloned().unwrap_or_else(undefined);
+        let result = match method {
             "getReader" => {
-                let options = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let h = ctx.block().call(
+                let options = arg(0);
+                Some(ctx.block().call(
                     DOUBLE,
                     "js_readable_stream_get_reader_with_options",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &options)],
-                );
-                return Ok(Some(h));
+                ))
             }
             "cancel" => {
-                let reason = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
+                let reason = arg(0);
                 let blk = ctx.block();
                 let promise = blk.call(
                     I64,
                     "js_readable_stream_cancel",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &reason)],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                Some(nanbox_pointer_inline(blk, &promise))
             }
-            "tee" => {
-                let h =
-                    ctx.block()
-                        .call(DOUBLE, "js_readable_stream_tee", &[(DOUBLE, &recv_handle)]);
-                return Ok(Some(h));
-            }
+            "tee" => Some(ctx.block().call(
+                DOUBLE,
+                "js_readable_stream_tee",
+                &[(DOUBLE, &recv_handle)],
+            )),
             "pipeTo" => {
-                let (arg_values, arg_group) =
-                    crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let dest_raw = if !args.is_empty() {
-                    arg_values[0].clone()
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let options = if args.len() >= 2 {
-                    arg_values[1].clone()
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
+                let dest_raw = arg(0);
+                let options = arg(1);
                 // Issue #562: `dest` may be a subclass instance — unwrap.
                 let dest =
                     ctx.block()
@@ -854,9 +847,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     "js_readable_stream_pipe_to",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &dest), (DOUBLE, &options)],
                 );
-                let result = Some(nanbox_pointer_inline(blk, &promise));
-                arg_group.release(ctx);
-                return Ok(result);
+                Some(nanbox_pointer_inline(blk, &promise))
             }
             "pipeThrough" => {
                 // Preserve the original numeric sequence for a write-stable
@@ -873,16 +864,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         Some(perry_hir::types::Type::Named(name)) if name == "TransformStream"
                     );
                 if numeric_transform {
-                    // Only this path takes the argument from a group; the pair
-                    // path below owns its own rooting and must not see the
-                    // arguments lowered twice (`options()` ran twice).
-                    let (arg_values, arg_group) =
-                        crate::lower_call::lower_call_args_rooted(ctx, &args[..1])?;
-                    let transform_raw = arg_values[0].clone();
                     let transform = ctx.block().call(
                         DOUBLE,
                         "js_stream_unwrap_handle",
-                        &[(DOUBLE, &transform_raw)],
+                        &[(DOUBLE, &arg_values[0])],
                     );
                     let writable = ctx.block().call(
                         DOUBLE,
@@ -894,7 +879,7 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         "js_transform_stream_readable",
                         &[(DOUBLE, &transform)],
                     );
-                    let options = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let options = undefined();
                     let _ = ctx.block().call(
                         DOUBLE,
                         "js_readable_stream_pipe_through_validate",
@@ -916,36 +901,13 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     );
                     ctx.block()
                         .call_void("js_promise_mark_internally_handled", &[(I64, &pipe)]);
-                    let result = Some(readable);
-                    arg_group.release(ctx);
-                    return Ok(result);
-                }
-                // Evaluate both arguments before the pair getters. The runtime
-                // owns roots across getters; only options evaluation can move
-                // the transform before the call. With no options, no temp root
-                // is emitted (including the numeric TransformStream path).
-                let output = with_rooted_group(ctx, 2, |ctx, roots| {
-                    let transform = if let Some(expr) = args.first() {
-                        let collects = any_operand_may_collect(ctx, args[1..].iter());
-                        Some(roots.lower(ctx, expr, collects)?)
-                    } else {
-                        None
-                    };
-                    let options = if let Some(expr) = args.get(1) {
-                        Some(roots.lower(ctx, expr, false)?)
-                    } else {
-                        None
-                    };
-                    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let transform = match transform {
-                        Some(i) => roots.reread(ctx, i)?,
-                        None => undefined.clone(),
-                    };
-                    let options = match options {
-                        Some(i) => roots.reread(ctx, i)?,
-                        None => undefined,
-                    };
-                    Ok(ctx.block().call(
+                    Some(readable)
+                } else {
+                    // Both arguments are evaluated before the pair getters;
+                    // the runtime owns the roots across those getters.
+                    let transform = arg(0);
+                    let options = arg(1);
+                    Some(ctx.block().call(
                         DOUBLE,
                         "js_readable_stream_pipe_through_pair",
                         &[
@@ -954,68 +916,72 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                             (DOUBLE, &options),
                         ],
                     ))
-                })?;
-                return Ok(Some(output));
+                }
             }
-            "locked" => {
-                let v = ctx.block().call(
-                    DOUBLE,
-                    "js_readable_stream_locked",
-                    &[(DOUBLE, &recv_handle)],
-                );
-                return Ok(Some(v));
-            }
-            _ => return Ok(None),
-        }
+            "locked" => Some(ctx.block().call(
+                DOUBLE,
+                "js_readable_stream_locked",
+                &[(DOUBLE, &recv_handle)],
+            )),
+            _ => None,
+        };
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     if module == "readable_stream_reader" {
-        let recv_handle = lower_expr(ctx, recv)?;
-        match method {
+        // Streams P2a: a reader is a GC object; rooted across the argument
+        // `read(view)` / `cancel(reason)` lowers after it.
+        let lowered = match method {
+            "read" | "cancel" => args.len().min(1),
+            _ => 0,
+        };
+        let (recv_handle, arg_values, arg_group) =
+            crate::lower_call::lower_operands_rooted(ctx, recv, &args[..lowered])?;
+        let result = match method {
             // #4915: `read(view)` is the BYOB form — the runtime fills the
             // caller-supplied view (default readers ignore the argument).
-            "read" if !args.is_empty() => {
-                let view = lower_expr(ctx, &args[0])?;
+            "read" if !arg_values.is_empty() => {
+                let view = arg_values[0].clone();
                 let blk = ctx.block();
                 let promise = blk.call(
                     I64,
                     "js_reader_read_with_view",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &view)],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                Some(nanbox_pointer_inline(blk, &promise))
             }
             "read" => {
                 let blk = ctx.block();
                 let promise = blk.call(I64, "js_reader_read", &[(DOUBLE, &recv_handle)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                Some(nanbox_pointer_inline(blk, &promise))
             }
-            "releaseLock" => {
-                let v =
-                    ctx.block()
-                        .call(DOUBLE, "js_reader_release_lock", &[(DOUBLE, &recv_handle)]);
-                return Ok(Some(v));
-            }
+            "releaseLock" => Some(ctx.block().call(
+                DOUBLE,
+                "js_reader_release_lock",
+                &[(DOUBLE, &recv_handle)],
+            )),
             "cancel" => {
-                let reason = if !args.is_empty() {
-                    lower_expr(ctx, &args[0])?
-                } else {
+                let reason = arg_values.first().cloned().unwrap_or_else(|| {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
+                });
                 let blk = ctx.block();
                 let promise = blk.call(
                     I64,
                     "js_reader_cancel",
                     &[(DOUBLE, &recv_handle), (DOUBLE, &reason)],
                 );
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                Some(nanbox_pointer_inline(blk, &promise))
             }
             "closed" => {
                 let blk = ctx.block();
                 let promise = blk.call(I64, "js_reader_closed", &[(DOUBLE, &recv_handle)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+                Some(nanbox_pointer_inline(blk, &promise))
             }
-            _ => return Ok(None),
-        }
+            _ => None,
+        };
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     if module == "writable_stream" {

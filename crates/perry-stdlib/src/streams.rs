@@ -1201,17 +1201,27 @@ pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
     source_type: f64,
 ) -> f64 {
     ensure_gc_registered();
+    // The strategy getters are JS: the callbacks, the strategy and its size()
+    // are rooted across them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callbacks = [start_bits, pull_bits, cancel_bits].map(|bits| scope.root_nanbox_f64(bits));
+    let strategy = scope.root_nanbox_f64(strategy);
     let is_byte_stream = value_string_equals(source_type, b"bytes");
     let size_cb = if is_byte_stream {
         0
     } else {
-        read_queuing_strategy_size(strategy)
+        read_queuing_strategy_size(strategy.get_nanbox_f64())
     };
+    let size = scope.root_raw_mut_ptr(size_cb as *mut ClosureHeader);
+    let high_water_mark = f64::from_bits(read_high_water_mark(strategy.get_nanbox_f64()));
+    let size_cb = size.get_raw_mut_ptr::<ClosureHeader>() as i64;
+    let [start_cb, pull_cb, cancel_cb] =
+        callbacks.map(|bits| closure_from_bits(bits.get_nanbox_f64().to_bits()));
     let id = alloc_readable_with_strategy(
-        closure_from_bits(start_bits.to_bits()),
-        closure_from_bits(pull_bits.to_bits()),
-        closure_from_bits(cancel_bits.to_bits()),
-        f64::from_bits(read_high_water_mark(strategy)),
+        start_cb,
+        pull_cb,
+        cancel_cb,
+        high_water_mark,
         is_byte_stream,
         size_cb,
     );
@@ -1226,20 +1236,34 @@ pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
     strategy: f64,
 ) -> f64 {
     ensure_gc_registered();
-    let source_type = stream_object_field(source, b"type");
+    // Every field read may run a getter (JS): the source, the strategy and
+    // each value already read are rooted across the later reads.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source);
+    let strategy = scope.root_nanbox_f64(strategy);
+    let field =
+        |name: &[u8]| scope.root_nanbox_f64(stream_object_field(source.get_nanbox_f64(), name));
+    let source_type = stream_object_field(source.get_nanbox_f64(), b"type");
     let is_byte_stream = value_string_equals(source_type, b"bytes");
-    let size_cb = if is_byte_stream {
-        0
-    } else {
-        read_queuing_strategy_size(strategy)
+    let size = (!is_byte_stream).then(|| {
+        scope.root_nanbox_f64(perry_runtime::value::js_get_property(
+            strategy.get_nanbox_f64(),
+            b"size".as_ptr() as i64,
+            4,
+        ))
+    });
+    let (start, pull, cancel) = (field(b"start"), field(b"pull"), field(b"cancel"));
+    let high_water_mark = f64::from_bits(read_high_water_mark(strategy.get_nanbox_f64()));
+    let closure = |value: &perry_runtime::gc::RuntimeHandle<'_>| {
+        closure_from_bits(value.get_nanbox_f64().to_bits())
     };
     let id = alloc_readable_with_strategy(
-        stream_object_closure(source, b"start"),
-        stream_object_closure(source, b"pull"),
-        stream_object_closure(source, b"cancel"),
-        f64::from_bits(read_high_water_mark(strategy)),
+        closure(&start),
+        closure(&pull),
+        closure(&cancel),
+        high_water_mark,
         is_byte_stream,
-        size_cb,
+        size.as_ref().map_or(0, closure),
     );
     let id = invoke_start(id);
     maybe_pull(id);
@@ -1282,9 +1306,11 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
             eprintln!("[STREAM] get_reader stream={:#x}", stream_handle.to_bits());
         }
     }
-    let stream_handle = js_stream_unwrap_handle(stream_handle);
+    // `options.mode` may be a getter (JS): the stream is rooted across it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = state::Held::new(&scope, stream_id(js_stream_unwrap_handle(stream_handle)));
     let byob_requested = option_string_equals(options, b"mode", b"byob");
-    let id = stream_id(stream_handle);
+    let id = held.id();
     if byob_requested {
         let is_non_byte_stream = {
             rs_rec(RsRef(id))
@@ -1298,7 +1324,6 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
     }
 
     ensure_gc_registered();
-    let id = stream_id(stream_handle);
     match acquire_reader(RsRef(id), byob_requested) {
         Ok(reader) => reader.value(),
         Err(AcquireError::Locked) => throw_type_error("ReadableStream is locked"),
@@ -1535,8 +1560,11 @@ unsafe fn chunks_from_array_ptr(arr_ptr: *const perry_runtime::ArrayHeader) -> V
 }
 
 unsafe fn chunks_from_sync_iterable(value: f64) -> Option<Vec<u64>> {
-    let iter = perry_runtime::symbol::js_get_iterator(value);
-    if iter.to_bits() == value.to_bits() {
+    // `[Symbol.iterator]()` is JS: the iterable is rooted for the compare.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let iter = perry_runtime::symbol::js_get_iterator(value.get_nanbox_f64());
+    if iter.to_bits() == value.get_nanbox_f64().to_bits() {
         return None;
     }
     let arr = js_iterator_to_array(iter);
@@ -1583,9 +1611,10 @@ pub(crate) unsafe fn has_async_iterator(value: f64) -> bool {
     async_iterator_method(value).is_some()
 }
 
-unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
-    let method = async_iterator_method(value)?;
-    let iterator = js_native_call_value(method, value, std::ptr::null(), 0);
+/// `value` is rooted by the caller: the `Symbol.asyncIterator` getter is JS.
+unsafe fn call_symbol_async_iterator(value: &perry_runtime::gc::RuntimeHandle<'_>) -> Option<f64> {
+    let method = async_iterator_method(value.get_nanbox_f64())?;
+    let iterator = js_native_call_value(method, value.get_nanbox_f64(), std::ptr::null(), 0);
     if iterator.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -1666,11 +1695,14 @@ unsafe fn try_call_iterator_next(iterator: f64) -> Result<Option<f64>, u64> {
         .map_err(f64::to_bits)
 }
 
-unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
+/// `value` is rooted by the caller: the iterator probes are getters (JS).
+unsafe fn chunks_from_async_iterable(
+    value: &perry_runtime::gc::RuntimeHandle<'_>,
+) -> Option<ReadableFromSource> {
     let iterator = if let Some(iterator) = call_symbol_async_iterator(value) {
         iterator
-    } else if has_iterator_next(value) {
-        value
+    } else if has_iterator_next(value.get_nanbox_f64()) {
+        value.get_nanbox_f64()
     } else {
         return None;
     };
@@ -1701,17 +1733,18 @@ unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
             SettledValue::Rejected(reason) => return Some(finish(&chunks, Some(reason))),
             SettledValue::Pending => break,
         };
-        let result_ptr = js_nanbox_get_pointer(step_result);
-        if result_ptr == 0 {
+        if js_nanbox_get_pointer(step_result) == 0 {
             break;
         }
-        let result_obj = result_ptr as *const ObjectHeader;
-        let done_val = js_object_get_field_by_name(result_obj, done_key.get_raw_const_ptr());
+        // A `done` getter is JS: the result object is rooted across it.
+        let result = scope.root_nanbox_f64(step_result);
+        let result_obj = || js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
+        let done_val = js_object_get_field_by_name(result_obj(), done_key.get_raw_const_ptr());
         let done = f64::from_bits(done_val.bits());
         if perry_runtime::value::js_is_truthy(done) != 0 {
             break;
         }
-        let item = js_object_get_field_by_name(result_obj, value_key.get_raw_const_ptr());
+        let item = js_object_get_field_by_name(result_obj(), value_key.get_raw_const_ptr());
         chunks.push(scope.root_nanbox_u64(item.bits()));
     }
 
@@ -1726,11 +1759,26 @@ unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
     ensure_gc_registered();
-    let ptr_addr = ptr_addr_from_nanbox(value);
+    // The async-iterator probes run JS: the iterable is rooted across them
+    // and read back for the synchronous forms.
+    let source = {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        chunks_from_async_iterable(&value).ok_or(value.get_nanbox_f64())
+    };
+    let source = match source {
+        Ok(source) => source,
+        Err(value) => readable_source_from_sync_iterable(value),
+    };
+    readable_stream_from_source(source)
+}
 
-    let source = if let Some(source) = chunks_from_async_iterable(value) {
-        source
-    } else if js_array_is_array(value).to_bits() == TAG_TRUE {
+/// The synchronous `ReadableStream.from` forms: an array, a typed array, a
+/// Buffer, or a sync iterable (its iteration may run JS, but nothing else
+/// held here is used after it).
+unsafe fn readable_source_from_sync_iterable(value: f64) -> ReadableFromSource {
+    let ptr_addr = ptr_addr_from_nanbox(value);
+    if js_array_is_array(value).to_bits() == TAG_TRUE {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
         ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
@@ -1760,8 +1808,11 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
         }
     } else {
         throw_type_error("ReadableStream.from requires an iterable");
-    };
+    }
+}
 
+/// A closed (or errored) ReadableStream holding the collected chunks.
+unsafe fn readable_stream_from_source(source: ReadableFromSource) -> f64 {
     // The stream and its queue allocate: the collected chunks (Rust heap) are
     // rooted until they sit in the stream's queue slot.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -2542,6 +2593,8 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         let object = js_nanbox_get_pointer(transform_value()) as *const ObjectHeader;
         f64::from_bits(js_object_get_field_by_name(object, key).bits())
     };
+    // The output readable is a GC object: rooted across the writable getter
+    // and the option getters the validation and pipeTo run, read back last.
     let (readable, writable) = if is_object_value(transform) {
         // Keep object-specific property dispatch out of the numeric endpoint
         // getters, so merely reading TransformStream endpoints does not link
@@ -2550,22 +2603,22 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
             b"readable",
         )));
         let writable = subclass::unwrap_pair_stream_handle(transform_field(b"writable"));
-        (readable.get_nanbox_f64(), writable)
+        (readable, writable)
     } else {
         (
-            js_transform_stream_readable(transform),
+            scope.root_nanbox_f64(js_transform_stream_readable(transform)),
             js_transform_stream_writable(transform),
         )
     };
-    let output = js_readable_stream_pipe_through_validate(
+    js_readable_stream_pipe_through_validate(
         source_value(),
         writable,
-        readable,
+        readable.get_nanbox_f64(),
         options_value(),
     );
     let pipe = js_readable_stream_pipe_to(source_value(), writable, options_value());
     js_promise_mark_internally_handled(pipe);
-    output
+    readable.get_nanbox_f64()
 }
 
 pub(crate) use self::subclass::{

@@ -79,8 +79,11 @@ pub(crate) unsafe fn parse_strategy_value(value: f64) -> (f64, i64) {
         if bits == TAG_UNDEFINED || bits == TAG_NULL {
             return (1.0, 0);
         }
-        let hwm = f64::from_bits(read_high_water_mark(value));
-        return (hwm, read_queuing_strategy_size(value));
+        // The highWaterMark getter is JS: the strategy is rooted across it.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let strategy = scope.root_nanbox_f64(value);
+        let hwm = f64::from_bits(read_high_water_mark(strategy.get_nanbox_f64()));
+        return (hwm, read_queuing_strategy_size(strategy.get_nanbox_f64()));
     }
     (value, 0)
 }

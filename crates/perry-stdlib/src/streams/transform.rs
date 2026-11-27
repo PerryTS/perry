@@ -21,21 +21,30 @@ pub unsafe extern "C" fn js_transform_stream_new(
     writable_strategy: f64,
     readable_strategy: f64,
 ) -> f64 {
-    let start_cb = closure_from_bits(start_bits.to_bits());
-    let transform_cb = closure_from_bits(transform_bits.to_bits());
-    let flush_cb = closure_from_bits(flush_bits.to_bits());
-    let writable = parse_strategy_value(writable_strategy);
-    let readable = if readable_strategy.to_bits() == TAG_UNDEFINED {
+    // The strategy getters are JS: the callbacks, the readable strategy and
+    // the writable size() are rooted across them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callbacks =
+        [start_bits, transform_bits, flush_bits].map(|bits| scope.root_nanbox_f64(bits));
+    let readable_strategy = scope.root_nanbox_f64(readable_strategy);
+    let (writable_hwm, writable_size) = parse_strategy_value(writable_strategy);
+    let writable_size = scope.root_raw_mut_ptr(writable_size as *mut ClosureHeader);
+    let readable = if readable_strategy.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
         (0.0, 0)
     } else {
-        parse_strategy_value(readable_strategy)
+        parse_strategy_value(readable_strategy.get_nanbox_f64())
     };
+    let [start_cb, transform_cb, flush_cb] =
+        callbacks.map(|bits| closure_from_bits(bits.get_nanbox_f64().to_bits()));
     alloc_transform_stream_with_strategies(
         start_cb,
         transform_cb,
         flush_cb,
         None,
-        writable,
+        (
+            writable_hwm,
+            writable_size.get_raw_mut_ptr::<ClosureHeader>() as i64,
+        ),
         readable,
     )
 }
@@ -140,12 +149,22 @@ pub unsafe extern "C" fn js_transform_stream_new_from_transformer_object(
     readable_strategy: f64,
 ) -> f64 {
     ensure_gc_registered();
+    // Every field read may run a getter (JS): the transformer, the strategies
+    // and each value already read are rooted across the later reads.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let transformer = scope.root_nanbox_f64(transformer);
+    let writable_strategy = scope.root_nanbox_f64(writable_strategy);
+    let readable_strategy = scope.root_nanbox_f64(readable_strategy);
+    let field = |name: &[u8]| {
+        scope.root_nanbox_f64(stream_object_field(transformer.get_nanbox_f64(), name))
+    };
+    let (start, transform, flush) = (field(b"start"), field(b"transform"), field(b"flush"));
     js_transform_stream_new(
-        stream_object_field(transformer, b"start"),
-        stream_object_field(transformer, b"transform"),
-        stream_object_field(transformer, b"flush"),
-        writable_strategy,
-        readable_strategy,
+        start.get_nanbox_f64(),
+        transform.get_nanbox_f64(),
+        flush.get_nanbox_f64(),
+        writable_strategy.get_nanbox_f64(),
+        readable_strategy.get_nanbox_f64(),
     )
 }
 
@@ -1122,9 +1141,13 @@ pub unsafe extern "C" fn js_stream_web_text_encoder_stream_new() -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_stream_web_text_decoder_stream_new(label: f64, options: f64) -> f64 {
+    // The label's toString and the option getters are JS: the options object
+    // is rooted across them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
     parse_text_decoder_stream_label(label);
-    let fatal = bool_option(options, b"fatal");
-    let ignore_bom = bool_option(options, b"ignoreBOM");
+    let fatal = bool_option(options.get_nanbox_f64(), b"fatal");
+    let ignore_bom = bool_option(options.get_nanbox_f64(), b"ignoreBOM");
     let object = perry_runtime::object::js_text_decoder_stream_new();
     attach_stream_string_field(object, b"encoding", b"utf-8");
     attach_stream_bool_field(object, b"fatal", fatal);

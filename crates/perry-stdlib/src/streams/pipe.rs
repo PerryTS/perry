@@ -281,12 +281,14 @@ extern "C" fn readable_stream_pipe_to_aborted(
         let r_id = stream_id(capture_f64(closure, 0));
         let w_id = stream_id(capture_f64(closure, 1));
         let state = pipe_state_from_capture(closure);
-        let reason = pipe_signal_reason(state.signal);
-        // The abort and the cancel run JS: the pipe's values, the reason and
-        // the first action are rooted across them.
+        // The signal's reason getter, the abort and the cancel run JS: the
+        // pipe's values, the reason and the first action are rooted across
+        // them.
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let held = HeldPipe::new(&scope, r_id, promise, state);
-        let reason_root = scope.root_nanbox_u64(reason);
+        let reason_root = scope.root_nanbox_u64(pipe_signal_reason(state.signal));
+        let reason = reason_root.get_nanbox_u64();
+        let (_, _, state) = held.get();
         let mut abort_action = None;
         if !state.prevent_abort && writable_can_abort(w_id) {
             abort_action = Some(
@@ -828,10 +830,21 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     writable_handle: f64,
     options: f64,
 ) -> *mut Promise {
-    let promise = js_promise_new();
-    let r_id = stream_id(readable_handle);
+    // The option getters are JS and may move the readable (a GC object) and
+    // the options object: both are rooted across them, and every option is
+    // read before the locks are taken, in node's (and WebIDL's) order:
+    // preventAbort, preventCancel, preventClose, signal.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let readable = super::state::Held::new(&scope, stream_id(readable_handle));
+    let options = scope.root_nanbox_f64(options);
+    let prevent_abort = pipe_option_truthy(options.get_nanbox_f64(), b"preventAbort");
+    let prevent_cancel = pipe_option_truthy(options.get_nanbox_f64(), b"preventCancel");
+    let prevent_close = pipe_option_truthy(options.get_nanbox_f64(), b"preventClose");
+    let signal = scope.root_nanbox_f64(pipe_option_value(options.get_nanbox_f64(), b"signal"));
+    let signal = signal.get_nanbox_f64();
+    let r_id = readable.id();
     let w_id = stream_id(writable_handle);
-    let signal = pipe_option_value(options, b"signal");
+    let promise = js_promise_new();
 
     if signal.to_bits() != TAG_UNDEFINED && pipe_signal_ptr(signal).is_none() {
         reject_type_error(
@@ -851,9 +864,9 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
 
     let mut state = PipeState {
         locks,
-        prevent_close: pipe_option_truthy(options, b"preventClose"),
-        prevent_abort: pipe_option_truthy(options, b"preventAbort"),
-        prevent_cancel: pipe_option_truthy(options, b"preventCancel"),
+        prevent_close,
+        prevent_abort,
+        prevent_cancel,
         signal,
         abort_listener: f64::from_bits(TAG_UNDEFINED),
     };
@@ -880,8 +893,10 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
             state.abort_listener,
         );
         if perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
+            // The abort and the cancel run JS: the returned promise is rooted.
+            let promise = scope.root_raw_mut_ptr(promise);
             readable_stream_pipe_to_aborted(listener, perry_runtime::closure::JsThis::UNDEFINED);
-            return promise;
+            return promise.get_raw_mut_ptr();
         }
     }
 

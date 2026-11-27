@@ -39,19 +39,18 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
     }
 
     ensure_gc_registered();
-    // `hwm` may be a plain number or a whole strategy object (#4915).
+    // `hwm` may be a plain number or a whole strategy object (#4915). Its
+    // getters are JS: the callbacks are rooted across them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callbacks =
+        [start_bits, write_bits, close_bits, abort_bits].map(|bits| scope.root_nanbox_f64(bits));
     let (hwm, size_cb) = parse_strategy_value(hwm);
-    let id = alloc_writable_with_strategy(
-        closure_from_bits(write_bits.to_bits()),
-        closure_from_bits(close_bits.to_bits()),
-        closure_from_bits(abort_bits.to_bits()),
-        hwm,
-        size_cb,
-    );
+    let [start_cb, write_cb, close_cb, abort_cb] =
+        callbacks.map(|bits| closure_from_bits(bits.get_nanbox_f64().to_bits()));
+    let id = alloc_writable_with_strategy(write_cb, close_cb, abort_cb, hwm, size_cb);
     // #1545: WritableStream `start(controller)` fires synchronously at
     // construction (before any write), matching the WHATWG order
     // start → write → close. The controller arg is the stream handle.
-    let start_cb = closure_from_bits(start_bits.to_bits());
     if start_cb != 0 {
         js_closure_call1(
             start_cb as *const ClosureHeader,
@@ -65,7 +64,13 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm: f64) -> f64 {
     ensure_gc_registered();
-    let sink_type = stream_object_field(sink, b"type");
+    // Every field read may run a getter (JS): the sink and each value already
+    // read are rooted across the later reads.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let sink = scope.root_nanbox_f64(sink);
+    let field =
+        |name: &[u8]| scope.root_nanbox_f64(stream_object_field(sink.get_nanbox_f64(), name));
+    let sink_type = stream_object_field(sink.get_nanbox_f64(), b"type");
     if sink_type.to_bits() != TAG_UNDEFINED {
         throw_range_error_with_code(
             "The argument 'type' is invalid. Received a non-undefined value",
@@ -74,14 +79,24 @@ pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm:
     }
 
     let (hwm, size_cb) = parse_strategy_value(hwm);
-    let id = alloc_writable_with_strategy(
-        stream_object_closure(sink, b"write"),
-        stream_object_closure(sink, b"close"),
-        stream_object_closure(sink, b"abort"),
-        hwm,
-        size_cb,
+    let size = scope.root_raw_mut_ptr(size_cb as *mut ClosureHeader);
+    let (write, close, abort, start) = (
+        field(b"write"),
+        field(b"close"),
+        field(b"abort"),
+        field(b"start"),
     );
-    let start_cb = stream_object_closure(sink, b"start");
+    let closure = |value: &perry_runtime::gc::RuntimeHandle<'_>| {
+        closure_from_bits(value.get_nanbox_f64().to_bits())
+    };
+    let id = alloc_writable_with_strategy(
+        closure(&write),
+        closure(&close),
+        closure(&abort),
+        hwm,
+        size.get_raw_mut_ptr::<ClosureHeader>() as i64,
+    );
+    let start_cb = closure(&start);
     if start_cb != 0 {
         js_closure_call1(
             start_cb as *const ClosureHeader,
