@@ -113,3 +113,67 @@ fn pxtrap_proxy_getter_is_called_by_the_read() {
         op,
     );
 }
+
+const GOPD_OUT: &str =
+    "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+const PROTO_OUT: &str = "getPrototypeOf(t: any) { external(payload); return null; }";
+const DEFINE_OUT: &str = "defineProperty(t: any, k: any, d: any) { external(payload); return true; }";
+
+/// Rule PXNT: `Object.prototype`'s methods read under a computed key
+/// (`BuiltinNs::ObjectProtoMethod`) called with a Proxy `this` are each
+/// method on the Proxy: `hasOwnProperty` its getOwnPropertyDescriptor trap,
+/// `toString` the get trap of @@toStringTag, `__lookupGetter__` the
+/// getOwnPropertyDescriptor and getPrototypeOf traps (RED on base: PXESC of
+/// rule nativethis).
+const NT_OP: &str = "const s: string = String(Math.random());\nconst f: any = ({} as any)[s];\nconsole.log(f.call(px, \"a\"));";
+
+#[test]
+fn pxnt_object_proto_methods_run_the_gopd_trap() {
+    pxtrap("{ a: payload }", "{ a: 1 }", GOPD_OUT, NT_OP);
+}
+
+#[test]
+fn pxnt_object_proto_methods_run_the_get_trap() {
+    pxtrap("{ a: payload }", "{ a: 1 }", GET_OUT, NT_OP);
+}
+
+#[test]
+fn pxnt_object_proto_methods_run_the_getprototypeof_trap() {
+    pxtrap("{ a: payload }", "{ a: 1 }", PROTO_OUT, NT_OP);
+}
+
+/// Rule PXANNEXB: the Annex B define on a Proxy receiver
+/// (`js_object_define_getter`, `Cons::AnnexBDefine`; B.2.2.2) is its
+/// [[DefineOwnProperty]]: the defineProperty trap, passed a descriptor
+/// whose `get` is the getter (RED on base: PXESC of rule annexbdefine).
+const XDECL: &str = "declare function js_object_define_getter(o: any, k: any, f: any): any;\ndeclare function js_object_lookup_getter(o: any, k: any): any;\n";
+
+#[test]
+fn pxannexb_define_runs_the_define_property_trap() {
+    let op = format!("{XDECL}js_object_define_getter(px, \"g\", function (this: any) {{ return 1; }});");
+    pxtrap("{ a: payload }", "{ a: 1 }", DEFINE_OUT, &op);
+}
+
+#[test]
+fn pxannexb_define_passes_the_getter_in_the_descriptor() {
+    let op = format!("{XDECL}js_object_define_getter(px, \"g\", function (this: any) {{ return payload; }});");
+    expect("{ a: 1 }", "const h: any = {};", &op, true);
+    let trap = "const h: any = { defineProperty(t: any, k: any, d: any) { external(d.get); return true; } };";
+    expect("{ a: 1 }", trap, &op, false);
+}
+
+/// Rule PXANNEXB: the Annex B lookup on a Proxy receiver
+/// (`js_object_lookup_getter`, `Cons::AnnexBLookup`; B.2.2.4) runs its
+/// getOwnPropertyDescriptor and getPrototypeOf traps (RED on base: PXESC of
+/// rule annexblookup).
+#[test]
+fn pxannexb_lookup_runs_the_gopd_trap() {
+    let op = format!("{XDECL}console.log(js_object_lookup_getter(px, \"a\"));");
+    pxtrap("{ a: payload }", "{ a: 1 }", GOPD_OUT, &op);
+}
+
+#[test]
+fn pxannexb_lookup_runs_the_getprototypeof_trap() {
+    let op = format!("{XDECL}console.log(js_object_lookup_getter(px, \"a\"));");
+    pxtrap("{ a: payload }", "{ a: 1 }", PROTO_OUT, &op);
+}

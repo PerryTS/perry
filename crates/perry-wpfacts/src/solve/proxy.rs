@@ -1736,12 +1736,52 @@ impl Model {
             // token) for a native whose model holds for a Proxy `this`
             // (`Model::proxy_this_model`: `Function.prototype.{call, apply,
             // toString}`): the Proxy is that receiver.
+            //
+            // Rule PXNT: `Object.prototype`'s methods (`ObjectProtoMethod`,
+            // `object_proto_method_call`) on a Proxy `this` are each method
+            // on it: ToObject( this ) is the Proxy (7.1.18), and every
+            // internal method they run on it has its PX arm:
+            // `hasOwnProperty` / `propertyIsEnumerable` its [[GetOwnProperty]]
+            // (20.1.3.2 / 20.1.3.4: `OwnProp`, the getOwnPropertyDescriptor
+            // trap), `toString` Get( @@toStringTag ) (20.1.3.6: `Load`, the
+            // get trap; IsArray of a Proxy reads its target, no trap),
+            // `valueOf` the Proxy itself (20.1.3.7), `__defineGetter__` /
+            // `__defineSetter__` its [[DefineOwnProperty]] and
+            // `__lookupGetter__` / `__lookupSetter__` its [[GetOwnProperty]] /
+            // [[GetPrototypeOf]] loop (B.2.2.2-5: `annexb_define`,
+            // `annexb_lookup`, the PXANNEXB arms below).
             Cons::NativeThis { call, f }
-                if builtins::native_model(self, f)
+                if matches!(
+                    self.toks[f as usize],
+                    TokKind::Builtin(BuiltinNs::ObjectProtoMethod)
+                ) || builtins::native_model(self, f)
                     .is_some_and(|(fam, _, name)| Self::proxy_this_model(fam, name)) =>
             {
                 let t = self.tok(TokKind::Proxy(p));
                 self.native_this(call, f, Tokens::Slice(&[t]), 0);
+            }
+            // Rule PXANNEXB: `p.__defineGetter__( k, f )` /
+            // `__defineSetter__` (B.2.2.2 / B.2.2.3): DefinePropertyOrThrow(
+            // p, k, { [[Get]] / [[Set]]: f, [[Enumerable]], [[Configurable]] } )
+            // (7.3.8), the Proxy's [[DefineOwnProperty]] (10.5.6): the
+            // defineProperty trap passed FromPropertyDescriptor( desc ), the
+            // target's [[GetOwnProperty]], and the forward to the target
+            // (`annexb_define` installs `f` on the Proxy holder:
+            // `Cons::AccessorInstall`, `proxy_define_accessor`).
+            Cons::AnnexBDefine { call, setter } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.with_native(call, |m, call| builtins::annexb_define(m, t, call, setter));
+            }
+            // Rule PXANNEXB: `p.__lookupGetter__( k )` / `__lookupSetter__`
+            // (B.2.2.4 / B.2.2.5): the loop's p.[[GetOwnProperty]]( k ) and
+            // p.[[GetPrototypeOf]]() are the getOwnPropertyDescriptor and
+            // getPrototypeOf traps and their forwards
+            // (`proxy_annexb_lookup`).
+            Cons::AnnexBLookup { call, setter } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.with_native(call, |m, call| {
+                    builtins::annexb_lookup(m, Some(t), call, setter)
+                });
             }
             // Rule PXDEFP: the value of a definition (a define site).
             Cons::Store {
@@ -2713,8 +2753,6 @@ impl Model {
             // (`proxy_escape`: each trap with unknown operands, the target's
             // own escape), and the rule's result is unknown.
             Cons::AddsKeys { .. }
-            | Cons::AnnexBDefine { .. }
-            | Cons::AnnexBLookup { .. }
             | Cons::BoundCall { .. }
             | Cons::CallerValue { .. }
             | Cons::CjsPublish { .. }

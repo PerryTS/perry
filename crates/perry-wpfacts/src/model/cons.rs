@@ -1609,7 +1609,9 @@ impl Cons {
             // (ForInAcc); ToPropertyKey of a Proxy key, the key node's Implicit
             // ToPrimitive, then a store / install under any key (StoreKeyed,
             // AccessorKeyed); the enumeration traps of a Proxy for-in subject, then a
-            // store under any String key (EnumKeyStore).
+            // store under any String key (EnumKeyStore); Annex B define / lookup on a
+            // Proxy `this` (AnnexBDefine: the defineProperty trap; AnnexBLookup: the
+            // getOwnPropertyDescriptor and getPrototypeOf traps).
             Cons::Fulfil { .. }
             | Cons::ProtoKey { .. }
             | Cons::DefineDesc { .. }
@@ -1620,20 +1622,22 @@ impl Cons {
             | Cons::ForInAcc { .. }
             | Cons::StoreKeyed { .. }
             | Cons::AccessorKeyed { .. }
-            | Cons::EnumKeyStore { .. } => ProxyOperand::Trap,
+            | Cons::EnumKeyStore { .. }
+            | Cons::AnnexBDefine { .. }
+            | Cons::AnnexBLookup { .. } => ProxyOperand::Trap,
             // An internal method of the Proxy runs and no PX model of it is built
             // yet: PXESC (the escape stands in for the trap). Get( prototype ) and
-            // [[Construct]] of an `extends` value (NativeParent); Annex B define / lookup; IsRegExp and ToString (NotRegExp,
+            // [[Construct]] of an `extends` value (NativeParent); IsRegExp and ToString (NotRegExp,
             // RegExpPattern); [[Construct]] (NewNamed, SuperCtor, SuperCtorParent); a
-            // native on a Proxy `this` its model does not name (NativeThis).
+            // native on a Proxy `this` its model does not name (NativeThis; the models
+            // that hold for a Proxy `this`, `Object.prototype`'s methods among them,
+            // run in `proxy_apply`).
             // RequireSpec: perry-runtime's non-string specifier error
             // (`describe_received_js`) reads `constructor` and its `name` through the
             // get trap. CjsPublish: `registerPathModule` reads `__perry_cjs_record`
             // and `exports` (`cjs_record_exports`: `js_object_get_field_by_name`, the
             // get trap on a Proxy).
-            Cons::AnnexBDefine { .. }
-            | Cons::AnnexBLookup { .. }
-            | Cons::NotRegExp { .. }
+            Cons::NotRegExp { .. }
             | Cons::RegExpPattern { .. }
             | Cons::NativeParent { .. }
             | Cons::NewNamed { .. }
