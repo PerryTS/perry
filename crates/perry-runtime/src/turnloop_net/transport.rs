@@ -1052,7 +1052,7 @@ pub unsafe fn read_start(core: *mut TransportCore, link: OwnerLink) -> NetResult
     let (c, name) = bind(core, link, "read")?;
     with_driver(|driver| {
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
-        if entry.read_op.is_some() || entry.closing {
+        if entry.read_op.is_some() || entry.closing || entry.ended {
             return Ok(());
         }
         let op = driver
@@ -1068,7 +1068,9 @@ pub unsafe fn read_start(core: *mut TransportCore, link: OwnerLink) -> NetResult
 }
 
 /// libuv's `readStop`: stop the multishot read until [`read_start`]. Results
-/// the stopped operation already produced are still delivered.
+/// the stopped operation already produced are still delivered. Fails when no
+/// read is running (an EOF already ended it), so a caller never records a
+/// stop it would later try to undo.
 ///
 /// # Safety
 /// See [`bind`].
@@ -1076,11 +1078,10 @@ pub unsafe fn read_stop(core: *mut TransportCore, link: OwnerLink) -> NetResult<
     let (c, _) = bind(core, link, "read")?;
     with_driver(|driver| {
         let entry = c.entry.as_mut().ok_or_else(|| not_found("read"))?;
-        if let Some(op) = entry.read_op.take() {
-            driver.stop(op);
-            entry.read_stopped = true;
-            settle_ref(driver, c);
-        }
+        let op = entry.read_op.take().ok_or_else(|| not_found("read"))?;
+        driver.stop(op);
+        entry.read_stopped = true;
+        settle_ref(driver, c);
         Ok(())
     })
     .unwrap_or_else(|| Err(no_loop()))

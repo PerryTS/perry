@@ -282,7 +282,7 @@ struct Entry {
     closing: bool,
     /// The peer's EOF was delivered: nothing is read any more.
     ended: bool,
-    /// The binding stopped the read (a paused buffer at its high-water mark).
+    /// The binding stopped the read: its buffer reached the high-water mark.
     read_stopped: bool,
     referenced: bool,
     #[cfg(windows)]

@@ -2098,8 +2098,11 @@ pub(crate) fn flow(owner: f64) {
             } else {
                 Vec::new()
             };
-            // A paused socket reads too, until its buffer reaches the high-water mark.
-            let start = fields.opened && !fields.read_started && !fields.read_ended;
+            // Pausing keeps a read already started; only an unpaused socket starts one.
+            let start = fields.opened
+                && !fields.read_started
+                && !fields.read_ended
+                && (!fields.paused || fields.raw_consumer);
             if start {
                 fields.read_started = true;
             }
@@ -2127,6 +2130,50 @@ fn read_again(fields: &mut SocketFields) -> bool {
         fields.read_stopped = false;
     }
     again
+}
+
+unsafe extern "C" fn readable_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let socket = link(owner.get());
+    let _account = p::AccountSocket(socket);
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field access ends before allocation or JS.
+    let action = p::socket_ptr(socket).ok().map(|payload| {
+        let fields = &mut (*payload).ext;
+        let start = fields.opened && !fields.read_started && !fields.read_ended;
+        if start {
+            fields.read_started = true;
+        }
+        (start || read_again(fields), !fields.read_buffer.is_empty())
+    });
+    let Some((start, buffered)) = action else {
+        return p::undefined();
+    };
+    if start && !start_read(owner.get(), socket) {
+        return p::undefined();
+    }
+    if buffered {
+        events::emit(owner.get(), "readable", &[]);
+    }
+    p::undefined()
+}
+
+/// Node's `on('readable')`: on the next tick the socket reads (`read(0)`)
+/// and, with bytes already buffered, emits `'readable'` for them.
+pub(crate) fn readable_listener(owner: f64) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(readable_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    // SAFETY: The rooted closure was allocated with this capture slot; the owner is rooted until the
+    // scheduled job owns its traced edge.
+    unsafe {
+        perry_ffi::set_closure_capture_f64(job.get() as *mut RawClosureHeader, 0, owner.get());
+        js_queue_next_tick(job.get());
+    }
 }
 
 /// Returns false when the failure destroyed the socket.

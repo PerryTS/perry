@@ -20,7 +20,7 @@ const server = net.createServer((socket) => {
 const mark = new net.Socket().readableHighWaterMark;
 server.listen(0, "127.0.0.1", () => {
   const client = net.connect((server.address() as net.AddressInfo).port, "127.0.0.1", () => {
-    client.write(Buffer.alloc(4 * mark), () => console.log("client wrote"));
+    client.write(Buffer.alloc(mark + mark / 2), () => console.log("client wrote"));
     client.unref();
   });
 });

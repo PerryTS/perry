@@ -9,7 +9,7 @@ use crate::native_payload::{self as np, CloseOutcome, NativePayloadFamily, Owner
 use crate::turnloop_net::transport::{self, TransportCore, TransportPayload};
 use crate::turnloop_net::{
     NetCompletion, NET_ACCEPT, NET_ATTEMPT, NET_ATTEMPT_FAILED, NET_ATTEMPT_START,
-    NET_ATTEMPT_TIMEOUT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_ERROR, NET_FLAG_LINK,
+    NET_ATTEMPT_TIMEOUT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_LINK,
 };
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -68,6 +68,8 @@ thread_local! {
     static PUMPS: Cell<usize> = const { Cell::new(0) };
     /// Run inside the sink on each `NET_ATTEMPT`, as a binding's listener would.
     static ON_ATTEMPT: Cell<Option<fn(OwnerLink, &NetCompletion)>> = const { Cell::new(None) };
+    /// Run inside the sink on each `NET_DATA`, as a binding's data path would.
+    static ON_DATA: Cell<Option<fn(OwnerLink)>> = const { Cell::new(None) };
     /// When set, the sink queues a nextTick per `Closed` that logs [`TICK`].
     static TICK_ON_CLOSED: Cell<bool> = const { Cell::new(false) };
     /// `(trigger, victim)`: the sink closes `victim` when `trigger`'s
@@ -154,6 +156,11 @@ extern "C" fn link_sink(completion: *const NetCompletion) {
     if c.kind == NET_ATTEMPT {
         if let Some(hook) = ON_ATTEMPT.with(Cell::get) {
             hook(link, c);
+        }
+    }
+    if c.kind == NET_DATA {
+        if let Some(hook) = ON_DATA.with(Cell::get) {
+            hook(link);
         }
     }
 }
@@ -264,6 +271,7 @@ impl Fixture {
         INSTALL_ACCEPTED.with(|f| f.set(false));
         CHILD.with(|c| c.set(0));
         ON_ATTEMPT.with(|hook| hook.set(None));
+        ON_DATA.with(|hook| hook.set(None));
         assert!(
             crate::event_pump::install_net_loop_for_test(),
             "the host must provide a turnloop loop"
@@ -1489,6 +1497,99 @@ fn a_stopped_read_releases_the_loop_and_a_restart_reads_again() {
     );
     peer.write_all(b"+again").unwrap();
     assert!(pump_until(|| received() == b"held+again"));
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
+/// An accepted connection whose peer sent `bytes` and then its FIN before the
+/// child started reading, so one poll reads both.
+fn accepted_after_fin(scope: &RuntimeHandleScope, bytes: &[u8]) -> (OwnerLink, OwnerLink) {
+    use std::io::Write;
+    let server = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        let addr = transport::tcp_listen(c, link, "127.0.0.1:0".parse().unwrap(), 16, false, true)
+            .unwrap();
+        transport::accept_start(c, link).unwrap();
+        addr
+    };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    peer.write_all(bytes).unwrap();
+    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    (link, OwnerLink(CHILD.with(Cell::get)))
+}
+
+/// [`pump_until`] with a check phase per iteration, which delivers an EOF
+/// parked behind data.
+fn pump_phases_until(want: impl Fn() -> bool) -> bool {
+    pump_until(|| {
+        crate::turnloop_net::check_phase_begin();
+        crate::turnloop_net::check_phase_end();
+        while crate::turnloop_net::deliver_due_eof() {}
+        want()
+    })
+}
+
+fn child_core(child: OwnerLink) -> *mut TransportCore {
+    core(unsafe { np::link_event_owner(child) }.unwrap())
+}
+
+/// After an EOF ended the read there is nothing to stop, and nothing to
+/// restart: the socket reads no second EOF.
+#[test]
+fn an_ended_read_neither_stops_nor_restarts() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let (link, child) = accepted_after_fin(&scope, b"x");
+    unsafe { transport::read_start(child_core(child), child).unwrap() };
+    assert!(pump_phases_until(|| count(NET_EOF, child) == 1));
+    unsafe {
+        assert!(
+            transport::read_stop(child_core(child), child).is_err(),
+            "an ended read has nothing to stop"
+        );
+        transport::read_start(child_core(child), child).unwrap();
+        assert_eq!((*child_core(child)).read_operation(), None);
+    }
+    let deadline = Instant::now() + Duration::from_millis(50);
+    pump_phases_until(|| Instant::now() >= deadline);
+    assert_eq!(count(NET_EOF, child), 1);
+    assert!(destroy(child));
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
+}
+
+/// A read stopped and restarted from its own data completion, with its EOF
+/// already read behind that data: the stopped read's EOF ends the socket and
+/// cancels the restart, so no second EOF follows.
+#[test]
+fn a_stopped_reads_eof_cancels_the_restart_behind_it() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let (link, child) = accepted_after_fin(&scope, b"x");
+    ON_DATA.with(|hook| {
+        hook.set(Some(|link| unsafe {
+            ON_DATA.with(|hook| hook.set(None));
+            transport::read_stop(child_core(link), link).unwrap();
+            transport::read_start(child_core(link), link).unwrap();
+            assert!((*child_core(link)).read_operation().is_some());
+        }))
+    });
+    unsafe { transport::read_start(child_core(child), child).unwrap() };
+    assert!(pump_phases_until(|| count(NET_EOF, child) == 1));
+    let deadline = Instant::now() + Duration::from_millis(50);
+    pump_phases_until(|| Instant::now() >= deadline);
+    assert_eq!(count(NET_DATA, child), 1, "the hook ran");
+    assert_eq!(count(NET_EOF, child), 1, "the restart reads no second EOF");
+    assert_eq!(unsafe { (*child_core(child)).read_operation() }, None);
     assert!(destroy(child));
     assert!(destroy(link));
     assert!(pump_until(|| refs(child) == 0 && refs(link) == 0));
