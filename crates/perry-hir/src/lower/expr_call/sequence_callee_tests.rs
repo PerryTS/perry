@@ -35,7 +35,10 @@ fn comma_call_of_a_cjs_module_member_lowers_like_the_direct_call() {
         const _path = require("path");
         console.log(_path.join("/a", "b", "c"));
     "#);
-    assert!(comma.contains("PathJoin"), "fast path did not fire: {comma}");
+    assert!(
+        comma.contains("PathJoin"),
+        "fast path did not fire: {comma}"
+    );
     assert!(direct.contains("PathJoin"));
     assert!(!comma.contains("Sequence"), "literal prefix kept: {comma}");
 }
@@ -79,7 +82,10 @@ fn comma_spread_call_keeps_the_comma_callee() {
         console.log((0, _path.join)(...parts));
     "#);
     assert!(h.contains("CallSpread"), "expected CallSpread: {h}");
-    assert!(h.contains("Sequence"), "spread call lost the comma callee: {h}");
+    assert!(
+        h.contains("Sequence"),
+        "spread call lost the comma callee: {h}"
+    );
 }
 
 #[test]

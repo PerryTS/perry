@@ -2944,8 +2944,7 @@ js_path_dirname	ptr	ptr
 js_path_extname	ptr	ptr
 js_path_format	ptr	f64
 js_path_is_absolute	i32s	ptr
-js_path_join	ptr	ptr,ptr
-js_path_join_value	ptr	f64,f64
+js_path_join_values	ptr	ptr,i32u
 js_path_matches_glob	i32s	ptr,ptr
 js_path_matches_glob_value	i32s	f64,f64
 js_path_normalize	ptr	ptr
@@ -2966,8 +2965,7 @@ js_path_win32_dirname	ptr	ptr
 js_path_win32_extname	ptr	ptr
 js_path_win32_format	ptr	f64
 js_path_win32_is_absolute	i32s	ptr
-js_path_win32_join	ptr	ptr,ptr
-js_path_win32_join_value	ptr	f64,f64
+js_path_win32_join_values	ptr	ptr,i32u
 js_path_win32_matches_glob	i32s	ptr,ptr
 js_path_win32_matches_glob_value	i32s	f64,f64
 js_path_win32_normalize	ptr	ptr
