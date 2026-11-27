@@ -456,6 +456,9 @@ pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool 
 #[derive(Default)]
 pub(crate) struct ErrorDiagnostics {
     code: Option<&'static str>,
+    /// Node raises the error from its JavaScript layer, whose errors print
+    /// `Name [CODE]: message`.
+    node_internal: bool,
     syscall: Option<&'static str>,
     /// A number, or `undefined` for an error Node gives an `errno` key it
     /// cannot fill (c-ares).
@@ -499,8 +502,7 @@ pub(crate) fn take_pending_error_diagnostics(
 }
 
 /// Write a staged diagnostic record onto its Error as ordinary own properties,
-/// in the order Node's `uvException` installs them. An `ERR_*` code marks the
-/// Error as one of Node's internal errors.
+/// in the order Node's `uvException` installs them.
 ///
 /// # Safety
 /// `error` roots a live `ErrorHeader`.
@@ -525,7 +527,7 @@ pub(crate) unsafe fn install_error_diagnostics(
     }
     if let Some(code) = diagnostics.code {
         put_str("code", code);
-        if code.starts_with("ERR_") {
+        if diagnostics.node_internal {
             error.with_mut_ptr(|error| crate::error::error_mark_node_internal(error));
         }
     }
@@ -553,6 +555,15 @@ pub(crate) fn register_error_code(message_ptr: *const StringHeader, code: &'stat
 /// `message_ptr`. `alloc_error` drains this construction-stage record before
 /// its first GC point and writes it onto the resulting Error.
 pub fn register_error_code_pub(message_ptr: *const StringHeader, code: &'static str) {
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.code = Some(code);
+        diagnostics.node_internal = code.starts_with("ERR_");
+    });
+}
+
+/// Register `code` for an error Node raises from its C++ layer: a plain error
+/// that carries the code but prints no `[CODE]` header.
+pub fn register_native_layer_error_code(message_ptr: *const StringHeader, code: &'static str) {
     with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.code = Some(code));
 }
 

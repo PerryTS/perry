@@ -56,8 +56,8 @@ pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
 pub(crate) const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
 pub(crate) const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
 const ERROR_FLAG_HAS_ERRORS: u32 = 1 << 2;
-/// One of Node's internal (`ERR_*`) errors: an uncaught one is reported as
-/// `TypeError [ERR_X]: message`.
+/// One of Node's internal (`ERR_*`) errors, whose stack, `toString` and
+/// inspect headline name the code: `TypeError [ERR_X]: message`.
 const ERROR_FLAG_NODE_INTERNAL: u32 = 1 << 3;
 
 /// Special class IDs for `instanceof` checks (must match perry-codegen/src/expr.rs)
@@ -1503,8 +1503,19 @@ unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHeader {
     unsafe {
-        let name = error_to_string_part(error, "name", js_error_get_name(error), "Error");
-        let message = error_to_string_part(error, "message", js_error_get_message(error), "");
+        // Each property read allocates its key, and `error` is a bare pointer.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+        let current =
+            || crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64()) as *mut ErrorHeader;
+        let code = crate::node_submodules::error_code_for_error(current());
+        let name = error_to_string_part(&current, "name", js_error_get_name, "Error");
+        let message = error_to_string_part(&current, "message", js_error_get_message, "");
+        // Node's internal errors print their code whatever the message.
+        if let Some(code) = code {
+            let result = format!("{name} [{code}]: {message}");
+            return js_string_from_bytes(result.as_ptr(), result.len() as u32);
+        }
         let result = if name.is_empty() {
             message
         } else if message.is_empty() {
@@ -1517,19 +1528,19 @@ pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHead
 }
 
 unsafe fn error_to_string_part(
-    error: *mut ErrorHeader,
+    error: &impl Fn() -> *mut ErrorHeader,
     key: &str,
-    fallback: *const StringHeader,
+    fallback: extern "C" fn(*mut ErrorHeader) -> *mut StringHeader,
     undefined_default: &str,
 ) -> String {
-    if let Some(value) = crate::node_submodules::error_user_prop(error as usize, key) {
+    if let Some(value) = crate::node_submodules::error_user_prop(error() as usize, key) {
         let value_jsv = crate::value::JSValue::from_bits(value.to_bits());
         if value_jsv.is_undefined() {
             return undefined_default.to_string();
         }
         return read_string_header_owned(crate::value::js_jsvalue_to_string(value));
     }
-    read_string_header_owned(fallback)
+    read_string_header_owned(fallback(error()))
 }
 
 /// Get the cause property of an Error (raw f64 NaN-boxed value)
