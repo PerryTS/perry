@@ -52,6 +52,11 @@ pub const ANY_MEMBER: &str = "*";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PatchedBuiltins {
     entries: BTreeSet<(String, String)>,
+    /// NXCALL5: static member names the program stores onto targets the
+    /// scan does not resolve (`m.basename = f`). Not a patch by itself: it
+    /// only matters below a node-core namespace the program handed on
+    /// (`patched_builtins_node` module docs).
+    node_stored: BTreeSet<String>,
     pub dynamic_code_reach: crate::dynamic_code::DynamicCodeReach,
     /// MATHB1: lower every direct namespace call as the pair
     /// `NamespacePatched(ns) ? <generic> : <intrinsic>`, so the whole-program
@@ -336,8 +341,12 @@ impl Scanner<'_> {
             self.out.insert((ARRAY_ITERATION.into(), "write".into()));
         }
         // NXCALL3: a write into a node-core namespace (`path.join = f`).
+        // A static key stored onto a target the scan does not resolve is
+        // kept by name: it may reach a namespace the program handed on
+        // (`patched_builtins_node` module docs).
         if let Some(ns) = node_ns::resolve(target, &self.node_bindings) {
             self.out.insert(node_ns::entry(&ns, member.as_deref()));
+            return;
         }
         if let Some(ns) = namespace_receiver(target).or_else(|| match peel(target) {
             ast::Expr::Ident(id) => self.ns_aliases.get(id.sym.as_ref()).cloned(),
@@ -371,6 +380,8 @@ impl Scanner<'_> {
                 Some(_) => {}
                 None => self.add(GLOBAL_ANY_KEY.into(), None),
             }
+        } else if let Some(name) = member.filter(|_| !node_ns::fresh_value(target)) {
+            self.out.node_stored.insert(name);
         }
     }
 
@@ -662,8 +673,8 @@ pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
         global_aliases,
         node_bindings: node_bindings.clone(),
     });
-    // NXCALL3: a node-core namespace handed on is recorded as a write of
-    // any member below it, with the facts on as well (`node_ns`).
+    // NXCALL3: a node-core namespace handed on is recorded as an escape,
+    // with the facts on as well (`node_ns`): not a write by itself.
     module.visit_with(&mut node_ns::EscapeScan {
         bindings: &node_bindings,
         out: &mut out.entries,
@@ -786,7 +797,7 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
 /// `"process.namespace"`) or a namespace on the way to it? A direct native
 /// call of it then lowers as the generic member get plus call.
 pub fn node_member_patched(module: &str, path: &[&str]) -> bool {
-    with_set(|s| node_ns::member_patched(&s.entries, module, path)).unwrap_or(false)
+    with_set(|s| node_ns::member_patched(s, module, path)).unwrap_or(false)
 }
 
 /// NXCALL3: the program is an open CommonJS program (`cjs_link`): the

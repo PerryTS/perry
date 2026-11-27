@@ -359,8 +359,9 @@ pub(super) fn namespace_call_needs_esm_binding(ctx: &LoweringContext, callee: &a
 
 /// NXCALL3: is `callee` a member of a node-core namespace (`path.join`,
 /// `path.posix.join`, `fsp.readFile`, `require("fs").statSync`) that the
-/// program may replace (`patched_builtins::node_member_patched`: a store,
-/// delete, `Object.assign` target or escape anywhere in the program)? The
+/// program may replace (`patched_builtins::node_member_patched`: a program
+/// store, delete or `Object.assign` target anywhere in the program, directly
+/// or through a namespace it handed on)? The
 /// native arms would bind the built-in and ignore the replacement, so the call
 /// reads the member and calls what it holds.
 pub(super) fn node_namespace_call_patched(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
@@ -375,7 +376,16 @@ pub(super) fn node_namespace_call_patched(ctx: &LoweringContext, callee: &ast::E
     };
     path.push(name.to_string());
     let path: Vec<&str> = path.iter().map(String::as_str).collect();
-    crate::patched_builtins::node_member_patched(&module, &path)
+    let patched = crate::patched_builtins::node_member_patched(&module, &path);
+    // `PERRY_NODE_NS_REPORT=1`: one line per node-core namespace call site.
+    if std::env::var_os("PERRY_NODE_NS_REPORT").is_some() {
+        eprintln!(
+            "node-ns-call {module} {} {}",
+            path.join("."),
+            if patched { "generic" } else { "direct" }
+        );
+    }
+    patched
 }
 
 /// The module and member path of a namespace value the native arms treat as a
@@ -409,6 +419,11 @@ fn node_namespace_by_name(ctx: &LoweringContext, name: &str) -> Option<(String, 
     }
     if let Some(module) = ctx.lookup_builtin_module_alias(name) {
         return Some((module.to_string(), Vec::new()));
+    }
+    // `path.posix.<m>(…)` lowers natively for any root named `path`
+    // (`nested_namespace::is_path_root`), so the check covers that name too.
+    if name == "path" {
+        return Some(("path".to_string(), Vec::new()));
     }
     (name == "process" && !ctx.shadows_unqualified_global("process"))
         .then(|| ("process".to_string(), Vec::new()))
