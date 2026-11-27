@@ -384,7 +384,7 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
         }
         words.young = young;
         unsafe {
-            crate::object::layout_probe::chain_glue::for_each_node_obj(|slot| {
+            crate::object::layout_probe::chain_glue::for_each_node_word(|slot| {
                 if bits_minor_collectible(*slot) {
                     visitor.visit_nanbox_u64_slot(&mut *slot);
                 }
@@ -392,7 +392,7 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
         }
     } else if visitor.is_metadata_rewrite_phase() {
         unsafe {
-            crate::object::layout_probe::chain_glue::for_each_node_obj(|slot| {
+            crate::object::layout_probe::chain_glue::for_each_node_word(|slot| {
                 visitor.visit_nanbox_u64_slot(&mut *slot);
             });
         }
