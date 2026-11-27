@@ -4277,6 +4277,7 @@ js_throw_json_constructor_type_error	f64
 js_throw_local	void	f64
 js_throw_math_constructor_type_error	f64	
 js_throw_not_a_constructor	f64	
+js_throw_program_value	void	f64
 js_throw_reference_error_super_delete	f64	
 js_throw_reference_error_tdz	f64	f64
 js_throw_reference_error_this_before_super	f64	
