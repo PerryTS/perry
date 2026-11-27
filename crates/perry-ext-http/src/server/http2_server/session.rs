@@ -183,6 +183,7 @@ pub unsafe extern "C" fn js_node_http2_connect(
         local_window_size: 65_535,
         listeners,
         close_callbacks: Vec::new(),
+        close_emitted: false,
         pending_callbacks: Vec::new(),
         ping_sent: Default::default(),
         settings_sent: Default::default(),
@@ -562,6 +563,7 @@ pub(crate) mod tests {
             local_window_size: 65_535,
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
+            close_emitted: false,
             pending_callbacks: Vec::new(),
             ping_sent: Default::default(),
             settings_sent: Default::default(),
@@ -665,6 +667,51 @@ pub(crate) mod tests {
             event,
             Http2PendingEvent::ClientClose { session_handle, .. } if *session_handle == handle
         )));
+    }
+
+    extern "C" fn count_call(
+        closure: *const perry_ffi::RawClosureHeader,
+        _: perry_ffi::JsThis,
+    ) -> f64 {
+        unsafe {
+            let count = perry_ffi::closure_capture_f64(closure, 0);
+            perry_ffi::set_closure_capture_f64(closure as *mut _, 0, count + 1.0);
+        }
+        0.0
+    }
+
+    static COUNT_CALL: perry_ffi::JsFunctionInfo =
+        perry_ffi::JsFunctionInfo::of(count_call as perry_ffi::JsBody0);
+
+    /// A session emits `'close'` once, however many paths owe it (a
+    /// `close()` then a `destroy()` with no transport, or a `destroy()` from
+    /// an `'error'` listener while the transport's close is pending). A
+    /// `close(cb)` callback is removed from the listeners before it runs.
+    #[test]
+    fn a_session_emits_close_once() {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let counter = || {
+            let closure = scope.root_addr(perry_ffi::alloc_closure(&COUNT_CALL, 1) as i64);
+            unsafe { perry_ffi::set_closure_capture_f64(closure.get() as *mut _, 0, 0.0) };
+            closure
+        };
+        let (listener, once) = (counter(), counter());
+        let handle = register_handle(client_session(0));
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+            session
+                .listeners
+                .insert("close".into(), vec![listener.get(), once.get()]);
+            session.close_callbacks.push(once.get());
+        }
+        crate::server::http2_server::pump::emit_close_listeners(handle);
+        crate::server::http2_server::pump::emit_close_listeners(handle);
+        let calls = |closure: i64| unsafe {
+            perry_ffi::closure_capture_f64(closure as *const perry_ffi::RawClosureHeader, 0)
+        };
+        assert_eq!((calls(listener.get()), calls(once.get())), (1.0, 1.0));
+        let session = get_handle::<Http2SessionHandle>(handle).expect("session");
+        assert_eq!(session.listeners["close"], vec![listener.get()]);
+        assert!(session.close_callbacks.is_empty() && session.destroyed);
     }
 
     /// A failed TLS handshake reaches the session's `'error'` as Node's

@@ -53,7 +53,8 @@ impl Target {
         match self {
             Self::Client(id) => {
                 // No transport is left to report the close (a connect still
-                // resolving): the session's `'close'` is owed now.
+                // resolving): the session's `'close'` is owed now. The id is
+                // not freed, because the lookup may still answer under it.
                 if tl::close(id).is_err() && super::conn::owns(id) {
                     let session_handle = super::conn::release(id);
                     crate::server::http2_server::push_h2_event(

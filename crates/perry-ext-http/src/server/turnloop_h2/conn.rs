@@ -1318,12 +1318,15 @@ pub(super) fn on_eof(id: impl Into<Target>) {
 /// phase: the session it carried is destroyed and emits `'close'` here.
 fn on_closed(id: i64) {
     let session = release(id);
+    // No completion can name this id again, so it goes back to the shared
+    // band rather than leaking one per connection.
+    perry_ffi::free_handle_id(id);
     crate::server::http2_server::emit_session_close(session);
 }
 
 /// Release a connection whose transport is gone, returning the session it
 /// carried. The ownership entry may be all that is left — an earlier failed
-/// write dropped the record — and it and the id still have to go.
+/// write dropped the record — and it still has to go.
 pub(super) fn release(id: i64) -> i64 {
     let session = owned_ids()
         .lock()
@@ -1345,9 +1348,6 @@ pub(super) fn release(id: i64) -> i64 {
             crate::server::server::turnloop_connection_closed(id);
         }
     }
-    // No completion can name this id again, so it goes back to the shared
-    // band rather than leaking one per connection.
-    perry_ffi::free_handle_id(id);
     session
 }
 

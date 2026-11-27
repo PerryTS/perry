@@ -181,9 +181,10 @@ pub(crate) fn emit_session_close(session_handle: i64) {
     emit_close_listeners(session_handle);
 }
 
-fn emit_close_listeners(session_handle: i64) {
+pub(super) fn emit_close_listeners(session_handle: i64) {
     let listeners = match get_handle_mut::<Http2SessionHandle>(session_handle) {
-        Some(session) => {
+        Some(session) if !session.close_emitted => {
+            session.close_emitted = true;
             session.mark_destroyed();
             let once = std::mem::take(&mut session.close_callbacks);
             let listeners = session.listeners.entry("close".into()).or_default();
@@ -191,7 +192,7 @@ fn emit_close_listeners(session_handle: i64) {
             listeners.retain(|listener| !once.contains(listener));
             snapshot
         }
-        None => return,
+        _ => return,
     };
     let scope = perry_ffi::TransientRootScope::enter();
     for listener in scope.root_addrs(&listeners) {
@@ -530,6 +531,7 @@ mod tests {
             local_window_size: 65_535,
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
+            close_emitted: false,
             pending_callbacks: Vec::new(),
             ping_sent: Default::default(),
             settings_sent: Default::default(),

@@ -47,6 +47,7 @@ pub(crate) fn register_turnloop_server_session(
         local_window_size: 65_535,
         listeners: HashMap::new(),
         close_callbacks: Vec::new(),
+        close_emitted: false,
         pending_callbacks: Vec::new(),
         ping_sent: Default::default(),
         settings_sent: Default::default(),

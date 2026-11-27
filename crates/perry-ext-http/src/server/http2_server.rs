@@ -209,6 +209,8 @@ pub struct Http2SessionHandle {
     pub local_window_size: i64,
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
+    /// `'close'` has been emitted; a session emits it once.
+    pub close_emitted: bool,
     pub pending_callbacks: Vec<i64>,
     /// When each PING still awaiting its acknowledgement was sent, oldest
     /// first; the ack measures the round trip from it.

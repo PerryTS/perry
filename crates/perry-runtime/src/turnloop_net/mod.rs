@@ -1072,7 +1072,7 @@ pub(crate) fn dispatch(completion: Completion) {
             net.borrow()
                 .entries
                 .get(&id)
-                .is_some_and(|entry| !entry.closing && entry.pipe_eof_timer == _handle)
+                .is_some_and(|entry| !entry.closing && entry.pipe_eof_timer == handle)
         });
         if live && matches!(result, OpResult::Timer) {
             sink::emit(subsystem, NetCompletion::eof(id));
@@ -1396,6 +1396,11 @@ fn attempt_next_address(id: i64) {
 fn connect_failed(id: i64, err: NodeError) -> bool {
     let retry = NET.with(|net| {
         let mut net = net.borrow_mut();
+        // A socket the caller already closed takes no next attempt: its
+        // queued close is owed this handle's `Closed`.
+        if net.entries.get(&id).is_some_and(|entry| entry.closing) {
+            return false;
+        }
         let Some(plan) = net.plans.get_mut(&id) else {
             return false;
         };
