@@ -1005,7 +1005,6 @@ impl Model {
 
     #[track_caller]
     fn cons_untagged(&mut self, n: NodeId, c: Cons) {
-        let defer = std::mem::take(&mut self.chain_defer);
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;
@@ -1149,16 +1148,32 @@ impl Model {
             return;
         }
         self.own_refuted_cons(n, c);
-        if defer {
-            // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c, ci));
-            return;
-        }
         self.replay_cons(n, c, ci);
     }
 
-    /// Apply the attached constraint `c` of `n` to what `n` holds now.
+    /// Apply the attached constraint `c` of `n` to what `n` holds now; a
+    /// replay asked for while one runs is queued (`Model::replay_q`) and run
+    /// by the outermost one. The solve's result is the least fixpoint of
+    /// the rules, whatever order they are applied in, and every rule is
+    /// applied to what its node holds once the queue is drained.
     pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
+        if self.replaying {
+            self.replay_q.push((n, c, ci));
+            return;
+        }
+        self.replaying = true;
+        self.replay_one(n, c, ci);
+        while let Some((n2, c2, i2)) = self.replay_q.pop() {
+            if self.aborted {
+                self.replay_q.clear();
+                break;
+            }
+            self.replay_one(n2, c2, i2);
+        }
+        self.replaying = false;
+    }
+
+    fn replay_one(&mut self, n: NodeId, c: Cons, ci: u32) {
         if matches!(c, Cons::Detached) || self.inert_node(n) {
             return;
         }

@@ -3378,16 +3378,16 @@ pub struct Model {
     /// The work counter at the last budget check (`solve`).
     pub budget_work_at: u64,
     pub aborted: bool,
-    /// SKINROOT27: the prototype-chain walk of `Cons::EnumChain` as a
-    /// worklist. `chain_active`: an EnumChain application is on the stack;
-    /// a deeper link is then attached to its prototype node at once (so the
-    /// solve sees it for later tokens) and its replay on what that node holds
-    /// is queued in `chain_q` (drained by the outermost application) instead
-    /// of recursing one Rust frame group per prototype level. `chain_defer`:
-    /// the next `cons_untagged` queues its replay (consumed at its entry).
-    pub chain_active: bool,
-    pub chain_defer: bool,
-    pub chain_q: Vec<(NodeId, Cons, u32)>,
+    /// The replays of attached rules as a worklist (`Model::replay_cons`).
+    /// `replaying`: a replay is on the stack; a rule attached meanwhile is
+    /// attached at once (so the solve sees it for later tokens) and its
+    /// replay on what its node holds now is queued in `replay_q`, drained
+    /// by the outermost replay, instead of recursing one Rust frame group
+    /// per rule a replay attaches (SKINROOT27: 55k prototype levels of
+    /// `Cons::EnumChain` overflowed r8; R12H: a native namespace call whose
+    /// stored answer attaches a `Cons::CallThis` that makes the next one).
+    pub replaying: bool,
+    pub replay_q: Vec<(NodeId, Cons, u32)>,
     /// Past the work bound (`Model::past_work_bound`): a call that would
     /// make a new calling context runs the function's shared instance
     /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
