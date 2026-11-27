@@ -45,9 +45,9 @@ pub(in crate::gc) enum BudgetedGcTrigger {
     /// identically — the split exists solely so the budgeted stepper can tell
     /// them apart at the moment it decides whether to START a cycle, because
     /// the quantity this one tests (`copying_from_space_in_use_bytes`) is one
-    /// a budgeted low-pause NON-MOVING cycle cannot lower. See
-    /// [`nursery_cap_active`] for why: a non-moving minor sweeps in place and
-    /// leaves from-space occupied.
+    /// a budgeted low-pause NON-MOVING cycle cannot lower: a non-moving minor
+    /// sweeps in place and leaves from-space occupied (see `nursery_cap_active`
+    /// in `gc/policy/nursery_cap.rs`, which gates [`young_scavenge_cap_due`]).
     YoungScavengeCap,
     MallocCount,
 }

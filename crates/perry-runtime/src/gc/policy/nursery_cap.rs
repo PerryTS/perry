@@ -218,8 +218,9 @@ impl Drop for ScavengeNurseryCapTestGuard {
 /// argument than #7056 removed it under. #7056 decoupled the cap because both
 /// gates were off in shipped builds and the cap was therefore dead — a fair
 /// reading of a world in which the alloc-point minor evacuated. It no longer
-/// does. When `PERRY_GC_MOVING_LOOP_POLLS` goes default-ON again the cap comes
-/// back with it, automatically and in the configuration it was measured in.
+/// does. Polls are on by default, so the cap is on with them, in the
+/// configuration it was measured in; `PERRY_GC_MOVING_LOOP_POLLS=0` turns both
+/// off.
 fn nursery_cap_active() -> bool {
     #[cfg(test)]
     if GC_NURSERY_CAP_TEST_SUPPRESSED.with(TriggerInput::get) {
@@ -288,9 +289,10 @@ pub(in crate::gc) fn effective_next_arena_trigger() -> usize {
 /// definition.
 pub(in crate::gc) const SCAVENGE_NURSERY_CAP_DEFAULT_MB: usize = 16;
 
-/// Nursery high-water cap used only when `PERRY_GC_SCAVENGE` is on (default
-/// [`SCAVENGE_NURSERY_CAP_DEFAULT_MB`]; override with
-/// `PERRY_GC_SCAVENGE_NURSERY_MB`). See `effective_next_arena_trigger`.
+/// Nursery high-water cap, applied while moving-loop polls are on
+/// (`PERRY_GC_MOVING_LOOP_POLLS`, gated by `nursery_cap_active`). Default
+/// [`SCAVENGE_NURSERY_CAP_DEFAULT_MB`]; `PERRY_GC_SCAVENGE_NURSERY_MB` overrides
+/// the size. See `effective_next_arena_trigger`.
 pub(in crate::gc) fn gc_scavenge_nursery_cap_bytes() -> usize {
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
@@ -309,10 +311,9 @@ thread_local! {
     /// Test-only suppression of the nursery cap, so `force_legacy_gc_pacing`
     /// can restore genuinely legacy pacing.
     ///
-    /// The cap used to hang off `gc_moving_loop_polls_enabled()`, so pinning
-    /// that flag off was enough to un-cap the trigger. It is unconditional now
-    /// (#7056), which silently broke that escape hatch: 22 `gc::tests` that
-    /// legitimately assert raw-cell trigger arithmetic started failing against
-    /// the capped value. The guard has to suppress the cap directly.
+    /// Pinning polls off also un-caps the trigger, but a test that keeps polls
+    /// on still needs the raw-cell trigger arithmetic: while #7056 made the cap
+    /// unconditional, 22 `gc::tests` failed against the capped value. The
+    /// guard suppresses the cap directly, whatever the poll mode.
     pub(super) static GC_NURSERY_CAP_TEST_SUPPRESSED: TriggerInput<bool> = const { TriggerInput::new(false) };
 }

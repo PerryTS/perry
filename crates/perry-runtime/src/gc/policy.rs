@@ -697,9 +697,10 @@ pub(super) fn flush_deferred_gc_request() {
 /// Check if automatic GC pressure should pay a bounded assist step.
 ///
 /// Arena and malloc thresholds are heap goals. Crossing them starts or resumes
-/// a budgeted cycle. Allocation-side assists spend at most
-/// `GC_MUTATOR_ASSIST_WORK_UNITS` and only enter phases that already consume
-/// that budget; unsliced phases stay active for host-driven budgeted steps.
+/// a budgeted cycle. Allocation-side assists start from a base allowance of
+/// `GC_MUTATOR_ASSIST_WORK_UNITS`, scaled up by the current debt
+/// ([`gc_mutator_assist_scaled_work_units`]), and only enter phases that
+/// consume a work budget; unsliced phases stay active for host-driven budgeted steps.
 ///
 /// #10698: this runs on every `gc_malloc`, and nearly every call finds
 /// nothing due. When the last full evaluation found nothing due and none of
@@ -1072,6 +1073,7 @@ pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
         .saturating_add(arena_units)
         .saturating_add(malloc_units)
 }
+
 /// Threshold-based GC trigger (safe for use from the event loop).
 /// Only runs collection if arena or malloc thresholds are exceeded.
 #[no_mangle]

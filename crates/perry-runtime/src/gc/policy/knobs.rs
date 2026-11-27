@@ -12,8 +12,8 @@ use super::*;
 /// is a kill switch that reverts to the non-moving path (for bisecting a
 /// regression while we harden). Making the moving minor primary INSIDE loops
 /// (back-edge polls + alloc-point deferral) is the separate opt-in
-/// `PERRY_GC_MOVING_LOOP_POLLS` — off by default because the poll defeats loop
-/// vectorization until it is emitted only for allocating loops.
+/// `PERRY_GC_MOVING_LOOP_POLLS`, on unless it is `0`, `off` or `false`
+/// ([`moving_loop_polls_enabled_from_env`]).
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
@@ -82,7 +82,7 @@ pub(crate) fn gc_incremental_enabled() -> bool {
 pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
     // Test-only mode override (see `force_legacy_gc_pacing`). Consulted BEFORE
     // the process-wide OnceLock so a single test can pin a specific pacing mode
-    // for its duration even though the process default is off. Compiled out
+    // for its duration whatever the process default is. Compiled out
     // entirely in release builds.
     #[cfg(test)]
     if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(TriggerInput::get) {
