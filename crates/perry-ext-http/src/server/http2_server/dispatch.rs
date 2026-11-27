@@ -104,6 +104,15 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 }
                 if callback != 0 {
                     session.close_callbacks.push(callback);
+                    if server {
+                        // A `'close'` listener too, in registration order;
+                        // `close_callbacks` marks it one-shot.
+                        session
+                            .listeners
+                            .entry("close".into())
+                            .or_default()
+                            .push(callback);
+                    }
                 }
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the

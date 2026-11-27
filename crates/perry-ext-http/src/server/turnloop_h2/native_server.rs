@@ -216,10 +216,12 @@ unsafe extern "C" fn socket_closed(closure: *const RawClosureHeader, _: JsThis) 
         Some(handle) => {
             handle.mark_destroyed();
             // `close(cb)` callbacks are Node's `once('close', cb)`: they run
-            // after the listeners and are not retained.
-            let mut listeners = handle.listeners.get("close").cloned().unwrap_or_default();
-            listeners.append(&mut handle.close_callbacks);
-            listeners
+            // in registration order and are removed before they run.
+            let once = std::mem::take(&mut handle.close_callbacks);
+            let listeners = handle.listeners.entry("close".into()).or_default();
+            let snapshot = listeners.clone();
+            listeners.retain(|listener| !once.contains(listener));
+            snapshot
         }
         None => return undefined(),
     };
