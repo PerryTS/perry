@@ -278,9 +278,22 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     target.as_ref(),
                 ));
                 // SAFETY: as above.
-                if unsafe { event.syscall() } == Some("getaddrinfo") {
-                    super::payload_lookup::failed(owner.get(), error.get());
-                }
+                // SAFETY: as above.
+                let error = match unsafe { event.syscall() } {
+                    Some("getaddrinfo") => {
+                        super::payload_lookup::failed(owner.get(), error.get());
+                        error
+                    }
+                    Some("connect") => match super::payload_lookup::connect_error(
+                        owner.get(),
+                        error.get(),
+                        target.as_ref(),
+                    ) {
+                        Some(error) => scope.root_nanbox(error),
+                        None => return,
+                    },
+                    _ => error,
+                };
                 socket::destroy(owner.get(), error.get());
             }
         }
@@ -289,6 +302,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
         }
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns.
         tl::NET_LOOKUP => super::payload_lookup::resolved(owner.get(), unsafe { event.bytes() }),
+        tl::NET_ATTEMPT => super::payload_lookup::attempted(owner.get(), event),
         _ => {}
     }
 }

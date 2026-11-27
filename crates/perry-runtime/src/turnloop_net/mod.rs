@@ -89,8 +89,9 @@ pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 // own copy; perry-stdlib has a Cargo edge to this crate and must not need a
 // second declaration to keep in step with.
 pub use sink::{
-    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
-    NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
+    NET_ACCEPT, NET_ATTEMPT, NET_ATTEMPT_FAILED, NET_ATTEMPT_START, NET_ATTEMPT_TIMEOUT,
+    NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS, NET_FLAG_LINK,
+    NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
 };
 
 /// Install this service in the common pump before a binding submits work.
@@ -110,6 +111,10 @@ const OP_CLOSE: u64 = 6;
 const OP_RESOLVE: u64 = 7;
 /// P5: a subsystem-owned one-shot deadline (server timeouts).
 const OP_TIMER: u64 = 8;
+/// A link connect attempt's `autoSelectFamilyAttemptTimeout` timer.
+const OP_ATTEMPT: u64 = 11;
+/// The close of a racing connect's abandoned attempt handle.
+const OP_ABANDON: u64 = 12;
 #[cfg(windows)]
 const OP_PIPE_DRAIN: u64 = 9;
 #[cfg(windows)]
@@ -322,11 +327,12 @@ impl Entry {
 /// and has it on by default since v20; the tokio path got it free from
 /// `TcpStream::connect(&str)`, which walks the whole address list.
 ///
-/// This is the sequential form of that walk: one attempt at a time, each
-/// failure closing its handle before the next is created, and the *last*
-/// error reported if every address fails. Node additionally races the
-/// families on a 250 ms head start; the outcome only differs in how fast a
-/// dead family is abandoned, never in which connection is established.
+/// One attempt runs at a time, each failure closing its handle before the
+/// next is created. A link plan with an `attempt_timeout` is Node's
+/// `internalConnectMultiple`: an attempt still pending when it expires is
+/// abandoned for the next address, and every attempt is reported to the
+/// binding (`NET_ATTEMPT`).
+#[derive(Default)]
 struct ConnectPlan {
     subsystem: u8,
     nodelay: bool,
@@ -342,6 +348,14 @@ struct ConnectPlan {
     /// the same socket and must not start an attempt. Always `None` on the id
     /// route, whose plan map already forgets a superseded plan.
     op: Option<OpId>,
+    /// How long an attempt may stay pending while addresses remain.
+    attempt_timeout: Option<std::time::Duration>,
+    /// The pending attempt's address.
+    attempt: Option<SocketAddr>,
+    /// The pending attempt's `attempt_timeout` timer.
+    timer: Option<Handle>,
+    /// Names a link plan across sink calls that may replace it.
+    incarnation: u64,
 }
 
 /// A subsystem-owned one-shot deadline (P5).
@@ -613,9 +627,7 @@ pub fn tcp_connect_host(
                     subsystem,
                     nodelay,
                     remaining: std::collections::VecDeque::new(),
-                    retrying: false,
-                    last_error: None,
-                    op: None,
+                    ..ConnectPlan::default()
                 },
             )
         });
