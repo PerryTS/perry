@@ -42,7 +42,7 @@ fn chain_from_hold_reaches_the_seed() {
     );
     assert!(c[2].label == "ret" && c[2].func.ends_with(":make"), "{v:?}");
     assert!(
-        c[2].via.starts_with("copy<-n") && c[2].via.contains("edge@gen/walk.rs"),
+        c[2].via.starts_with("copy<-n") && c[2].via.contains("edge@gen/walk/stmt.rs"),
         "{:?}",
         c[2]
     );
