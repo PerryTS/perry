@@ -7,7 +7,7 @@ use super::payload_socket::{self as socket, error};
 use super::payload_transport::{self as p, undefined};
 use perry_ffi::turnloop_net as tl;
 use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope, TransientRootedNanbox};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 extern "C" {
     fn js_runtime_describe_received(value: f64) -> f64;
@@ -58,12 +58,13 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
         };
     let dns_options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     p::own_set(dns_options.get(), "family", family.get());
-    // shortcut: Node adds dns.ADDRCONFIG to zero hints off Windows; add it once this crate can read the platform constant.
     // SAFETY: Truthiness reads a rooted JS value on this agent.
     let hints = if unsafe { js_is_truthy(hints.get()) } != 0 {
         hints.get()
-    } else {
+    } else if cfg!(windows) || family_number(family.get()).is_some() {
         0.0
+    } else {
+        ADDRCONFIG
     };
     p::own_set(dns_options.get(), "hints", hints);
     if all {
@@ -134,8 +135,8 @@ unsafe extern "C" fn answer(
             attempt.fail(err.get());
         } else if let Some(problem) = invalid(address.get(), family.get(), &host_text, port) {
             attempt.fail(problem);
-        } else if let Some(ip) = ip(address.get()) {
-            connect(attempt.owner.get(), &[ip], port);
+        } else if let Some(endpoint) = endpoint(address.get(), port) {
+            connect(attempt.owner.get(), &[endpoint]);
         }
     }
     undefined()
@@ -222,7 +223,7 @@ fn answer_all(
         let family = scope.root_nanbox(field(entry.get(), "family"));
         (address, family)
     };
-    let mut groups: [Vec<IpAddr>; 2] = [Vec::new(), Vec::new()];
+    let mut groups: [Vec<SocketAddr>; 2] = [Vec::new(), Vec::new()];
     let mut first_is_v6 = None;
     let mut index = 0;
     while index < length() {
@@ -235,11 +236,13 @@ fn answer_all(
         if !attempt.current() {
             return;
         }
-        if let (Some(ip), Some(family)) = (ip(address.get()), family_number(family.get())) {
+        if let (Some(endpoint), Some(family)) =
+            (endpoint(address.get(), port), family_number(family.get()))
+        {
             let is_v6 = family == 6;
             let group = &mut groups[usize::from(is_v6 != *first_is_v6.get_or_insert(is_v6))];
-            if !group.contains(&ip) {
-                group.push(ip);
+            if !group.contains(&endpoint) {
+                group.push(endpoint);
             }
         }
         index += 1;
@@ -265,12 +268,12 @@ fn answer_all(
         order.extend(preferred.get(index));
         order.extend(other.get(index));
     }
-    connect(attempt.owner.get(), &order, port);
+    connect(attempt.owner.get(), &order);
 }
 
 /// Node's rejection of a single answer, checked address first.
 fn invalid(address: f64, family: f64, host: &str, port: u16) -> Option<f64> {
-    if ip(address).is_none() {
+    if endpoint(address, port).is_none() {
         return Some(error(
             "ERR_INVALID_IP_ADDRESS",
             &format!("Invalid IP address: {}", display(address)),
@@ -284,7 +287,7 @@ fn invalid(address: f64, family: f64, host: &str, port: u16) -> Option<f64> {
     })
 }
 
-fn connect(owner: f64, ips: &[IpAddr], port: u16) {
+fn connect(owner: f64, endpoints: &[SocketAddr]) {
     let Ok(link) = socket::transport_link(owner) else {
         return;
     };
@@ -292,7 +295,7 @@ fn connect(owner: f64, ips: &[IpAddr], port: u16) {
     // SAFETY: The retained link belongs to this agent; the core access ends before any JS.
     let result = unsafe {
         p::socket_core(link)
-            .map(|core| tl::link_tcp_connect_addrs(&mut *core, link, ips, port, true))
+            .map(|core| tl::link_tcp_connect_addrs(&mut *core, link, endpoints, true))
     };
     if let Ok(Err(failure)) = result {
         socket::destroy(owner, error(&failure.code, &failure.message()));
@@ -349,14 +352,43 @@ fn string(value: f64) -> Option<String> {
         .flatten()
 }
 
-fn ip(address: f64) -> Option<IpAddr> {
+/// An IP answer as a connect endpoint; an IPv6 zone becomes its scope id.
+fn endpoint(address: f64, port: u16) -> Option<SocketAddr> {
     let text = string(address)?;
     if crate::ip::classify_ip(&text) == 0 {
         return None;
     }
-    // shortcut: a zone index is dropped, so a scoped link-local address connects unscoped; keep it once the transport takes a scope id.
-    text.split('%').next()?.parse().ok()
+    let (ip, zone) = text.split_once('%').unwrap_or((&text, ""));
+    match ip.parse().ok()? {
+        IpAddr::V6(v6) if !zone.is_empty() => {
+            Some(SocketAddrV6::new(v6, port, 0, scope_id(zone)).into())
+        }
+        ip => Some(SocketAddr::new(ip, port)),
+    }
 }
+
+/// An unknown interface name is scope 0, as in libuv's `uv_ip6_addr`.
+fn scope_id(zone: &str) -> u32 {
+    if let Ok(index) = zone.parse() {
+        return index;
+    }
+    #[cfg(unix)]
+    {
+        let Ok(name) = std::ffi::CString::new(zone) else {
+            return 0;
+        };
+        // SAFETY: `name` is a NUL-terminated string that outlives the call.
+        unsafe { libc::if_nametoindex(name.as_ptr()) }
+    }
+    #[cfg(not(unix))]
+    0
+}
+
+/// `dns.ADDRCONFIG`, which Node adds to zero hints off Windows.
+#[cfg(unix)]
+const ADDRCONFIG: f64 = libc::AI_ADDRCONFIG as f64;
+#[cfg(not(unix))]
+const ADDRCONFIG: f64 = 0x20 as f64;
 
 fn family_number(family: f64) -> Option<u8> {
     let value = JsValue::from_bits(family.to_bits());
@@ -377,4 +409,19 @@ fn display(value: f64) -> String {
 
 fn bool_value(value: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(value).bits())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_zone_is_an_index_or_an_interface_name() {
+        assert_eq!(super::scope_id("7"), 7);
+        assert_eq!(super::scope_id("no-such-interface0"), 0);
+        #[cfg(unix)]
+        {
+            let name = std::ffi::CString::new("lo0").unwrap();
+            let lo0 = unsafe { libc::if_nametoindex(name.as_ptr()) };
+            assert_eq!(super::scope_id("lo0"), lo0);
+        }
+    }
 }
