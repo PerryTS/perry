@@ -600,7 +600,11 @@ fn n4_a_destroyed_socket_cell_cannot_be_reused_before_its_owed_closed() {
             "N4 an owed Closed must prevent cell finalization"
         );
         let cell = old_cell as *const perry_runtime::native_handle::NativeHandleHeader;
-        assert_eq!(unsafe { (*cell).refs }, 1);
+        assert_eq!(
+            unsafe { (*cell).refs },
+            2,
+            "N4 the owed Closed and its close-phase entry"
+        );
         assert!(unsafe { (*cell).resource_ptr.is_null() });
         for _ in 0..512 {
             let scope = TransientRootScope::enter();

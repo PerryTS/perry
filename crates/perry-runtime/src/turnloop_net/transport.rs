@@ -227,7 +227,7 @@ const _: () = assert!(
 
 /// The driver's generational handle as four u32s (each exact as a JS
 /// number). No identity is minted.
-fn handle_parts(handle: Handle) -> [u32; 4] {
+pub(super) fn handle_parts(handle: Handle) -> [u32; 4] {
     let owner = handle.owner();
     let key = handle.key();
     [
@@ -948,8 +948,9 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
                 return Ok(false);
             }
             // Still resolving: owed like a handle's close.
-            hold(link);
-            closing::queue(link, c.route);
+            if closing::queue(link, c.route, None, true) {
+                hold(link);
+            }
             return Ok(true);
         };
         #[cfg(windows)]
@@ -963,6 +964,9 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             // A failed connect attempt's close is already in flight; its
             // `Closed` no longer matches the core and is delivered as this
             // socket's close.
+            if closing::queue(link, c.route, Some(entry.handle), true) {
+                hold(link);
+            }
             return Ok(true);
         }
         census::note_submit(OP_CLOSE);
@@ -973,7 +977,12 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             }
         }
         match driver.close(entry.handle, name.token(OP_CLOSE)) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                if closing::queue(link, c.route, Some(entry.handle), true) {
+                    hold(link);
+                }
+                Ok(true)
+            }
             Err(e) => {
                 // The handle is still live: keep it (and its ref) so no
                 // completion can outlive the cell.
@@ -1587,6 +1596,18 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
     }
 }
 
+/// An empty read result of `handle` on `link`, as a turn reports one.
+#[cfg(test)]
+pub(crate) fn read_result_for_test(link: OwnerLink, route: u8, handle: Handle) -> Completion {
+    Completion {
+        token: link_token(route, OP_READ, link.0),
+        op: None,
+        handle: Some(handle),
+        terminal: false,
+        result: OpResult::Read { n: 0, lease: None },
+    }
+}
+
 /// Inspect a resolve incarnation in acceptance tests.
 ///
 /// # Safety
@@ -1726,21 +1747,10 @@ unsafe fn dispatch_stream(
             if retry {
                 // A failed attempt's handle, not the socket the caller sees.
                 attempt_next_address(link);
-            } else {
-                let mut event = NetCompletion::closed(id).linked();
-                // Callback context belongs to the closing incarnation even if
-                // the owner already has a new payload. Lend the handle's
-                // parts for the sink call only.
-                let parts = handle.map(handle_parts);
-                if let Some(parts) = parts.as_ref() {
-                    event.flags |= sink::NET_FLAG_HANDLE_PARTS;
-                    event.data = parts.as_ptr().cast();
-                    event.len = std::mem::size_of_val(parts);
-                }
-                if stale && !sabotage("stale_closed_flag") {
-                    event.flags |= sink::NET_FLAG_STALE;
-                }
-                sink::emit(route, event);
+            } else if !handle.is_some_and(|h| closing::mark_closed(link, h, stale)) {
+                // A `Closed` no close queued still belongs to the phase.
+                hold(link);
+                closing::queue_closed(link, route, handle, stale);
             }
             for _ in 0..defer_eof::purge(defer_eof::Key::Link(link.0), handle) {
                 release(link);
@@ -1921,15 +1931,64 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
     release(link);
 }
 
-/// Deliver the `Closed` that [`close`] queued for a socket still resolving.
+/// The payload cell a link completion names.
+pub(crate) fn link_cell(completion: &Completion) -> Option<usize> {
+    owns(completion.token).then(|| link_parts(completion.token).2)
+}
+
+/// Whether `completion` is the `Closed` of a handle [`close`] queued.
+pub(super) fn is_queued_close(completion: &Completion) -> bool {
+    let (_, op, cell) = link_parts(completion.token);
+    owns(completion.token)
+        && op == OP_CLOSE
+        && matches!(completion.result, OpResult::Closed)
+        && completion
+            .handle
+            .is_some_and(|h| closing::awaits(OwnerLink(cell), h))
+}
+
+/// Whether `earlier`, staged ahead of the queued `closed` of its cell, is
+/// dispatched with it: a terminal acknowledgement, or a result of the closed
+/// handle that no longer reaches the binding.
+pub(super) fn retires_with(earlier: &Completion, closed: &Completion) -> bool {
+    if matches!(
+        earlier.result,
+        OpResult::Closed | OpResult::Cancelled | OpResult::Stopped
+    ) {
+        return true;
+    }
+    let link = OwnerLink(link_parts(earlier.token).2);
+    earlier.handle.is_some()
+        && earlier.handle == closed.handle
+        // SAFETY: the queued close's ref pins the cell.
+        && unsafe { current(link, earlier.handle) }.is_none()
+}
+
+/// Deliver a `Closed` the close-callbacks phase owed, building its event.
+/// Callback context belongs to the closing incarnation even if the owner
+/// already has a new payload, so the handle's parts go with it; a resolving
+/// connect's carries none. When the binding released the payload with the
+/// close, any payload on the cell now is a newer incarnation.
 ///
 /// # Safety
 /// The queued ref pins `link`'s cell; this call releases it.
-pub(super) unsafe fn deliver_queued_closed(link: OwnerLink, route: u8) {
+pub(super) unsafe fn deliver_closed(
+    link: OwnerLink,
+    route: u8,
+    handle: Option<Handle>,
+    released: bool,
+    stale: bool,
+) {
     if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
         let mut event = NetCompletion::closed(link.0 as i64).linked();
-        if core_of(link).is_some() {
-            // The owner connected again: a new incarnation owns the cell.
+        let parts = handle.map(handle_parts);
+        if let Some(parts) = parts.as_ref() {
+            event.flags |= sink::NET_FLAG_HANDLE_PARTS;
+            event.data = parts.as_ptr().cast();
+            event.len = std::mem::size_of_val(parts);
+        }
+        let stale = stale || released && core_of(link).is_some();
+        if stale && !sabotage("stale_closed_flag") {
             event.flags |= sink::NET_FLAG_STALE;
         }
         sink::emit(route, event);
@@ -2058,7 +2117,11 @@ unsafe fn dispatch_pipe_drain(
 /// stays in the core, closing, and its `Closed` is delivered as the close.
 #[cfg(windows)]
 unsafe fn close_stream(link: OwnerLink, name: Name) {
-    let Some(entry) = core_of(link).and_then(|c| c.entry.as_mut()) else {
+    let Some(c) = core_of(link) else {
+        return;
+    };
+    let route = c.route;
+    let Some(entry) = c.entry.as_mut() else {
         return;
     };
     if entry.closing {
@@ -2071,7 +2134,12 @@ unsafe fn close_stream(link: OwnerLink, name: Name) {
     }
     census::note_submit(OP_CLOSE);
     let handle = entry.handle;
-    let _ = with_driver(|driver| driver.close(handle, name.token(OP_CLOSE)));
+    if with_driver(|driver| driver.close(handle, name.token(OP_CLOSE)).is_ok()) == Some(true) {
+        // The binding keeps this payload until the `Closed` is delivered.
+        if closing::queue(link, route, Some(handle), false) {
+            hold(link);
+        }
+    }
 }
 
 // ── The core as an ABI value ────────────────────────────────────────────────
