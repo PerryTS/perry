@@ -203,31 +203,47 @@ fn construct_event(
     type_value: f64,
     options: f64,
     class_id: u32,
-    constructor_name: &[u8],
     detail: Option<f64>,
 ) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let type_value = scope.root_nanbox_f64(type_value);
     let options = scope.root_nanbox_f64(options);
     let detail = match detail {
         Some(value) => Some(scope.root_nanbox_f64(value)),
         None => None,
     };
     note_constructed();
-    let event = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
-    let (_, result) = event.across_mut(|| {
-        event.with_mut_ptr(|ptr| state::link(ptr, std::str::from_utf8(constructor_name).unwrap()));
-        event.with_mut_ptr(|ptr| {
-            init_event_fields(
-                ptr,
-                type_value.get_nanbox_f64(),
-                options.get_nanbox_f64(),
-                constructor_name,
-                detail.map(|v| v.get_nanbox_f64()),
+    // The constructor's reads, in node's order, before the birth: the type
+    // string, then the three flags.
+    let type_string = scope.root_string_ptr(string_from_value(type_value));
+    let flag = |name: &[u8]| bool_value(unsafe { option_bool(options.get_nanbox_f64(), name) });
+    let bubbles = flag(b"bubbles").to_bits();
+    let cancelable = flag(b"cancelable").to_bits();
+    let composed = flag(b"composed").to_bits();
+    let birth = if class_id == CLASS_ID_CUSTOM_EVENT {
+        &state::CUSTOM_EVENT_BIRTH
+    } else {
+        &state::EVENT_BIRTH
+    };
+    // Born on the family's declared layout; the two pointer slots are stored
+    // through the barriered slot store once it carries its shape.
+    let event = state::born_with(
+        birth,
+        &[crate::value::TAG_UNDEFINED, bubbles, cancelable, composed],
+    );
+    unsafe {
+        let type_bits = type_string
+            .with_const_ptr::<StringHeader, _>(|p| crate::value::js_nanbox_string(p as i64))
+            .to_bits();
+        crate::object::store_object_field_slot(event, state::EVENT_TYPE_SLOT, type_bits);
+        if let Some(detail) = detail {
+            crate::object::store_object_field_slot(
+                event,
+                state::EVENT_DETAIL_SLOT,
+                detail.get_nanbox_u64(),
             );
-        });
-    });
-    result
+        }
+    }
+    event
 }
 
 /// Shared Event field/method initialization, applied either to a freshly
@@ -411,7 +427,7 @@ pub extern "C" fn js_event_new(type_value: f64, options: f64, argc: u32) -> *mut
     if argc == 0 {
         throw_missing_arg("type");
     }
-    construct_event(type_value, options, CLASS_ID_EVENT, b"Event", None)
+    construct_event(type_value, options, CLASS_ID_EVENT, None)
 }
 
 /// `new CustomEvent(type, options?)`.
@@ -432,7 +448,6 @@ pub extern "C" fn js_custom_event_new(
         type_value.get_nanbox_f64(),
         options.get_nanbox_f64(),
         CLASS_ID_CUSTOM_EVENT,
-        b"CustomEvent",
         Some(detail),
     )
 }

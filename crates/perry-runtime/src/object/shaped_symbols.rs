@@ -601,48 +601,83 @@ pub(crate) unsafe fn store_own_data(
     true
 }
 
-/// A fresh instance of `class_id` born in the final shape its prototype
-/// `proto` recorded for it (`ObjectMeta::instance_birth`, written by
-/// [`record_birth`]), its slots `0..values.len()` holding `values`. `None`,
-/// with nothing reachable made, when no record names `class_id` or the
-/// record no longer validates as that birth.
+/// Mint the declared instance layout of a runtime family whose prototype
+/// `proto` is being created: ordinary objects inheriting from `proto` whose
+/// own keys are `keys` (symbol address, attribute entry) in that order, key
+/// `i` in slot `i`, every lane `Any`. Built from the key list itself (one
+/// canonical edge per key), with no object: the family declares it, and the
+/// record is held for the agent's life (an external carrier), as the realm
+/// holds its word.
 ///
 /// # Safety
-/// `proto` is the live intrinsic prototype (rooted by its realm cell);
-/// `values` are pointer-free words (no root or barrier is needed for them).
-pub(crate) unsafe fn born_on_record(
-    class_id: u32,
+/// `proto` is the live prototype being created; every symbol in `keys` is
+/// live and rooted by the caller.
+pub(crate) unsafe fn declare_instance_layout(
     proto: *mut ObjectHeader,
+    keys: &[(usize, u8)],
+) -> crate::codegen_abi::LayoutWord {
+    use super::canonical_keys::{Appended, CanonicalKeys, SharedLayout};
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proto_bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
+    // The identity every link of an instance to `proto` stamps: its serial.
+    let Some(proto_id) = super::proto_validity::mark_object_as_prototype(proto as usize) else {
+        eprintln!("Perry internal error: a runtime family prototype has no identity");
+        std::process::abort();
+    };
+    if shapes::identity_prototype_word(proto_id) != proto_bits {
+        shapes::write_identity_word(proto_id, proto_bits);
+    }
+    let proof = SharedLayout::shape_cache_entry();
+    let mut list = CanonicalKeys::EMPTY;
+    for &(symbol, entry) in keys {
+        list = super::canonical_keys::extend_slot(
+            &proof,
+            list,
+            Appended::Slot(JSValue::from_bits(
+                crate::value::POINTER_TAG | symbol as u64,
+            )),
+            entry,
+        );
+    }
+    let count = keys.len() as u32;
+    let summary = key_attrs::keys_summary(list.as_ptr(), count);
+    let word = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
+        list.view(),
+        count,
+        count,
+        0,
+        shapes::ShapeObjectKind::Ordinary,
+        0,
+        proto_id,
+        summary,
+        field_rep::REP_ANY,
+        &[],
+        None,
+        0,
+    ));
+    shapes::note_external_shape_carrier(shapes::shape_descriptor_for_word(word));
+    word
+}
+
+/// A fresh instance of class `class_id` on the declared layout `word`
+/// ([`declare_instance_layout`]), its slots `0..values.len()` holding
+/// `values`: one allocation, the stamp, the slot stores. Can collect (the
+/// allocation), before anything is stored.
+///
+/// # Safety
+/// `word` is a layout declared in this agent with `values.len()` keys;
+/// `values` are pointer-free words (no root or barrier is needed for them).
+pub(crate) unsafe fn born_on_layout(
+    class_id: u32,
+    word: crate::codegen_abi::LayoutWord,
     values: &[u64],
-) -> Option<*mut ObjectHeader> {
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto));
-    if meta.is_null() {
-        return None;
-    }
-    let word = (*meta).instance_birth;
-    if word as u32 != class_id {
-        return None;
-    }
-    let proto_id = (*meta).proto_serial;
-    let id = crate::codegen_abi::LayoutWord((word >> 32) as u32);
-    let count = values.len() as u32;
-    let rep = shapes::shape_rep_for_word(id);
-    if !(0..count).all(|slot| field_rep::slot_rep(rep, slot) == field_rep::REP_ANY) {
-        return None;
-    }
-    let obj = super::object_alloc_unpublished(class_id, count);
-    if obj.is_null() {
-        return None;
-    }
-    let kind = shapes::store_kind::receiver_ordinary_kind(obj);
-    if !shapes::shape_is_attributed_filled_birth(id, proto_id, count, kind) {
-        return None;
-    }
+) -> *mut ObjectHeader {
+    let obj = super::object_alloc_unpublished(class_id, values.len() as u32);
     if crate::arena::pointer_in_nursery(obj as usize) {
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-        (*obj).parent_class_id = id.0;
+        (*obj).parent_class_id = word.0;
     } else {
-        shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+        shapes::stamp_object_shape_id_with_carrier_note(obj, word);
     }
     let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)) as *mut u64;
     for (i, &bits) in values.iter().enumerate() {
@@ -654,33 +689,7 @@ pub(crate) unsafe fn born_on_record(
             bits,
         );
     }
-    Some(obj)
-}
-
-/// Record `obj`'s shape on its prototype `proto` as the final birth shape of
-/// `class_id` ([`born_on_record`]). `obj` was just built by the family's
-/// ordinary sequence, keys in birth order; nothing is recorded when its
-/// header carries per-object descriptor state a replay would not reproduce,
-/// or when `proto` has no meta record yet (no allocation here).
-///
-/// # Safety
-/// `obj` and `proto` are live; nothing allocates in between.
-pub(crate) unsafe fn record_birth(class_id: u32, proto: *mut ObjectHeader, obj: *mut ObjectHeader) {
-    let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-        || super::overflow::has_overflow(obj)
-    {
-        return;
-    }
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto));
-    if meta.is_null() {
-        return;
-    }
-    let shape = shapes::object_shape_stamp(obj);
-    // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
-    // reference.
-    (*meta).instance_birth = u64::from(class_id) | u64::from(shape.0) << 32;
-    shapes::note_old_generation_carrier(shapes::shape_record_for_word(shape));
+    obj
 }
 
 unsafe fn store(obj: *mut ObjectHeader, index: u32, bits: u64) {

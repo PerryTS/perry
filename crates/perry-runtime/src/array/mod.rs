@@ -298,11 +298,12 @@ pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
     intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
-    note_realm_array_values, note_realm_intrinsic, note_realm_namespace,
-    note_realm_restricted_callee_pair, realm_namespace_value,
-    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
-    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
-    realm_array_values_addr, realm_restricted_callee_pair_addr, RealmIntrinsics,
+    note_realm_array_values, note_realm_instance_layout, note_realm_intrinsic,
+    note_realm_namespace, note_realm_restricted_callee_pair, object_prototype_addr,
+    object_prototype_addr_if_resolved, object_prototype_addr_matches, object_prototype_cell,
+    prime_prototype_addr_cache, primitive_wrapper_prototype_addr, realm_array_values_addr,
+    realm_instance_layout, realm_namespace_value, realm_restricted_callee_pair_addr,
+    RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
