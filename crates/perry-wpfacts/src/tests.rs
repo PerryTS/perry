@@ -1583,6 +1583,7 @@ mod param_key_shape;
 mod pk;
 mod primitive_this;
 mod promise_capability_executor;
+mod psettle;
 mod proto_own_call;
 mod realm_read_static;
 mod regexp_results;

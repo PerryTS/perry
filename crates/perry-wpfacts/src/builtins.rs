@@ -4611,16 +4611,27 @@ fn ns_method_inner(
                 ("all", true, Some(a)) if promise_all_index() => m.lit_elems_at(call, a),
                 _ => None,
             };
-            let settled = m.node_l("settled");
+            // 27.2.4.1-5: the settle functions of a run are born with its
+            // result promise: internal fields of the promise.
+            let settled = {
+                let a = effects::internal_atom(m, "PromiseAllSettled");
+                m.field(p, a)
+            };
             // R-JOBTHROW: an item's rejection goes where the combinator
             // sends it (27.2.4.1.2 / .2.2 / .3.1 / .5.1): `all` and `race`
             // reject their promise with it, `allSettled` records it, `any`
             // collects it into the AggregateError's errors; never the
             // shared thrown cell.
-            let item_rej = m.node_l("item-reason");
+            let item_rej = {
+                let a = effects::internal_atom(m, "PromiseAllItemReason");
+                m.field(p, a)
+            };
             if let Some(els) = lit {
                 for (i, e) in els.into_iter().enumerate() {
-                    let s = m.node_l("settled");
+                    let s = {
+                        let a = effects::internal_atom(m, &format!("PromiseAllSettled{i}"));
+                        m.field(p, a)
+                    };
                     adopt_r(m, call, e, s, item_rej);
                     m.edge(s, settled);
                     let slot = m.index_slot(arr, i as u32);
