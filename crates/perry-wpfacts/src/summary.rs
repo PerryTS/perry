@@ -633,6 +633,7 @@ impl Model {
     /// A call the solver makes for `by` (a builtin calling a callback, a
     /// bound target, a step of a protocol): what it allocates is born at
     /// `by`'s program site.
+    #[track_caller]
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         self.solver_call_raw(by, cs)
     }
@@ -832,11 +833,35 @@ impl Model {
     }
 
     /// `solver_call` without the chain key (`solver_call_keyed` keys it).
-    pub(crate) fn solver_call_raw(&mut self, by: CallId, cs: CallSite) -> CallId {
+    ///
+    /// FRESHSITE R1: a solver-made call is never its own birth site. A
+    /// maker that passes the call's own id (`site: m.calls.len()`) gets the
+    /// made site of (the program call at the root of its maker chain,
+    /// `made_site_root`; the native model's code position, `track_caller`):
+    /// the first call made under
+    /// that key is its site, and every later one shares it, so what the
+    /// natives allocate there (`site_template`, `site_obj_create`, the
+    /// array lengths keyed by site) is one template per (root, code
+    /// position, kind). ECMA-262 makes a fresh object on every evaluation of
+    /// a native step; the abstraction maps the objects one code position
+    /// allocates under one root to one abstract object, as a program site's
+    /// births are one token per (site, birth context). Sound: it only
+    /// merges value sets of objects allocated at the same position.
+    /// TERMINATES: roots x code positions is finite (a new made call per
+    /// run no longer means a new template, a new token, a new run). A call
+    /// made before the summaries counts as a program call and keeps its own
+    /// id.
+    #[track_caller]
+    pub(crate) fn solver_call_raw(&mut self, by: CallId, mut cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
+        let root = self.made_root.get(&by).copied().unwrap_or(by);
+        if self.sum.ready && cs.site == id {
+            let loc = std::panic::Location::caller();
+            let prog = self.made_site_root(root);
+            cs.site = *self.made_sites.entry((prog, loc)).or_insert(id);
+        }
         self.calls.push(cs);
         self.solver_made += 1;
-        let root = self.made_root.get(&by).copied().unwrap_or(by);
         self.made_root.insert(id, root);
         if let Some(&r) = self.chain_root.get(&by) {
             self.chain_root.insert(id, r);
@@ -858,6 +883,29 @@ impl Model {
         id
     }
 
+    /// The program call a maker chain rooted at `r` (`made_root`) runs for:
+    /// `r` itself when it is a program call, else the program call `r` was
+    /// made at: a call no maker made (a member call of a receiver, a copy,
+    /// a protocol touch) is one per token, its site the call it is made
+    /// for, so a key on `r` itself would be new per token (FRESHSITE R1:
+    /// a new token, a new root, a new site, a new template, a new token).
+    /// `CallId::MAX` when the chain reaches no program call. Sites and roots
+    /// name earlier calls, so the walk strictly descends and ends.
+    fn made_site_root(&self, mut r: CallId) -> CallId {
+        loop {
+            if self.prog_call(r) {
+                return r;
+            }
+            let Some(c) = self.calls.get(r as usize) else {
+                return CallId::MAX;
+            };
+            if c.site >= r {
+                return CallId::MAX;
+            }
+            r = self.made_root.get(&c.site).copied().unwrap_or(c.site);
+        }
+    }
+
     /// The call maker `key` (`MK_*`, with its finite aux: a bound value,
     /// a token, a step) makes for `by`, one per (root of `by`, key, arity):
     /// every solver-made call descends from a program call through
@@ -869,6 +917,7 @@ impl Model {
     /// into the existing target, and the existing result into `cs.ret`.
     /// `None`: joined; the caller adds no constraint. So the solver-made
     /// calls are at most roots x keys, a finite set.
+    #[track_caller]
     pub(crate) fn solver_call_keyed(
         &mut self,
         by: CallId,

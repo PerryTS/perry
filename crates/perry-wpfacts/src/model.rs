@@ -2937,6 +2937,11 @@ pub struct Model {
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.
     pub made_root: FxHashMap<CallId, CallId>,
+    /// (program root of the maker chain, native code position) -> the made
+    /// site of every
+    /// solver-made call a maker passes its own id as site
+    /// (`Model::solver_call_raw`, FRESHSITE R1).
+    pub made_sites: FxHashMap<(CallId, &'static std::panic::Location<'static>), CallId>,
     /// (root, maker, aux, aux2, args, spreads) → the one call that maker
     /// makes for every call of that root, and the node its callee
     /// constraint sits on (`Model::solver_call_keyed`).
