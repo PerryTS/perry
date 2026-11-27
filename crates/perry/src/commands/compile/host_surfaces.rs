@@ -88,5 +88,16 @@ pub(crate) fn guard(h: &HostSurfaces, facts_on: bool) -> Result<()> {
     if !facts_on {
         return Ok(());
     }
-    hs::check_required(&h.requirements, &h.surfaces).map_err(anyhow::Error::msg)
+    hs::check_required(&h.requirements, &h.surfaces).map_err(anyhow::Error::msg)?;
+    // The solver does not read host tables yet (HOSTSURF H2): a loaded
+    // surface would satisfy the rule above while the facts still read the
+    // static realm alone, so a surface is refused until the solver reads it.
+    if let Some(s) = h.surfaces.first() {
+        bail!(
+            "whole-program facts: host surface `{}` is loaded, but the solver does not read host \
+             surfaces yet; compile with PERRY_PROGRAM_FACTS=0",
+            s.provider
+        );
+    }
+    Ok(())
 }
