@@ -1107,3 +1107,245 @@ fn tls_wrapper_close_listener_can_reopen_its_parent_before_the_parent_close_list
         perry_runtime::agent::retire_agent(agent);
     }).join().unwrap();
 }
+
+unsafe extern "C" fn refused_then_live_lookup(
+    _: *const RawClosureHeader,
+    _: JsThis,
+    _host: f64,
+    _options: f64,
+    callback: f64,
+) -> f64 {
+    let scope = TransientRootScope::enter();
+    let callback = scope.root_nanbox(callback);
+    let mut addresses = scope.root_addr(perry_ffi::js_array_alloc(0) as i64);
+    for (address, family) in [("::1", 6.0), ("127.0.0.1", 4.0)] {
+        let entry = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        p::own_set(entry.get(), "address", events::string(address));
+        p::own_set(entry.get(), "family", family);
+        let grown = perry_ffi::js_array_push(
+            addresses.get() as *mut perry_ffi::ArrayHeader,
+            perry_ffi::JsValue::from_bits(entry.get().to_bits()),
+        );
+        addresses = scope.root_addr(grown as i64);
+    }
+    let null = f64::from_bits(perry_ffi::JsValue::NULL.bits());
+    events::call(
+        callback.get(),
+        JsThis::UNDEFINED,
+        &[null, p::boxed_addr(addresses.get())],
+    );
+    p::undefined()
+}
+
+unsafe extern "C" fn destroy_on_connect(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    ECHO_BYTES.with(|count| count.set(count.get() + 1));
+    socket::destroy(this.as_f64(), p::undefined());
+    p::undefined()
+}
+
+#[test]
+fn caller_lookup_plan_skips_the_resolver_and_releases_every_attempt_ref() {
+    let _serial = crate::test_serial();
+    std::thread::spawn(|| {
+        use perry_runtime::turnloop_net::transport as core_test;
+        let agent = perry_runtime::agent::enter_worker_agent();
+        assert!(io::enabled());
+        CLOSES.with(|count| count.set(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let peer = std::thread::spawn(move || {
+            let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match listener.accept() {
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > limit {
+                            return Err(err);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    accepted => return accepted.map(|_| ()),
+                }
+            }
+        });
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(socket::new_socket(io::ROUTE, p::undefined()));
+        let cell = socket::link(owner.get());
+        ECHO_BYTES.with(|count| count.set(0));
+        let options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        p::own_set(options.get(), "host", events::string("custom.test"));
+        p::own_set(options.get(), "port", f64::from(port));
+        let lookup = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(refused_then_live_lookup, 3; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        p::own_set(options.get(), "lookup", p::boxed_addr(lookup.get()));
+        let connected = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(destroy_on_connect, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        close_listener(owner.get());
+        socket::connect(owner.get(), options.get(), p::boxed_addr(connected.get()), p::undefined());
+        assert_eq!(
+            unsafe { core_test::pending_resolve_for_test(cell.raw()) },
+            None,
+            "the caller's answer replaces the resolver"
+        );
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while CLOSES.with(Cell::get) < 1 {
+            assert!(std::time::Instant::now() < limit, "lookup fallback stalled");
+            perry_runtime::event_pump::js_loop_turn_bounded(2);
+            perry_runtime::promise::js_promise_run_microtasks();
+        }
+        peer.join().unwrap().expect("the live address was accepted");
+        assert_eq!(
+            ECHO_BYTES.with(Cell::get),
+            1,
+            "the refused address fell back to the live one"
+        );
+        let header = cell.raw() as *const perry_runtime::native_handle::NativeHandleHeader;
+        assert_eq!(unsafe { (*header).refs }, 0, "every attempt released its ref");
+        assert_eq!(perry_runtime::turnloop_net::live_handles(), 0);
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}
+
+unsafe extern "C" fn park_lookup(
+    closure: *const RawClosureHeader,
+    _: JsThis,
+    _host: f64,
+    _options: f64,
+    callback: f64,
+) -> f64 {
+    p::own_set(
+        perry_ffi::closure_capture_f64(closure, 0),
+        "parked",
+        callback,
+    );
+    p::undefined()
+}
+
+unsafe extern "C" fn fail_lookup(
+    _: *const RawClosureHeader,
+    _: JsThis,
+    _host: f64,
+    _options: f64,
+    callback: f64,
+) -> f64 {
+    let scope = TransientRootScope::enter();
+    let callback = scope.root_nanbox(callback);
+    let err = scope.root_nanbox(socket::error("ENOTFOUND", "stale failure"));
+    events::call(callback.get(), JsThis::UNDEFINED, &[err.get()]);
+    p::undefined()
+}
+
+/// Connect a socket through `lookup`, then destroy it and connect it again to
+/// `127.0.0.1`, returning how many connections the listener accepted once the
+/// second connect is done.
+fn reconnect_past_a_lookup(lookup: f64, holder: f64, answer_late: bool) -> usize {
+    let scope = TransientRootScope::enter();
+    let lookup = scope.root_nanbox(lookup);
+    let holder = scope.root_nanbox(holder);
+    CLOSES.with(|count| count.set(0));
+    ECHO_BYTES.with(|count| count.set(0));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let owner = scope.root_nanbox(socket::new_socket(io::ROUTE, p::undefined()));
+    let options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    p::own_set(options.get(), "host", events::string("stale.test"));
+    p::own_set(options.get(), "port", f64::from(port));
+    p::own_set(options.get(), "lookup", lookup.get());
+    socket::connect(owner.get(), options.get(), p::undefined(), p::undefined());
+    socket::destroy(owner.get(), p::undefined());
+    let connected = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(destroy_on_connect, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        0,
+    ) as i64);
+    let host = scope.root_nanbox(events::string("127.0.0.1"));
+    socket::connect(
+        owner.get(),
+        f64::from(port),
+        host.get(),
+        p::boxed_addr(connected.get()),
+    );
+    close_listener(owner.get());
+    if answer_late {
+        let parked = scope.root_nanbox(p::own_get(holder.get(), "parked"));
+        let entry = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        p::own_set(entry.get(), "address", events::string("127.0.0.1"));
+        p::own_set(entry.get(), "family", 4.0);
+        let answer = scope.root_addr(unsafe { perry_ffi::js_array_alloc(0) } as i64);
+        let answer = scope.root_addr(unsafe {
+            perry_ffi::js_array_push(
+                answer.get() as *mut perry_ffi::ArrayHeader,
+                perry_ffi::JsValue::from_bits(entry.get().to_bits()),
+            )
+        } as i64);
+        let null = f64::from_bits(perry_ffi::JsValue::NULL.bits());
+        events::call(
+            parked.get(),
+            JsThis::UNDEFINED,
+            &[null, p::boxed_addr(answer.get())],
+        );
+    }
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // The first connect's close may arrive before the second connects.
+    while ECHO_BYTES.with(Cell::get) < 1 || perry_runtime::turnloop_net::live_handles() > 0 {
+        assert!(
+            std::time::Instant::now() < limit,
+            "the new connect did not connect"
+        );
+        perry_runtime::event_pump::js_loop_turn_bounded(2);
+        perry_runtime::promise::js_promise_run_microtasks();
+    }
+    assert_eq!(
+        ECHO_BYTES.with(Cell::get),
+        1,
+        "the new connect connected once"
+    );
+    let mut accepted = 0;
+    while listener.accept().is_ok() {
+        accepted += 1;
+    }
+    accepted
+}
+
+#[test]
+fn a_late_lookup_answer_or_error_leaves_a_later_connect_alone() {
+    let _serial = crate::test_serial();
+    std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        assert!(io::enabled());
+        let scope = TransientRootScope::enter();
+        let holder = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        let park = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(park_lookup, 3; with_flags(perry_ffi::FN_BUILTIN)),
+            1,
+        ) as i64);
+        unsafe {
+            perry_ffi::set_closure_capture_f64(
+                park.get() as *mut RawClosureHeader,
+                0,
+                holder.get(),
+            );
+        }
+        let accepted = reconnect_past_a_lookup(p::boxed_addr(park.get()), holder.get(), true);
+        assert_eq!(accepted, 1, "the stale answer opened no second connection");
+        let fail = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(fail_lookup, 3; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        let accepted = reconnect_past_a_lookup(p::boxed_addr(fail.get()), holder.get(), false);
+        assert_eq!(
+            accepted, 1,
+            "the stale error did not destroy the new connect"
+        );
+        assert_eq!(perry_runtime::turnloop_net::live_handles(), 0);
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}

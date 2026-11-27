@@ -854,6 +854,37 @@ pub unsafe extern "C" fn js_perry_net_link_tcp_connect(
     )
 }
 
+/// Link form of a TCP connect to caller-resolved addresses: `count` IPv6
+/// octet arrays, IPv4 ones as IPv4-mapped addresses.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `ips` names `count` readable arrays.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_tcp_connect_addrs(
+    core: *mut c_void,
+    link: usize,
+    ips: *const [u8; 16],
+    count: usize,
+    port: u16,
+    nodelay: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    let ips = if count == 0 {
+        &[][..]
+    } else {
+        // SAFETY: forwarded contract.
+        unsafe { std::slice::from_raw_parts(ips, count) }
+    };
+    let addrs = ips
+        .iter()
+        .map(|octets| SocketAddr::new(std::net::Ipv6Addr::from(*octets).to_canonical(), port))
+        .collect();
+    finish(
+        unsafe { transport::tcp_connect_addrs(core.cast(), link_arg(link), addrs, nodelay != 0) },
+        err,
+    )
+}
+
 /// Link form of [`js_perry_net_pipe_connect`].
 ///
 /// # Safety
