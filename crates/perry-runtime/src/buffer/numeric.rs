@@ -49,7 +49,7 @@ fn buffer_slice_at_or_throw_bounds(
 }
 
 #[inline]
-fn buffer_write_at(
+pub(super) fn buffer_write_at(
     buf: *mut BufferHeader,
     offset: i32,
     n: usize,
@@ -577,7 +577,7 @@ pub extern "C" fn js_buffer_write_biguint64_le(buf_ptr: f64, value: f64, offset:
     js_buffer_write_bigint64_le(buf_ptr, value, offset);
 }
 
-fn bigint_value_to_i64(value: f64) -> i64 {
+pub(super) fn bigint_value_to_i64(value: f64) -> i64 {
     let bits = value.to_bits();
     let top16 = bits >> 48;
     // BigInt pointers can carry either BIGINT_TAG (0x7FFA) or — when the

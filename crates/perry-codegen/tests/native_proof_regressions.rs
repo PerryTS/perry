@@ -1639,22 +1639,52 @@ fn births_heap_object(ir: &str) -> bool {
 }
 
 /// Whether `symbol`'s address is materialised (`ptrtoint`) anywhere that could
-/// register it as a callable entry. The function-name metadata (the
-/// `__perry_function_name_descriptors` table and the `<sym>$info` records that
-/// name `$generic` / `$spec_*` clones for `Error.stack`) takes clone addresses
-/// by design: it holds them as names to resolve a return address, never as
-/// entries a caller can reach, so those lines do not count. Matching is exact
-/// (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
+/// register it as a callable entry. The function-name metadata (the `$info`
+/// constants that name `$generic` / `$spec_*` clones for `Error.stack`, and
+/// `symbol`'s own `$fnrec` record that lets the link keep it with its body)
+/// takes clone addresses by design: it holds them as names to resolve a return
+/// address, never as entries a caller can reach, so those lines do not count.
+/// Matching is exact (`@sym to`), so `@sym$info` is not mistaken for `@sym`.
 fn address_taken_outside_name_metadata(ir: &str, symbol: &str) -> bool {
     let tokens = [
         format!("ptrtoint (ptr @{symbol} to"),
         format!("ptrtoint ptr @{symbol} to"),
     ];
+    // The record's definition, ELF and Mach-O spellings; another body's record still counts.
+    let own_record = [
+        format!("@{symbol}$fnrec = "),
+        format!("@\"\\01l_{symbol}$fnrec\" = "),
+    ];
     ir.lines()
-        .filter(|line| {
-            !line.starts_with("@__perry_function_name_descriptors") && !line.contains("$info = ")
-        })
+        .filter(|line| !line.contains("$info = "))
+        .filter(|line| !own_record.iter().any(|r| line.starts_with(r.as_str())))
         .any(|line| tokens.iter().any(|t| line.contains(t.as_str())))
+}
+
+#[test]
+fn address_taken_outside_name_metadata_skips_only_the_bodys_own_record() {
+    let take =
+        |sym: &str| format!("i32 trunc (i64 sub (i64 ptrtoint (ptr @{sym} to i64), i64 0) to i32)");
+    for own in ["@f$generic$fnrec", "@\"\\01l_f$generic$fnrec\""] {
+        let ir = format!(
+            "{own} = internal constant {{ i32, i32 }} {{ {} }}\n",
+            take("f$generic")
+        );
+        assert!(
+            !address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
+    for other in [
+        "@g$fnrec = internal constant",
+        "@__perry_class_decl_members_C = constant",
+    ] {
+        let ir = format!("{other} {{ {} }}\n", take("f$generic"));
+        assert!(
+            address_taken_outside_name_metadata(&ir, "f$generic"),
+            "{ir}"
+        );
+    }
 }
 
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
@@ -2163,7 +2193,7 @@ fn number_coerce_of_proven_numeric_loop_expression_skips_runtime_call() {
 
     let ir = compile_ir("number_coerce_numeric_loop_no_runtime_call.ts", body);
     assert!(
-        !ir.contains("call double @js_number_coerce"),
+        !ir.contains("call double @js_number_from_value"),
         "Number(i + 0.5) with a proven integer loop counter is already a primitive number:\n{ir}"
     );
 }
@@ -2187,7 +2217,7 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_number_coerce"),
+        ir.contains("call double @js_number_from_value"),
         "Number(values[0]) must still coerce boxed numeric-array fallback values:\n{ir}"
     );
 }
@@ -3977,7 +4007,7 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
         .unwrap_or(ir.len());
     let fast_body = &ir[fast_body_start..fast_body_end];
     assert!(
-        !fast_body.contains("js_math_to_number"),
+        !fast_body.contains("js_number_coerce"),
         "packed fast body must not route Math.abs(arr[i]) through JSValue ToNumber:\n{fast_body}\n\n{ir}"
     );
     // The fast clone stores through the inline range store (see the
@@ -4020,7 +4050,7 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
         .find("for.packed_f64_slow")
         .expect("expected packed-f64 slow clone");
     assert!(
-        ir[slow_start..].contains("call double @js_math_to_number"),
+        ir[slow_start..].contains("call double @js_number_coerce"),
         "unary math packed store side exit must restart in the slow clone that preserves ToNumber semantics:\n{ir}"
     );
 
@@ -4097,7 +4127,7 @@ fn packed_f64_loop_rejects_coercive_unary_math_store_rhs() {
         "coercive unary math store body must stay out of the packed-f64 fast clone:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_math_to_number"),
+        ir.contains("call double @js_number_coerce"),
         "negative case must exercise the generic ToNumber-preserving math path:\n{ir}"
     );
 

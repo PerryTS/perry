@@ -2112,7 +2112,6 @@ js_math_sin	f64	f64
 js_math_sinh	f64	f64
 js_math_tan	f64	f64
 js_math_tanh	f64	f64
-js_math_to_number	f64	f64
 js_math_trunc	f64	f64
 js_message_channel_new	f64	
 js_message_port_constructor_error	f64	
@@ -2750,6 +2749,7 @@ js_node_test_suite	f64	f64,f64,f64
 js_node_test_todo	f64	f64,f64,f64
 js_notify_main_thread	void	
 js_number_coerce	f64	f64
+js_number_from_value	f64	f64
 js_number_is_finite	f64	f64
 js_number_is_integer	f64	f64
 js_number_is_nan	f64	f64

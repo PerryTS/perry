@@ -621,29 +621,16 @@ pub unsafe extern "C" fn js_validate_event_listener(
     );
 }
 
-/// Render an `f64` the way Node prints it in a `Received …` clause for
-/// value errors (`ERR_OUT_OF_RANGE` / `ERR_INVALID_ARG_VALUE`): integers
-/// without a fractional part, and `NaN`/`Infinity`/`-Infinity` spelled out
-/// (Rust's `Display` would print `inf`/`NaN`). Shared by the `net`/`fs`/
-/// `buffer` validators and the `process` exit/cpuUsage validators
-/// (#3039-#3049).
+/// Render an `f64` as `util.inspect` prints a Number in a `Received …`
+/// clause: JS `String(n)` (exponent form at 1e21 and below 1e-6), except
+/// that `-0` keeps its sign.
 pub fn format_received_number(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
+    if n == 0.0 && n.is_sign_negative() {
+        return "-0".to_string();
     }
-    if n.is_infinite() {
-        return if n.is_sign_negative() {
-            "-Infinity"
-        } else {
-            "Infinity"
-        }
-        .to_string();
-    }
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
-    } else {
-        format!("{}", n)
-    }
+    let mut buf = [0u8; 32];
+    let len = crate::string::concat::format_number_into(n, &mut buf);
+    String::from_utf8_lossy(&buf[..len]).into_owned()
 }
 
 pub fn throw_range_error_with_code(message: &str) -> ! {

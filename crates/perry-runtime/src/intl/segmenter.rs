@@ -446,9 +446,8 @@ pub(crate) extern "C" fn segmenter_containing_thunk(
     // array rooted while coercing the index.
     let scope = crate::gc::RuntimeHandleScope::new();
     let segments_handle = scope.root_raw_const_ptr(segments);
-    let (number, segments) = segments_handle.across_const::<crate::ArrayHeader, _>(|| {
-        list_relative_plural::to_number_reject_bigint(index)
-    });
+    let (number, segments) = segments_handle
+        .across_const::<crate::ArrayHeader, _>(|| crate::builtins::js_number_coerce(index));
     let integer = if number.is_nan() { 0.0 } else { number.trunc() };
     if integer < 0.0 || integer >= input_len {
         return undefined();

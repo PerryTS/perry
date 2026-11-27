@@ -726,7 +726,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 Ok(ctx
                     .block()
-                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
+                    .call(DOUBLE, "js_number_from_value", &[(DOUBLE, &v)]))
             }
         }
 

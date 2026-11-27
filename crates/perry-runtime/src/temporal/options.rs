@@ -544,12 +544,8 @@ fn num_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<f64>
     // bit-level `to_number()` which returns NaN for both. A non-finite result is
     // then a `RangeError` (Temporal fields reject Infinity/NaN).
     //
-    // A BigInt is a `TypeError` here: abstract `ToNumber(BigInt)` throws (unlike
-    // the explicit `Number(2n)` constructor, which `js_number_coerce` permits) —
+    // A BigInt is a `TypeError` here, as ToNumber throws for it:
     // `roundingIncrement: 2n` and `{ year: 2n }` are wrong-type, not value 2.
-    if JSValue::from_bits(raw.to_bits()).is_bigint() {
-        type_error("Cannot convert a BigInt value to a number".to_string());
-    }
     let n = crate::builtins::js_number_coerce(raw);
     if n.is_finite() {
         Some(n)

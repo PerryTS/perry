@@ -779,9 +779,6 @@ pub(super) fn array_buffer_to_index(value: f64) -> i32 {
     // throwing one propagates) and throws TypeError on a Symbol. The bare
     // `JSValue::to_number()` previously produced NaN→0 for objects/symbols, so
     // `new ArrayBuffer({valueOf(){return 42}})` silently became length 0.
-    if jv.is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
-    }
     let n = crate::builtins::js_number_coerce(value);
     // ToIndex truncates toward zero (ToIntegerOrInfinity) BEFORE the range
     // check, so a fractional value in (-1, 0] like `-0.1` or `-0.99999` maps to
@@ -872,9 +869,6 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
     // and runs an object's `valueOf`/`toString`. The bare `JSValue::to_number()`
     // previously produced `NaN`→0 for those, so `new DataView(buf, Symbol())`
     // didn't throw and a `valueOf` never ran.
-    if jv.is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
-    }
     let n = crate::builtins::js_number_coerce(value);
     if n.is_nan() {
         // ToIntegerOrInfinity(NaN) = 0.
