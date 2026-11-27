@@ -92,6 +92,7 @@ unsafe fn copy_slots(
     record: shapes::ShapeRecordRef,
     result: Option<shapes::ShapeRecordRef>,
     source_keys: *const ArrayHeader,
+    targets: &[u32],
 ) {
     let prefix_count = prefix.map_or(0, |(_, r)| r.logical_key_count());
     if let Some((object, r)) = prefix {
@@ -121,26 +122,11 @@ unsafe fn copy_slots(
         );
         return;
     }
-    let keys = record.keys() as usize as *const ArrayHeader;
-    let key_words = if prefix_count == 0 || record.logical_key_count() == 0 {
-        ptr::null()
-    } else {
-        crate::array::array_elements_ptr(keys)
-    };
+    // Each source key's position in the result list, recorded while the
+    // list was built (`birth_slow`).
+    debug_assert_eq!(targets.len(), record.logical_key_count() as usize);
     for slot in 0..record.logical_key_count() as usize {
-        let target = if prefix_count == 0 {
-            slot
-        } else {
-            let key = JSValue::from_bits(*key_words.add(slot));
-            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
-            let bytes = crate::string::js_string_key_bytes(key, &mut scratch)
-                .expect("spread shape key is a string");
-            result
-                .expect("a nonempty prefix resolves the result record")
-                .own_data_position_of_value(key.bits(), bytes)
-                .flatten()
-                .expect("combined shape contains every source key") as usize
-        };
+        let target = targets[slot] as usize;
         let slot = source_slot(source_keys, slot);
         let bits = if slot < record.live_inline_slot_count() as usize {
             *fields(source).add(slot)
@@ -236,8 +222,156 @@ pub unsafe extern "C" fn js_object_spread_fresh_leading(
 unsafe fn spread_leading(source: f64, tail: u32) -> f64 {
     match structural(source, tail) {
         Some(result) => result,
-        None => generic(f64::from_bits(crate::value::TAG_UNDEFINED), source, tail),
+        None => match accessor_spread(source, tail) {
+            Some(result) => result,
+            None => generic(f64::from_bits(crate::value::TAG_UNDEFINED), source, tail),
+        },
     }
+}
+
+/// The most keys [`accessor_spread`] collects before its result is born.
+const ACCESSOR_SPREAD_MAX_KEYS: u32 = 4096;
+
+/// A leading spread of an ordinary source with accessors (a module namespace
+/// built by `Object.defineProperty(exports, k, { get, enumerable })`),
+/// CopyDataProperties driven by the source's layout (NXPA6 DESIGN.md §1):
+/// one walk of the layout's key list, each key's entry and slot read by
+/// position, each getter called from the pair in its slot. A getter may
+/// change the source; every change to its own keys or their attributes moves
+/// its layout word (the shared key list is immutable), so the spec's per-key
+/// re-check is "the word is unchanged", and once it moved the remaining keys
+/// take the by-name step. The result is born with the collected key list.
+/// `None` (nothing ran) for every other source: the generic copy.
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn accessor_spread(source: f64, tail: u32) -> Option<f64> {
+    let (src, word) = ordinary_shape(source)?;
+    if word & overflow::SHADOW_BIT != 0 || !overflow::table(src).is_null() || (*src).class_id != 0 {
+        return None;
+    }
+    let header = crate::gc::header_from_trusted_user_ptr(src.cast());
+    if !crate::gc_type_is_object!((*header).obj_type)
+        || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || (*header)._reserved
+            & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
+            != 0
+        || !key_attrs::attrs_live_in_keys_of_bits(source.to_bits())
+    {
+        return None;
+    }
+    let record = shapes::shape_record_for_word(LayoutWord(word))?;
+    let summary = record.summary();
+    let count = record.logical_key_count();
+    let keys = record.keys() as usize as *mut ArrayHeader;
+    if !record.kind_is(shapes::ShapeObjectKind::Ordinary)
+        || summary & key_attrs::SUMMARY_ACCESSOR == 0
+        || summary & (key_attrs::SUMMARY_PRIVATE | key_attrs::SUMMARY_HOLES) != 0
+        || count == 0
+        || count > ACCESSOR_SPREAD_MAX_KEYS
+        || keys.is_null()
+    {
+        return None;
+    }
+    // The layout's key list is a shared canonical backing: its keys and
+    // attribute entries never change in place.
+    if crate::value::addr_class::try_read_gc_header(keys as usize)?.gc_flags
+        & crate::gc::GC_FLAG_SHAPE_SHARED
+        == 0
+        || crate::array::subclass_elements::own_elements(src as usize).is_some()
+        || super::string_wrapper::length(src as usize).is_some()
+        || crate::process::is_process_env_object(source)
+    {
+        return None;
+    }
+    let proof = canonical_keys::SharedLayout::of_receiver(src.cast_mut())?;
+    let slots_keyed = key_attrs::keys_have_slots(keys, count);
+    let inline = record.live_inline_slot_count();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_h = scope.root_nanbox_f64(source);
+    let src_h = scope.root_raw_const_ptr(src);
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let mut taken: Vec<u32> = Vec::with_capacity(count as usize);
+    let mut values = Vec::with_capacity(count as usize);
+    let mut getter_ran = false;
+    let mut by_name = false;
+    for position in 0..count {
+        let keys = keys_h.get_raw_mut_ptr::<ArrayHeader>();
+        let key = *crate::array::array_elements_ptr(keys).add(position as usize);
+        if !JSValue::from_bits(key).is_any_string() {
+            continue;
+        }
+        let src = src_h.get_raw_const_ptr::<ObjectHeader>();
+        // CopyDataProperties step 4.c's re-check, after any getter.
+        by_name = by_name || (*src).shape_word() != word;
+        let value = if by_name {
+            getter_ran = true;
+            match super::assign::own_enumerable_value_by_name(src, key) {
+                Some(value) => value.to_bits(),
+                None => continue,
+            }
+        } else {
+            let entry = key_attrs::keys_entry(keys, position);
+            if entry & key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                continue;
+            }
+            let slot = if slots_keyed {
+                key_attrs::key_storage_slot(keys, position)
+            } else {
+                position
+            };
+            let bits = field_get_set::object_field_at_with_live(src, slot, inline).bits();
+            if entry & key_attrs::ENTRY_ACCESSOR == 0 {
+                bits
+            } else {
+                getter_ran = true;
+                let acc = super::accessor_pair::getter_half_of_value(bits);
+                match field_get_set::call_getter(src, acc) {
+                    Some(value) => value.to_bits(),
+                    // A static class entry: the complete read calls it.
+                    None => match super::assign::own_enumerable_value_by_name(src, key) {
+                        Some(value) => value.to_bits(),
+                        None => continue,
+                    },
+                }
+            }
+        };
+        taken.push(position);
+        values.push(scope.root_nanbox_u64(value));
+    }
+    let result = if taken.is_empty() {
+        crate::value::js_nanbox_pointer(js_object_alloc_plain(tail) as i64)
+    } else {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let census = crate::snap_census::first_use();
+        let n = taken.len() as u32;
+        let list = key_attrs::alloc_key_list(n, true, false);
+        let words = crate::array::array_elements_ptr(keys_h.get_raw_mut_ptr::<ArrayHeader>());
+        let dst = crate::array::array_elements_ptr(list);
+        for (at, &position) in taken.iter().enumerate() {
+            // GC_STORE_AUDIT(INIT): unpublished key list under suppression.
+            *dst.add(at) = *words.add(position as usize);
+        }
+        (*list).length = n;
+        super::rebuild_array_layout_from_slots(list);
+        let result_keys = canonical_keys::canonicalize(&proof, list, n).view();
+        let shape = intern_result(result_keys, field_rep::REP_ANY, tail);
+        drop(census);
+        let object = allocate_fields(result_keys.count(), tail);
+        shapes::store_kind::premark_plain_ordinary(object);
+        shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
+        for (slot, value) in values.iter().enumerate() {
+            copy_value(object, slot, value.get_nanbox_u64());
+        }
+        crate::value::js_nanbox_pointer(object as i64)
+    };
+    if proves_no_symbols(source_h.get_nanbox_f64()) {
+        return Some(result);
+    }
+    let target_h = scope
+        .root_raw_mut_ptr((result.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader);
+    super::assign::copy_symbol_keys(true, &target_h, &src_h, &source_h, false, getter_ran);
+    Some(target_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64)))
 }
 
 /// [`ordinary_shape`] for a structural spread source: the layout word
@@ -372,7 +506,13 @@ unsafe fn same_layout_spilled(
         copy_value(object, slot, *fields(src).add(slot));
     }
     initialize_slack(object, inline as usize, width);
-    super::spill::spill_copy_into_fresh(object, src, inline as usize, count as usize);
+    super::spill::spill_copy_into_fresh(
+        object,
+        src,
+        inline as usize,
+        count as usize,
+        tail as usize,
+    );
     crate::value::js_nanbox_pointer(object as i64)
 }
 
@@ -532,6 +672,7 @@ unsafe fn birth_slow(
     // stays the caller's.
     let census = crate::snap_census::first_use();
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
+    let mut targets: Vec<u32> = Vec::new();
     let keys = if prefix_count == 0 && record.summary() == 0 {
         record.keys_view_of(count)
     } else {
@@ -548,16 +689,29 @@ unsafe fn birth_slow(
         } else {
             crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader)
         };
+        // The source's keys are distinct, so a source key can repeat only a
+        // prefix key: it keeps that key's position (its value overwrites it).
+        // Every other source key is appended.
+        targets.reserve(count as usize);
         for slot in 0..count as usize {
             let word = *slots.add(slot);
             let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
             let bytes =
                 crate::string::js_string_key_bytes(JSValue::from_bits(word), &mut scratch).unwrap();
-            if !words.iter().any(|&old| {
-                crate::string::js_string_key_matches_bytes(JSValue::from_bits(old), bytes)
-            }) {
-                words.push(word);
-            }
+            let target = words[..prefix_count as usize]
+                .iter()
+                .position(|&old| {
+                    old == word
+                        || crate::string::js_string_key_matches_bytes(
+                            JSValue::from_bits(old),
+                            bytes,
+                        )
+                })
+                .unwrap_or_else(|| {
+                    words.push(word);
+                    words.len() - 1
+                });
+            targets.push(target as u32);
         }
         let list = super::key_attrs::alloc_key_list(words.len() as u32, true, false);
         // GC_STORE_AUDIT(INIT): unpublished canonical key list under suppression.
@@ -577,7 +731,15 @@ unsafe fn birth_slow(
     shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
     let result = shapes::shape_record_for_word(LayoutWord(shape)).unwrap();
     let source_keys = positional_source(record, keys.arr());
-    copy_slots(object, prefix, source, record, Some(result), source_keys);
+    copy_slots(
+        object,
+        prefix,
+        source,
+        record,
+        Some(result),
+        source_keys,
+        &targets,
+    );
     crate::value::js_nanbox_pointer(object as i64)
 }
 

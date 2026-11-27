@@ -1192,6 +1192,38 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         }
     }
 
+    copy_symbol_keys(
+        define,
+        &tgt_h,
+        &src_h,
+        &source_h,
+        source_has_no_symbols,
+        getter_ran,
+    );
+
+    // The target may have moved under any of the getters above; hand the caller
+    // the post-collection address, not the `target_f64` captured on entry. The
+    // native-module arm already does this; the main path did not, so `acc` in a
+    // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
+    // next link.
+    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+}
+
+/// CopyDataProperties' symbol part (ECMA-262 7.3.25, `[[OwnPropertyKeys]]`
+/// symbol order, after the string keys) from the source `source_h` (its raw
+/// object `src_h`) onto the target `tgt_h`. `getter_ran`: a getter already ran
+/// during the string part, so each symbol is re-checked for own presence.
+///
+/// # Safety
+/// The handles root a live target and source object.
+pub(super) unsafe fn copy_symbol_keys(
+    define: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    source_h: &crate::gc::RuntimeHandle<'_>,
+    source_has_no_symbols: bool,
+    mut getter_ran: bool,
+) {
     // 2) Copy own symbol-keyed enumerable properties from source to target,
     //    in `[[OwnPropertyKeys]]` symbol order (after the string keys). Use the
     //    full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
@@ -1264,13 +1296,48 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             );
         }
     }
+}
 
-    // The target may have moved under any of the getters above; hand the caller
-    // the post-collection address, not the `target_f64` captured on entry. The
-    // native-module arm already does this; the main path did not, so `acc` in a
-    // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
-    // next link.
-    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+/// CopyDataProperties step 4 for one string key of an ordinary source, by
+/// name: the key's own presence ([[GetOwnProperty]], step 4.c), its
+/// enumerability, then `[[Get]]`. `None` when the key is skipped. The step a
+/// spread source takes once a getter may have changed it (`copy_string_key`'s
+/// re-check; `spread::accessor_spread` after its layout word moved).
+///
+/// # Safety
+/// `src` is a live ordinary object; `key_bits` a string key. Runs user code.
+pub(super) unsafe fn own_enumerable_value_by_name(
+    src: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
+    let key_f64 = f64::from_bits(key_bits);
+    if crate::value::js_is_truthy(js_object_has_own(
+        crate::value::js_nanbox_pointer(src as i64),
+        key_f64,
+    )) == 0
+    {
+        return None;
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some(name_bytes) =
+        crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut sso_buf)
+    {
+        if let Ok(name) = std::str::from_utf8(name_bytes) {
+            if let Some(attrs) = get_property_attrs(src as usize, name) {
+                if !attrs.enumerable() {
+                    return None;
+                }
+            }
+        }
+    }
+    let key_ptr =
+        crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return None;
+    }
+    Some(f64::from_bits(
+        js_object_get_field_by_name(src, key_ptr).bits(),
+    ))
 }
 
 /// One own string key `i` of an ordinary-object spread/assign source:
