@@ -99,7 +99,7 @@ pub(super) fn throw_dataview_offset_out_of_bounds() -> ! {
     crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
-fn throw_buffer_out_of_bounds() -> ! {
+pub(super) fn throw_buffer_out_of_bounds() -> ! {
     throw_range_error_code(
         b"ERR_BUFFER_OUT_OF_BOUNDS",
         b"Attempt to access memory outside buffer bounds",
