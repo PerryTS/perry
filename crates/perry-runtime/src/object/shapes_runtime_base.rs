@@ -11,16 +11,19 @@
 //!
 //! The base is a function of the two records' immutable facts: the key list
 //! prefix (key, entry byte, storage slot), the slots' field lanes, the
-//! inline width, the kind and no integrity level. It is learned on first
-//! ask and kept in the record's own extension (`ShapeExtras::runtime_base`);
-//! it is never identity and no table holds it. A deleted base key leaves a
-//! hole in its slot, which every reader still treats as absence.
+//! inline width, the kind and no integrity level. Every record states it
+//! from the moment it is published (a two-bit field of its key-prefix facts
+//! byte, `ShapeRecord::runtime_base_code`, derived beside the record's other
+//! key-prefix facts), so a reader loads one field: no search, no recheck. It
+//! is never identity and no table holds it. A deleted base key leaves a hole
+//! in its slot, which every reader still treats as absence.
 
 use super::*;
 
 use crate::codegen_abi::LayoutWord;
 
-/// The runtime instance layouts whose fixed slots native readers use.
+/// The runtime instance layouts whose fixed slots native readers use, in
+/// code order (code = index + 1).
 #[inline(always)]
 fn bases() -> [u32; 2] {
     use crate::object::runtime_layouts as rl;
@@ -29,84 +32,84 @@ fn bases() -> [u32; 2] {
 
 /// The runtime instance layout (its word) whose fixed slots an object on
 /// the unshadowed layout word `word` keeps: `word` itself when it is one,
-/// the learned base of a dynamic shape that descends from one by key adds,
-/// or 0.
+/// the base its record states, or 0.
 #[inline]
 pub(crate) fn runtime_base_of_word(word: u32) -> u32 {
     let [incoming, response] = bases();
     if word == incoming || word == response {
         return word;
     }
-    // A registered layout (static id) is its own layout or none; shadowed
-    // words are the caller's to strip.
-    if word & crate::object::layout_desc::LAYOUT_SHADOW_BIT != 0 || is_static_layout_word(word) {
+    // Shadowed words are the caller's to strip.
+    if word & crate::object::layout_desc::LAYOUT_SHADOW_BIT != 0 {
         return 0;
     }
     let Some(record) = ShapeSlab::agent_record_for_word_present(LayoutWord(word)) else {
         return 0;
     };
     // SAFETY: a present slab record of this agent.
-    match unsafe { (*record).runtime_base() } {
-        0 => unsafe { learn_runtime_base(record) },
-        u32::MAX => 0,
-        base => base,
+    match unsafe { (*record).runtime_base_code() } {
+        1 => incoming,
+        2 => response,
+        _ => 0,
     }
 }
 
-/// Derive and record the base of `record` (first ask). Records whose first
-/// key is no base's first key are answered without being recorded, so an
-/// unrelated shape never acquires an extension.
-///
-/// # Safety
-/// `record` is a present slab record of this agent.
-#[cold]
-#[inline(never)]
-unsafe fn learn_runtime_base(record: *mut ShapeRecord) -> u32 {
-    let own = (*record).lift(record);
-    if own.keys == 0 || own.logical_key_count == 0 {
-        return 0;
-    }
-    let keys = own.keys_view();
+/// The runtime base code of `record`, published (or republished) under
+/// `word`: 0 none, else the index + 1 of the base layout it descends from.
+/// One compare per base rejects every record whose first key or key count
+/// does not fit, so publication of an unrelated shape reads no key list.
+pub(in crate::object) fn runtime_base_code_of(record: &ShapeRecord, word: u32) -> u32 {
+    let mut code = 0;
     for base in bases() {
+        code += 1;
+        if word == base {
+            return code;
+        }
         let Some(base_record) = ShapeSlab::agent_record_for_word_present(LayoutWord(base)) else {
             continue;
         };
-        let layout = (*base_record).lift(base_record);
-        if layout.keys == 0 || layout.logical_key_count == 0 {
-            continue;
+        // SAFETY: a present slab record of this agent; `record` is the
+        // caller's copy (never the slab row being written), and both key
+        // lists are live while nothing allocates here.
+        if unsafe { descends_from(record, &*base_record) } {
+            return code;
         }
-        let layout_keys = layout.keys_view();
-        if own.logical_key_count < layout.logical_key_count
-            || keys.get(0).bits() != layout_keys.get(0).bits()
-        {
-            continue;
-        }
-        let found = descends_from(&own, keys, &layout, layout_keys);
-        (*record).note_runtime_base(if found { base } else { u32::MAX });
-        return if found { base } else { 0 };
     }
     0
 }
 
 /// Does `own` keep every key of `layout` at its position, slot, entry and
-/// lane, inline, with no integrity level?
+/// lane, inline, with the same kind, both on immutable key prefixes and with
+/// no integrity level?
 ///
 /// # Safety
-/// Both key lists are live; nothing allocates while they are read.
-unsafe fn descends_from(
-    own: &ShapeDescriptor,
-    keys: crate::object::ObjectKeys,
-    layout: &ShapeDescriptor,
-    layout_keys: crate::object::ObjectKeys,
-) -> bool {
-    if own.object_kind != layout.object_kind
-        || own.integrity_flags != 0
-        || layout.integrity_flags != 0
+/// Both records' key lists are live; nothing allocates while they are read.
+unsafe fn descends_from(own: &ShapeRecord, layout: &ShapeRecord) -> bool {
+    let count = layout.logical_key_count;
+    if count == 0
+        || own.logical_key_count < count
+        || own.keys == 0
+        || layout.keys == 0
         || own.live_inline_slot_count < layout.live_inline_slot_count
+        || !own.same_kind_as(layout)
     {
         return false;
     }
-    (0..layout.logical_key_count).all(|i| {
+    let keys = crate::object::ObjectKeys::new(
+        own.keys as usize as *mut crate::ArrayHeader,
+        own.logical_key_count,
+    );
+    let layout_keys =
+        crate::object::ObjectKeys::new(layout.keys as usize as *mut crate::ArrayHeader, count);
+    if keys.get(0).bits() != layout_keys.get(0).bits()
+        || own.integrity_flags() != 0
+        || layout.integrity_flags() != 0
+        || !keys_prefix_is_immutable(keys.arr())
+        || !keys_prefix_is_immutable(layout_keys.arr())
+    {
+        return false;
+    }
+    (0..count).all(|i| {
         let slot = layout_keys.storage_slot(i);
         keys.get(i).bits() == layout_keys.get(i).bits()
             && keys.storage_slot(i) == slot

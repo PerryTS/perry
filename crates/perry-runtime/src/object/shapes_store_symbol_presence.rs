@@ -146,6 +146,35 @@ const RECORD_ELEMENT_KIND_MASK: u32 = 0x03;
 const RECORD_KEY_FACTS_MASK: u32 = 0xFF;
 const RECORD_ENUM_SHIFT: u32 = 2;
 const RECORD_ENUM_MASK: u32 = 0x7 << RECORD_ENUM_SHIFT;
+/// Bits 5-6: the runtime base of this record (`shapes_runtime_base`), a
+/// code: 0 none, 1 `INCOMING_MESSAGE`, 2 `SERVER_RESPONSE`. Derived when the
+/// record is published, like the bits beside it, so a reader loads it.
+const RECORD_RUNTIME_BASE_SHIFT: u32 = 5;
+const RECORD_RUNTIME_BASE_MASK: u32 = 0x3 << RECORD_RUNTIME_BASE_SHIFT;
+const _: () = assert!(
+    RECORD_RUNTIME_BASE_MASK
+        & (RECORD_ELEMENT_KIND_MASK | RECORD_ENUM_MASK | RECORD_KEYS_NO_FUNCTION_METHODS)
+        == 0
+);
+const _: () = assert!(RECORD_RUNTIME_BASE_MASK & !RECORD_KEY_FACTS_MASK == 0);
+
+impl ShapeRecord {
+    /// The runtime base code (see [`RECORD_RUNTIME_BASE_SHIFT`]).
+    #[inline(always)]
+    pub(in crate::object) fn runtime_base_code(&self) -> u32 {
+        (self.keys_node_and_element_kind & RECORD_RUNTIME_BASE_MASK) >> RECORD_RUNTIME_BASE_SHIFT
+    }
+
+    /// Restate the runtime base code from the record's facts; `word` is the
+    /// record's own layout word.
+    pub(in crate::object) fn refresh_runtime_base(&mut self, word: crate::codegen_abi::LayoutWord) {
+        let code = super::super::shapes_runtime_base::runtime_base_code_of(self, word.0);
+        debug_assert!(code <= 2);
+        self.keys_node_and_element_kind = (self.keys_node_and_element_kind
+            & !RECORD_RUNTIME_BASE_MASK)
+            | (code << RECORD_RUNTIME_BASE_SHIFT);
+    }
+}
 
 impl ShapeRecord {
     /// E2: the enumeration bits (`key_attrs::ENUM_*`) of this record's key

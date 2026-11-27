@@ -982,7 +982,6 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         to_any: std::sync::atomic::AtomicU32::new(0),
         rollback_parent: std::sync::atomic::AtomicU32::new(0),
         created_birth_shape: std::sync::atomic::AtomicU32::new(0),
-        runtime_base: std::sync::atomic::AtomicU32::new(0),
         field_define_target: 0,
         integrity_targets: [0; 3],
         integrity_flags: 0,
