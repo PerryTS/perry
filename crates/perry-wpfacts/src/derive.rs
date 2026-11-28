@@ -5011,6 +5011,38 @@ fn lookup_holders(
     let mut out = Vec::new();
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut todo = vec![t];
+    // SYNTH1: a class's template-wide token (`Obj(C, NO_CTX)`, a mark the
+    // field-init walk makes, `gen/walk.rs`) that no lookup of the solve
+    // took as a receiver has no prototype node: it is no object of its own.
+    // As the entry guard's receiver (`class_tok`, design §11.4) it stands
+    // for every instance of exactly C, and OrdinaryGet (10.1.8.1) climbs
+    // from each of them: the walk starts at C's instance tokens. One that
+    // may own the key (a computed or named own property, a hard operation
+    // on it) or whose prototype the solve never made is refused.
+    if let TokKind::Obj(tm, NO_CTX) = m.toks[t as usize] {
+        let insts = m.site_toks.get(&tm).map_or(&[][..], |v| v.as_slice());
+        if !m.proto_node.contains_key(&t)
+            && matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. })
+            && !insts.is_empty()
+        {
+            todo.clear();
+            for &u in insts {
+                if computed(u) {
+                    return Err("a computed key may hold it".into());
+                }
+                if holds(u).is_some() {
+                    return Err("key not a definite birth field".into());
+                }
+                if let Some((k, r)) = m.hard.get(&u) {
+                    return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));
+                }
+                if !m.proto_node.contains_key(&u) {
+                    return Err("method not found on the chain".into());
+                }
+                todo.push(u);
+            }
+        }
+    }
     while let Some(h) = todo.pop() {
         // A prototype set that may hold `null` (`x.__proto__ = null`,
         // `Object.setPrototypeOf(x, null)`, `Object.create(null)`: 10.1.2.1)
