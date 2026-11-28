@@ -648,6 +648,7 @@ impl Model {
                 globs: vec![glob],
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             }));
         }
         let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
@@ -659,6 +660,7 @@ impl Model {
             globs: vec![glob],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         }))
     }
 

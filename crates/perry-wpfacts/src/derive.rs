@@ -2903,6 +2903,19 @@ fn judge(
                 verdict.get_or_insert(Verdict::OwnDataOrAbsent);
             }
         }
+        // R9READ10 with no object beside the primitives: a call on a
+        // String, Number or Boolean whose family lacks the key
+        // (`beside_prims`) reads `undefined` there (10.1.8.1) and throws
+        // calling it (13.3.6.2 EvaluateCall, 7.3.14), after its arguments,
+        // so not `Throws`; a nullish one throws in ToObject (7.1.18). Each
+        // kind is its TypeError arm, as beside an object: PerKind
+        // (count-only, no claim).
+        if s.is_call {
+            if let Ok((r, _)) = beside_prims(m, key, s.key, prim, true) {
+                receivers.extend(r);
+                verdict.get_or_insert(Verdict::PerKind);
+            }
+        }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     if born_own && chain_read {
@@ -4039,7 +4052,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// The `absent_key` walk: `t`'s prototype chain holds no `a` and ends at
 /// `%Object.prototype%`, which lacks it. `own`: `t` itself holds nothing
 /// under `a` either.
-fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
+pub(crate) fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
     let _holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];

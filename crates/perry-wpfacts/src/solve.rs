@@ -39,6 +39,7 @@ mod store;
 
 mod escape;
 mod fields;
+mod has_prop;
 mod json_pos;
 pub(crate) mod json_rt;
 mod shaped_keys;

@@ -952,7 +952,8 @@ impl Model {
             let f = self.num_fields(obj);
             self.edge(f, dst);
             if self.numeric_accessor {
-                self.accessor_walk(obj, obj, Key::any(), ChainAct::Load(dst, self.thrown));
+                let nk = Key::Any(self.number_key_shape());
+                self.accessor_walk(obj, obj, nk, ChainAct::Load(dst, self.thrown));
             }
         }
         // ToPropertyKey of `true`, `false`, `null`, `undefined` is a named key.

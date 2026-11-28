@@ -7,7 +7,7 @@ impl Model {
         match c {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
             Cons::Detached => format!("detached {n}"),
-            Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
+            Cons::HasProp { key, idx, dst } => format!("hasprop {n} {key:?} {idx} {dst}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
             Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
             Cons::Meta { op, .. } => format!("meta {n} {op:?}"),

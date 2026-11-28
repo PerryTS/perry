@@ -709,6 +709,7 @@ impl Model {
                 &Cons::HasProp {
                     key: Key::Named(a),
                     idx: NO_NODE,
+                    dst: NO_NODE,
                 },
                 p,
             );
@@ -1286,6 +1287,7 @@ impl Model {
                 Cons::HasProp {
                     key: Key::Named(a),
                     idx: NO_NODE,
+                    dst: NO_NODE,
                 },
             );
             self.cons(
@@ -1993,7 +1995,12 @@ impl Model {
                 recv,
             } => self.proxy_set(p, key, src, site, region, recv),
             // [[HasProperty]] (10.5.7): trap `has( t, key )`.
-            Cons::HasProp { key, idx } => {
+            Cons::HasProp { key, idx, dst } => {
+                // Rule R-IN: the trap's result, ToBoolean'd (10.5.7 step
+                // 9), or the target's answer: either.
+                if dst != NO_NODE {
+                    self.add_prim(dst, prim::BOOL);
+                }
                 if self.proxy_made(p, ProxyOp::Has(key, idx)) {
                     return;
                 }
@@ -2002,7 +2009,14 @@ impl Model {
                 let ret = self.node_l("proxy-has-ret");
                 self.proxy_trap(p, "has", Some(key), vec![t, k], ret);
                 self.proxy_inv(p, Some((key, idx)), true);
-                self.cons(t, Cons::HasProp { key, idx });
+                self.cons(
+                    t,
+                    Cons::HasProp {
+                        key,
+                        idx,
+                        dst: NO_NODE,
+                    },
+                );
             }
             // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
             // key )`. ToPropertyDescriptor reads the returned object's fields

@@ -48,8 +48,8 @@ impl Model {
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
             Cons::Detached => format!("Detached"),
-            Cons::HasProp { key, idx } => {
-                format!("HasProp key={:?} idx={idx}", self.packet_key(key))
+            Cons::HasProp { key, idx, dst } => {
+                format!("HasProp key={:?} idx={idx} dst={dst}", self.packet_key(key))
             }
             Cons::OwnProp { key, idx } => {
                 format!("OwnProp key={:?} idx={idx}", self.packet_key(key))

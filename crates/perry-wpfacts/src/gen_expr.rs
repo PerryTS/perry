@@ -544,6 +544,7 @@ impl<'a> Gen<'a> {
             Cons::HasProp {
                 key: Key::Named(a),
                 idx: NO_NODE,
+                dst: NO_NODE,
             },
         );
         let us = self.m.atom("@@__perry_wk_unscopables");
@@ -1385,9 +1386,12 @@ impl<'a> Gen<'a> {
                     Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
                     _ => (Key::any(), p),
                 };
-                self.m.cons(o, Cons::HasProp { key, idx });
+                // Rule R-IN: the result is what HasProperty may answer
+                // for the values of `o` (`Model::has_prop_result`).
+                let dst = self.tmp("in");
+                self.m.cons(o, Cons::HasProp { key, idx, dst });
                 self.raise_on(o);
-                self.prim_node(prim::BOOL)
+                dst
             }
             Expr::Await(x, _) => {
                 // 27.7.5.3 Await: a rejection resumes the body with a throw
