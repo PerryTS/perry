@@ -909,7 +909,14 @@ pub fn close(id: i64) -> NetResult<()> {
     with_driver(|driver| {
         NET.with(|net| {
             let mut net = net.borrow_mut();
+            // A failed attempt's `Closed` starts the next attempt, not a close.
+            let attempt = net.plans.get(&id).is_some_and(|plan| plan.retrying);
             let Some(entry) = net.entries.get_mut(&id) else {
+                // Closed already, its `NET_CLOSED` still owed to the close
+                // phase: the binding has not seen it yet.
+                if closing::owes(closing::Owner::Id(id)) {
+                    return Ok(());
+                }
                 // Nothing to close (a connect still resolving, or a second
                 // close): the connect and whatever was waiting to be written
                 // go with it, so a later lookup answer finds no plan.
@@ -918,6 +925,16 @@ pub fn close(id: i64) -> NetResult<()> {
                 return Err(not_found("close"));
             };
             if entry.closing {
+                if attempt {
+                    // The caller closes the socket a failed attempt is still
+                    // closing: its `Closed` ends the connect instead.
+                    let (handle, subsystem) = (entry.handle, entry.subsystem);
+                    net.plans.remove(&id);
+                    net.backlogs.remove(&id);
+                    if !transport::tearing_down() {
+                        closing::queue_id(id, subsystem, handle);
+                    }
+                }
                 return Ok(());
             }
             entry.closing = true;
@@ -929,9 +946,15 @@ pub fn close(id: i64) -> NetResult<()> {
                 }
             }
             census::note_submit(OP_CLOSE);
-            driver
-                .close(entry.handle, token(OP_CLOSE, id))
-                .map_err(|e| map_error(e, "close"))
+            if let Err(e) = driver.close(entry.handle, token(OP_CLOSE, id)) {
+                // No `Closed` follows a refused close: a later close retries.
+                entry.closing = false;
+                return Err(map_error(e, "close"));
+            }
+            if !attempt && !transport::tearing_down() {
+                closing::queue_id(id, entry.subsystem, entry.handle);
+            }
+            Ok(())
         })
     })
     .unwrap_or_else(|| Err(no_loop()))
@@ -1006,7 +1029,7 @@ pub(crate) fn dispatch(completion: Completion) {
         result,
         terminal,
         op: _op,
-        handle: _handle,
+        handle,
         ..
     } = completion;
 
@@ -1054,7 +1077,7 @@ pub(crate) fn dispatch(completion: Completion) {
             net.borrow()
                 .entries
                 .get(&id)
-                .is_some_and(|entry| !entry.closing && entry.pipe_eof_timer == _handle)
+                .is_some_and(|entry| !entry.closing && entry.pipe_eof_timer == handle)
         });
         if live && matches!(result, OpResult::Timer) {
             sink::emit(subsystem, NetCompletion::eof(id));
@@ -1242,8 +1265,13 @@ pub(crate) fn dispatch(completion: Completion) {
             if retrying {
                 // A failed connect attempt, not the socket the caller sees.
                 attempt_next_address(id);
-            } else {
-                sink::emit(subsystem, NetCompletion::closed(id));
+            } else if transport::tearing_down() {
+                sink::emit(subsystem, NetCompletion::closed_in_teardown(id));
+            } else if !handle
+                .is_some_and(|h| closing::mark_closed(closing::Owner::Id(id), h, false))
+            {
+                // A `Closed` no close queued still belongs to the phase.
+                closing::queue_closed(closing::Owner::Id(id), subsystem, handle, false);
             }
         }
         OpResult::Err(err) => {
@@ -1373,6 +1401,11 @@ fn attempt_next_address(id: i64) {
 fn connect_failed(id: i64, err: NodeError) -> bool {
     let retry = NET.with(|net| {
         let mut net = net.borrow_mut();
+        // A socket the caller already closed takes no next attempt: its
+        // queued close is owed this handle's `Closed`.
+        if net.entries.get(&id).is_some_and(|entry| entry.closing) {
+            return false;
+        }
         let Some(plan) = net.plans.get_mut(&id) else {
             return false;
         };
@@ -1390,7 +1423,12 @@ fn connect_failed(id: i64, err: NodeError) -> bool {
         return false;
     }
     // Release this attempt's handle first: `Closed` is what starts the next.
-    let _ = close(id);
+    if close(id).is_err() {
+        // Refused, so no `Closed` starts one: the connect fails here, and a
+        // later caller close() is a close, not this attempt's.
+        NET.with(|net| net.borrow_mut().plans.remove(&id));
+        return false;
+    }
     true
 }
 
@@ -1451,10 +1489,14 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
-    for cell in defer_eof::take_all().into_iter().chain(closing::take_all()) {
+    let (closing_cells, ready_ids) = closing::take_all();
+    for cell in defer_eof::take_all().into_iter().chain(closing_cells) {
         // SAFETY: each parked link EOF and queued Closed holds the ref that
         // pins its cell.
         unsafe { transport::release_parked_eof(cell) };
+    }
+    for (subsystem, id) in ready_ids {
+        sink::emit(subsystem, NetCompletion::closed_in_teardown(id));
     }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {

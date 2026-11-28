@@ -46,6 +46,9 @@ fn a_second_write_refuses_merged_and_preassigned_objects() {
            var P = ((P2) => { P2[P2["X"] = 0] = "X"; return P2; })(P || {});"#,
         // A namespace merging into the enum's name.
         r#"var Q = ((Q2) => { Q2[Q2["X"] = 0] = "X"; return Q2; })(Q || {}); Q++;"#,
+        // A tsc-form IIFE over a var its declarator already initialized.
+        r#"var R = ((R2) => { R2[R2["X"] = 0] = "X"; return R2; })(R || {});
+           ((R2) => { R2[R2["Y"] = 1] = "Y"; })(R || (R = {}));"#,
     ] {
         let out = sites(src);
         assert!(out.sites.is_empty(), "{src}");

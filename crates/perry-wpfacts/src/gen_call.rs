@@ -81,9 +81,19 @@ impl<'a> Gen<'a> {
                 }
                 let c = self.expr(fx, callee);
                 if let Expr::Closure { func_id, .. } = callee {
-                    // Its parameter is the literal's birth, not a call input.
+                    // Its parameter is the literal's birth, not a call input
+                    // (`foreign_params`: its result is not bound as a
+                    // returned parameter). Rule SITEW: the IIFE is still
+                    // summarized: it runs once per evaluation of the
+                    // literal, in the run of the body that evaluates it,
+                    // and the call binds its parameter to that run's
+                    // birth; its defines are ordinary stores. So the
+                    // accessors it makes close over that run's frame
+                    // (ECMA-262 13.2.5.5, 15.4.4: a literal's get/set
+                    // closures are created in the running execution
+                    // context), and what they capture stays a term of the
+                    // run instead of one node every run shares.
                     let f = self.fn_by_id(fx.module, *func_id);
-                    self.m.funcs[f as usize].no_summary = true;
                     self.m.funcs[f as usize].foreign_params = true;
                 }
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);

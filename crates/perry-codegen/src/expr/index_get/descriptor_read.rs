@@ -192,6 +192,12 @@ fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Re
         let ptr = blk.inttoptr(I64, &handle);
         let length = blk.load(I32, &ptr);
         let inside = blk.icmp_ult(I32, &i, &length);
+        // A holey Array's length may pass its store (`new Array(k)` past the
+        // dense bound): the slot exists only below the capacity too.
+        let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+        let capacity = blk.load(I32, &cap_ptr);
+        let stored = blk.icmp_ult(I32, &i, &capacity);
+        let inside = blk.and(I1, &inside, &stored);
         let go = blk.and(I1, &integral, &inside);
         blk.cond_br(&go, &load_l, &slow_l);
         i

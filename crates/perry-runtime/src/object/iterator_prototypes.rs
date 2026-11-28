@@ -439,7 +439,7 @@ fn build_iterator_prototypes() {
 /// `name`/`length` own props match the spec (`"[Symbol.iterator]"`, length 0).
 fn install_symbol_iterator(shared: *mut ObjectHeader) {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("%IteratorPrototype%[\"@@iterator\"]", constructible = true)] export crate::object::iterator_prototypes::iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
+        crate::fn_info!(#[realm("%IteratorPrototype%[\"@@iterator\"]")] export crate::object::iterator_prototypes::iterator_proto_symbol_iterator_thunk, 1; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     );
     if closure.is_null() {

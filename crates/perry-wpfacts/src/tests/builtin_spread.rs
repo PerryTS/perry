@@ -280,19 +280,24 @@ console.log(obj.len(), typeof o.a);
     assert!(proven(&call_of(&pf, "len").verdict));
 }
 
-/// Control: the realm function is handed to unknown code first, which may
-/// store a function under `cb`: the copy carries that unknown value.
+/// The value is handed to unknown code first. A realm function keeps its
+/// keys: that code (the runtime and the host, closed world, owner
+/// 2026-11-14) never writes an intrinsic (owner premise 2026-11-19), so the
+/// copy carries only what the program stored. Control: a program object (a
+/// RegExp) it may write under `cb`: the copy carries that unknown value.
 #[test]
-fn a_realm_function_handed_to_unknown_code_stays_unproven() {
-    for src in ["[].map", "/a/g"] {
+fn a_realm_function_handed_to_unknown_code_keeps_its_keys() {
+    for (src, proven) in [("[].map", true), ("/a/g", false)] {
         let source =
             format!("((x: any) => {{ new Function(process.argv[2])(x); return x; }})({src})");
-        assert!(
-            !verdicts(&source, "{ a: obj, ...src }").1,
+        assert_eq!(
+            verdicts(&source, "{ a: obj, ...src }").1,
+            proven,
             "spread of {src}"
         );
-        assert!(
-            !verdicts(&source, "Object.assign({ a: obj }, src)").1,
+        assert_eq!(
+            verdicts(&source, "Object.assign({ a: obj }, src)").1,
+            proven,
             "assign of {src}"
         );
     }

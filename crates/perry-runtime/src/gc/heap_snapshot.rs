@@ -433,6 +433,15 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
         } else {
             (0, 0)
         };
+        // A property holding a primitive has no edge, yet its key is still a
+        // name of the object's graph, as in V8's snapshot.
+        for field_index in 0..fields_len / 8 {
+            if let Some(name) = unsafe {
+                object_field_name(rec.user as *const crate::object::ObjectHeader, field_index)
+            } {
+                strings.intern(&name);
+            }
+        }
         // Element-index naming only for regular arrays — GC_TYPE_LAZY_ARRAY
         // has a different header layout, so its slots fall through to the
         // `internal` label below.

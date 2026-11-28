@@ -112,8 +112,9 @@ fn unboxed_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 }
 
 /// #7497 (CodeRabbit): shared, rooted tail for `js_async_step_chain`'s three
-/// suspend paths. Each of them crosses `build_async_step_thunks` (two closure
-/// allocations) and, on two of them, `js_promise_resolved` as well, while
+/// suspend paths. Each of them crosses `js_promise_resolved` (on two of them)
+/// and, when the Await reaction cannot hold the activation, `build_async_step_thunks`
+/// (two closure allocations), while
 /// holding the awaited promise, the two fresh thunks and `trap_next` — and
 /// `then_backpatch_result` both STORES into the thunks and RETURNS `trap_next`.
 /// `awaited_in` is the already-known awaited promise (the pending-inner path);
@@ -129,6 +130,22 @@ fn suspend_on_awaited(
     let step_h = scope.root_nanbox_f64(boxed_closure_or_undef(step));
     let trap_h = scope.root_nanbox_f64(boxed_promise_or_undef(trap_next));
     let awaited_in_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited_in));
+    let awaited = if unboxed_promise(&awaited_in_h).is_null() {
+        make_awaited()
+    } else {
+        unboxed_promise(&awaited_in_h)
+    };
+    let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
+    // Await steps 3-9: the reaction names the activation itself (see
+    // `await_reaction`); the closure pair below is for the cases it leaves out.
+    if super::await_reaction::can_attach(unboxed_promise(&awaited_h)) {
+        return super::await_reaction::suspend(
+            unboxed_closure(&step_h),
+            unboxed_promise(&trap_h),
+            box_activation,
+            unboxed_promise(&awaited_h),
+        );
+    }
     let (fulfill, reject) = build_async_step_thunks(
         unboxed_closure(&step_h),
         unboxed_promise(&trap_h),
@@ -136,12 +153,6 @@ fn suspend_on_awaited(
     );
     let fulfill_h = scope.root_nanbox_f64(boxed_closure_or_undef(fulfill));
     let reject_h = scope.root_nanbox_f64(boxed_closure_or_undef(reject));
-    let awaited = if unboxed_promise(&awaited_in_h).is_null() {
-        make_awaited()
-    } else {
-        unboxed_promise(&awaited_in_h)
-    };
-    let awaited_h = scope.root_nanbox_f64(boxed_promise_or_undef(awaited));
     then_backpatch_result(
         unboxed_promise(&awaited_h),
         unboxed_closure(&fulfill_h),

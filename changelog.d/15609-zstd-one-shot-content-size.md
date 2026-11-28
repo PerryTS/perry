@@ -1,0 +1,1 @@
+- **One-shot `zstdCompress`.** `zlib.zstdCompress` records the input's size in the frame header, so its output equals `zstdCompressSync`'s byte for byte, as in Node.

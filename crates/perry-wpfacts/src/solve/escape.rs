@@ -41,6 +41,27 @@ impl Model {
             _ => false,
         }
     }
+    /// May the code `t` escapes to (`reason`) write `t` under any key?
+    /// Code no builtin contract describes may (`writes_any`), and so may any
+    /// code holding a value no contract covers (`contracted_tok`), except an
+    /// intrinsic of the realm (a builtin function, an Object.prototype
+    /// method, a builtin namespace or constructor object): whole program
+    /// that code is the runtime and the host (closed world, owner
+    /// 2026-11-14), which never add or write a property of an intrinsic
+    /// (owner premise 2026-11-19), so its keys hold what the program stored
+    /// there (`Model::field`), nothing else. Only foreign code (per unit, an
+    /// unseen module, interpreted code) may write an intrinsic.
+    pub(crate) fn escape_writes(&self, t: Tok, reason: u32) -> bool {
+        if self.literal_shape_proto(t) {
+            return false;
+        }
+        if builtins::builtin_function(self, t)
+            || matches!(self.toks[t as usize], TokKind::Builtin(_))
+        {
+            return self.foreign_code();
+        }
+        self.writes_any(reason) || !self.contracted_tok(t)
+    }
     /// Escapes `t`, and whether that took effect: a stand-in published
     /// onward does not escape (`escape`), so only an escape that took
     /// effect is a change of a unit's contract check (DECISIONS 180).
@@ -50,7 +71,7 @@ impl Model {
             if let Some(l) = self.ledger.as_mut() {
                 l.again(t, reason, std::panic::Location::caller());
             }
-            if !self.is_escaped_writer(t) && self.writes_any(reason) {
+            if !self.is_escaped_writer(t) && self.escape_writes(t, reason) {
                 self.escape(t, reason);
             }
             return false;
@@ -84,7 +105,7 @@ impl Model {
     }
 
     fn escape_at(&mut self, t: Tok, reason: u32) {
-        if self.foreign_reason == Some(reason) {
+        if self.foreign_reason == Some(reason) || self.foreign_call_reasons.contains(&reason) {
             crate::builtins::note_foreign_holds(self);
         }
         if let Some(c) = self.cur_native_call {
@@ -238,7 +259,7 @@ impl Model {
             // Handed by contract before, now to code that may write it under
             // any key: it gets those writes, and what it reaches is held
             // by that code too (once per token).
-            if !self.is_escaped_writer(t) && self.writes_any(reason) {
+            if !self.is_escaped_writer(t) && self.escape_writes(t, reason) {
                 self.with_s(|m| m.escape_inner(t, reason, true));
             }
             return;
@@ -503,7 +524,7 @@ impl Model {
         if fresh {
             self.enum_escaped(t);
         }
-        if self.writes_any(reason) || !self.contracted_tok(t) {
+        if self.escape_writes(t, reason) {
             self.mark_writer(t, reason);
         }
     }
@@ -1273,10 +1294,7 @@ impl Model {
         // and host act on a handed value only as the builtin's contract
         // states): no write under any key, no unknown value stored. Code no
         // contract describes (`writes_any`) may write it.
-        // A literal shape's prototype is %Object.prototype% at run time
-        // (`literal_shape_proto`): no write by the code holding it.
-        let wr = (self.writes_any(reason) || !self.contracted_tok(t))
-            && !self.literal_shape_proto(t);
+        let wr = self.escape_writes(t, reason);
         if !up {
             self.virt_escape(t);
             self.note_inst(t, false);
@@ -1545,6 +1563,16 @@ impl Model {
         }
         self.arr_len_top(t);
         self.map_open(t);
+        // A delete, a definition or a `with` may remove or redefine an
+        // index: no slot of `t` stays exact (`index_slots_merge`).
+        if t != TOP
+            && matches!(
+                kind,
+                Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+            )
+        {
+            self.index_slots_merge(t);
+        }
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);

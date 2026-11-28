@@ -186,7 +186,9 @@ impl Model {
                     self.cons(len, c);
                 }
             }
-            self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
+            if self.shape_may_be_numeric(shape) {
+                self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
+            }
             self.cons(
                 idx,
                 Cons::IdxKey {
@@ -244,10 +246,7 @@ impl Model {
             if p & b == 0 {
                 continue;
             }
-            let pt = match self.with_b(|m| builtins::builtin_proto_tok(m, ns)) {
-                Some(pt) => pt,
-                None => self.tok(TokKind::ObjectProto),
-            };
+            let pt = self.with_b(|m| builtins::realm_proto_tok(m, &format!("{ns:?}")));
             self.enum_read_key(idx, pt, key, dst);
         }
     }
@@ -555,7 +554,7 @@ impl Model {
     /// every shaped computed-key store into it (`key_store_node`), now and
     /// later. A node of its own: a field node of an observed token runs no
     /// rule (`sum_skip`).
-    fn enum_key_watch(&mut self, t: Tok) -> NodeId {
+    pub(super) fn enum_key_watch(&mut self, t: Tok) -> NodeId {
         if let Some(&w) = self.enum_key_watch.get(&t) {
             return w;
         }
@@ -634,6 +633,12 @@ impl Model {
         if let Some(v) = self.enum_key_stores.get(&t).cloned() {
             for (o, src, site) in v {
                 self.enum_key_named(o, src, site, a);
+            }
+        }
+        // ENUM-DEL: a for-in delete of the global object deletes it too.
+        if let Some(v) = self.enum_key_deletes.get(&t).cloned() {
+            for reason in v {
+                self.delete_enum_named(t, a, reason);
             }
         }
     }
@@ -758,7 +763,9 @@ impl Model {
         // again here: the two keys may differ. ⊤ may be such an object.
         if !toks.is_empty() && self.idx_done.insert((n, obj, dst, IDX_OWN_ANY)) {
             self.own_read_census[2] += 1;
-            self.plain_key(obj, ChainAct::Load(dst, self.thrown));
+            if self.shape_may_be_numeric(shape) {
+                self.plain_key(obj, ChainAct::Load(dst, self.thrown));
+            }
             self.load_from(obj, obj, Key::Any(shape), dst);
         }
         let key = Key::Any(shape);

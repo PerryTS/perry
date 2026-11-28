@@ -44,6 +44,7 @@ mod bool_field_guard;
 mod booleans;
 mod bound_call_memo;
 mod bound_class;
+mod bound_proto_chain;
 mod bound_in_summary;
 mod box_chain;
 pub(crate) mod box_computed_read;
@@ -98,6 +99,7 @@ mod declared_effects;
 mod declared_getter_results;
 mod default_params;
 mod define_through_unknown;
+mod destr;
 pub(crate) mod delivery_boundaries;
 pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;
@@ -278,6 +280,7 @@ mod protocol_touch_births;
 mod proxy_get_key_instance;
 mod proxy_late_site;
 mod px1;
+mod pxtrap;
 mod quiet_sites;
 mod quiet_strings;
 mod r6defprop;
@@ -336,9 +339,11 @@ mod super_home_proto;
 mod super_key;
 mod switch_const_runs;
 mod switch_mask_union;
+mod sitew_literal_iife;
 mod switch_param_runs;
 mod sync_require;
 mod tdz_seed;
+mod text_site_runs;
 mod top_element_key;
 mod track_key;
 mod type_export;
@@ -371,6 +376,18 @@ use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
 /// comes from an undeclared global takes it from there.
 pub(super) fn unseen(src: &str) -> String {
     format!("import \"unseen-host\";\n{src}")
+}
+
+/// The path a fixture is parsed and lowered under. The module kind (module
+/// goal, strictness) of a `.ts` file comes from the nearest `package.json`
+/// above it (`perry_parser::file_is_es_module_by_format`), and a bare
+/// relative name resolves against the process cwd: a test run from a
+/// checkout whose root `package.json` says `"type": "module"` would lower
+/// every sloppy-script fixture as a module. A directory that holds no
+/// `package.json` pins the kind to CommonJS whatever the cwd. The module's
+/// key in `ProgramFacts` stays the bare `name`.
+pub(crate) fn fixture_source_path(name: &str) -> String {
+    format!("/nonexistent-perry-wpfacts-fixtures/{name}")
 }
 
 fn facts(src: &str) -> ProgramFacts {
@@ -1554,15 +1571,23 @@ mod keycall1;
 mod method_this_escape;
 mod native_parent;
 mod e11_null_parent;
+mod hraise_red;
+mod tokid_parent;
+mod vbuf_red;
+mod hubon_red;
 mod native_parent_program_class;
+mod nparg_error_args;
+mod keyset_store;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;
 mod ns_receiver;
 mod param_key_shape;
 mod pk;
+mod protokey;
 mod primitive_this;
 mod promise_capability_executor;
+mod psettle;
 mod proto_own_call;
 mod realm_read_static;
 mod regexp_results;
@@ -1671,6 +1696,7 @@ mod birth1;
 mod birth_field_own;
 mod birthdef1;
 mod bns_recv;
+mod siteb1;
 mod builtin_ctor_number_key;
 mod callregion;
 mod cliffd;
@@ -1682,6 +1708,7 @@ mod env1;
 mod et1;
 mod ev1;
 mod fn_number_key;
+mod w10_idx;
 mod forin1;
 mod getter_forms;
 mod getter_producer_slots;
@@ -1801,3 +1828,4 @@ mod w3l;
 mod whyhold1;
 mod worker_msg;
 mod worker_then;
+mod oproto_red;

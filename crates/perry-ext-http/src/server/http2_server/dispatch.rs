@@ -90,57 +90,52 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             }
             self_ref
         }
+        // Both only start the end: the session is destroyed, and emits
+        // `'close'`, when its transport has closed.
         "close" => {
             let callback = closure_arg(args.first().copied());
             let turnloop = super::turnloop_conn_of_session(handle);
-            let mut server = false;
-            if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                server = session.session_type == 0;
-                if server {
-                    // Destroyed only once its socket has closed.
-                    session.closed = true;
-                } else {
-                    session.mark_closed();
-                }
-                if callback != 0 {
-                    session.close_callbacks.push(callback);
-                    if server {
-                        // A `'close'` listener too, in registration order;
-                        // `close_callbacks` marks it one-shot.
-                        session
-                            .listeners
-                            .entry("close".into())
-                            .or_default()
-                            .push(callback);
-                    }
-                }
+            let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) else {
+                return self_ref;
+            };
+            if session.closed || session.destroyed {
+                return self_ref;
+            }
+            session.closed = true;
+            if callback != 0 {
+                // A `'close'` listener, in registration order;
+                // `close_callbacks` marks it one-shot.
+                session.close_callbacks.push(callback);
+                session
+                    .listeners
+                    .entry("close".into())
+                    .or_default()
+                    .push(callback);
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
-            // transport ends once every live stream has finished. The legacy
-            // path sent nothing at all.
-            if let Some(conn) = turnloop {
-                crate::server::turnloop_h2::control::session_close(conn);
-            }
-            if !server {
-                push_h2_event(Http2PendingEvent::ClientClose {
+            // transport ends once every live stream has finished.
+            match turnloop {
+                Some(conn) => crate::server::turnloop_h2::control::session_close(conn),
+                None => push_h2_event(Http2PendingEvent::ClientClose {
                     session_handle: handle,
-                    callback,
-                });
+                }),
             }
             self_ref
         }
         "destroy" => {
             let turnloop = super::turnloop_conn_of_session(handle);
-            if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                if session.session_type == 0 {
-                    session.mark_destroyed();
-                } else {
-                    session.mark_closed();
-                }
-            }
+            let live = get_handle_mut::<Http2SessionHandle>(handle).is_some_and(|session| {
+                let live = !session.destroyed;
+                session.mark_destroyed();
+                live
+            });
             // `destroy()` is the abrupt one: no GOAWAY, no drain.
-            if let Some(conn) = turnloop {
-                crate::server::turnloop_h2::control::session_destroy(conn);
+            match turnloop {
+                Some(conn) => crate::server::turnloop_h2::control::session_destroy(conn),
+                None if live => push_h2_event(Http2PendingEvent::ClientClose {
+                    session_handle: handle,
+                }),
+                None => {}
             }
             self_ref
         }

@@ -107,6 +107,9 @@ pub const NET_FLAG_PLAINTEXT: i32 = 8;
 /// (libuv's `uv_try_write`): Node's `req.async === false`, so the write
 /// callback runs from `process.nextTick`, as a `TickObject`.
 pub const NET_FLAG_SYNC_WRITE: i32 = 16;
+/// A `Closed` delivered during agent teardown: release the id, but run no
+/// JS, because the thread is going away.
+pub const NET_FLAG_TEARDOWN: i32 = 32;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
@@ -269,6 +272,12 @@ impl NetCompletion {
 
     pub(super) fn closed(id: i64) -> Self {
         Self::blank(NET_CLOSED, id)
+    }
+
+    pub(super) fn closed_in_teardown(id: i64) -> Self {
+        let mut c = Self::closed(id);
+        c.flags |= NET_FLAG_TEARDOWN;
+        c
     }
 
     pub(super) fn error(id: i64, user: u64, queued: usize, err: NodeError, terminal: bool) -> Self {

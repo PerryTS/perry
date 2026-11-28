@@ -149,11 +149,23 @@ thread_local! {
 /// Called from the first event-loop turn (`js_callback_timer_tick`) to stamp
 /// `nodeTiming.loopStart`. Idempotent and cheap enough for the tick path.
 pub(crate) fn note_event_loop_start() {
-    LOOP_START_MS.with(|c| {
-        if c.get() < 0.0 {
-            c.set(performance_now_ms().max(0.0));
+    let started = LOOP_START_MS.with(|c| {
+        if c.get() >= 0.0 {
+            return None;
         }
+        let now = performance_now_ms().max(0.0);
+        c.set(now);
+        Some(now)
     });
+    let Some(now) = started else {
+        return;
+    };
+    // An entry read before the loop started would keep the -1 sentinel.
+    let timing = NODE_TIMING.with(|c| c.get());
+    if timing != 0 {
+        let obj = JSValue::from_bits(timing).as_pointer::<crate::object::ObjectHeader>() as *mut _;
+        js_object_set_field(obj, 8, JSValue::number(now));
+    }
 }
 
 /// True for runtime-created performance entries, not their toJSON snapshots.

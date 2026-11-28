@@ -260,6 +260,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         Cons::IdxLoad { .. }
         | Cons::IdxOwnLoad { .. }
         | Cons::OwnGate { .. }
+        | Cons::MapEntryAt { .. }
         | Cons::EnumLoad { .. } => {
             Reject(R5Load("[computed]".into()))
         }
@@ -314,6 +315,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::StoreIndexed { .. }
         | Cons::StoreKeyed { .. }
         | Cons::DefineKeyed { .. }
+        | Cons::DeleteKeyed { .. }
         | Cons::DefineAnyKey { .. }
         | Cons::AccessorKeyed { .. } => Reject(R5Protocol("ToPropertyKey".into())),
         // Escape.
@@ -321,6 +323,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::TopIfAny { .. }
         | Cons::RequireSpec { .. }
         | Cons::Hard { .. }
+        | Cons::DeleteEnum { .. }
         | Cons::Miss { .. }
         | Cons::BoundCall { .. }
         | Cons::ShareBuffer { .. }
@@ -397,6 +400,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::ForInKeys { .. }
         | Cons::EnumKeyStore { .. }
         | Cons::EnumKeyAny { .. }
+        | Cons::DeleteEnumWhen { .. }
         | Cons::OwnValues { .. }
         | Cons::OwnKeys { .. }
         | Cons::OwnNames { .. }
@@ -448,9 +452,10 @@ fn array_use(c: &Cons, m: &Model) -> Use {
             op(named(key))
         }
         Cons::Fulfil { .. } => op("then".into()),
-        Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } | Cons::EnumLoad { .. } => {
-            op("[index]".into())
-        }
+        Cons::IdxLoad { .. }
+        | Cons::IdxOwnLoad { .. }
+        | Cons::EnumLoad { .. }
+        | Cons::MapEntryAt { .. } => op("[index]".into()),
         Cons::IndexHole | Cons::IndexHoleIn { .. } | Cons::IndexKept => {
             Use::Reject(R6Store("hole".into()))
         }
@@ -470,7 +475,8 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::TopSink { .. }
         | Cons::TopIfAny { .. }
         | Cons::RequireSpec { .. }
-        | Cons::Hard { .. } => Use::Reject(R6ArrayHolder(c.kind_name().into())),
+        | Cons::Hard { .. }
+        | Cons::DeleteEnum { .. } => Use::Reject(R6ArrayHolder(c.kind_name().into())),
         _ => op(c.kind_name().into()),
     }
 }
@@ -1974,7 +1980,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::TopSink { .. }
                 | Cons::TopIfAny { .. }
                 | Cons::RuntimeStore { .. }
-                | Cons::Hard { .. } => "retain",
+                | Cons::Hard { .. }
+                | Cons::DeleteEnum { .. } => "retain",
                 _ => "call",
             };
             return reject(use_kind);

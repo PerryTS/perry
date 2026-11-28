@@ -165,6 +165,8 @@ mod proxy_binding_tests;
 #[cfg(test)]
 mod reflect_metadata_install_tests;
 #[cfg(test)]
+mod suspending_spread_tests;
+#[cfg(test)]
 mod tests;
 mod this_field_loop_tests;
 

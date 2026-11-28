@@ -1133,57 +1133,57 @@ fn install_getter(
     install_getter(
         proto,
         "baseName",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.baseName.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::intl::locale::getter_base_name, 0; with_name("get baseName"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.baseName.<get>", effects = { returns(prim(str)) })] export crate::intl::locale::getter_base_name, 0; with_name("get baseName"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "language",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.language.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::intl::locale::getter_language, 0; with_name("get language"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.language.<get>", effects = { returns(prim(str)) })] export crate::intl::locale::getter_language, 0; with_name("get language"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "script",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.script.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_script, 0; with_name("get script"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.script.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_script, 0; with_name("get script"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "region",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.region.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_region, 0; with_name("get region"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.region.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_region, 0; with_name("get region"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "calendar",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.calendar.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_calendar, 0; with_name("get calendar"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.calendar.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_calendar, 0; with_name("get calendar"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "caseFirst",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.caseFirst.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_case_first, 0; with_name("get caseFirst"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.caseFirst.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_case_first, 0; with_name("get caseFirst"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "collation",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.collation.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_collation, 0; with_name("get collation"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.collation.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_collation, 0; with_name("get collation"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "hourCycle",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.hourCycle.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_hour_cycle, 0; with_name("get hourCycle"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.hourCycle.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_hour_cycle, 0; with_name("get hourCycle"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "numeric",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.numeric.<get>", constructible = true, effects = { returns(prim(bool)) })] export crate::intl::locale::getter_numeric, 0; with_name("get numeric"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.numeric.<get>", effects = { returns(prim(bool)) })] export crate::intl::locale::getter_numeric, 0; with_name("get numeric"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "firstDayOfWeek",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.firstDayOfWeek.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_first_day_of_week, 0; with_name("get firstDayOfWeek"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.firstDayOfWeek.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_first_day_of_week, 0; with_name("get firstDayOfWeek"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
     install_getter(
         proto,
         "numberingSystem",
-        crate::fn_info!(#[realm("Intl.Locale.prototype.numberingSystem.<get>", constructible = true, effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_numbering_system, 0; with_name("get numberingSystem"), with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.numberingSystem.<get>", effects = { returns(prim(str) | prim(undefined)) })] export crate::intl::locale::getter_numbering_system, 0; with_name("get numberingSystem"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     );
 
     set_proto_to_string_tag(proto, "Intl.Locale");

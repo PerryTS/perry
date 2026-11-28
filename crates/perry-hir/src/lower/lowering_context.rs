@@ -385,6 +385,11 @@ pub struct LoweringContext {
     /// binding name (the synthetic dedup key it receives is not the
     /// user-visible name). Consumed (taken) at the start of lowering.
     pub(crate) pending_class_inner_name: Option<String>,
+    /// Inner-name bindings of the classes lexically enclosing the class being
+    /// lowered, outermost first: (inner name, class key, scope depth). A
+    /// nested class's heritage and body still see an enclosing class's own
+    /// name, exactly like any other binding of that enclosing class scope.
+    pub(crate) enclosing_class_inner_names: Vec<(String, String, Option<usize>)>,
     /// Active lexical self-bindings for named class expressions that can be
     /// evaluated more than once. The source name is deliberately separate
     /// from the compiler-private local so the binding remains visible only

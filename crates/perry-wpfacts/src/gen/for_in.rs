@@ -555,6 +555,16 @@ impl<'a> Gen<'a> {
         })
     }
 
+    /// ENUM-DEL: `object[index]` of `delete object[index]` names the subject
+    /// of the innermost for-in whose key `index` reads, a never-written
+    /// local (ENUM1, `EnumSubject::Local`): `for (k in s) delete s[k]`. The
+    /// key is then one of the String keys the for-in yields for the very
+    /// object `s` holds (ECMA-262 14.7.5.9, 14.7.5.10).
+    pub(crate) fn enum_delete_subject(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
+        matches!(self.enum_subjects(mi, index).last(),
+            Some(EnumSubject::Local(src)) if matches!(object, Expr::LocalGet(l) if l == src))
+    }
+
     /// F-A: the gate of `object[index]` when it is the read of an enclosing
     /// for-in's path subject (`EnumSubject::Path`).
     pub(crate) fn enum_gate(&self, mi: u32, object: &Expr, index: &Expr) -> Option<NodeId> {

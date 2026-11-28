@@ -172,9 +172,19 @@ impl<'a> Gen<'a> {
                 self.m.edge(it, fa);
                 n
             }
-            Expr::MapEntryKeyAt { map, idx }
-            | Expr::MapEntryValueAt { map, idx }
-            | Expr::SetValueAt { set: map, idx } => {
+            // Rule MAP-KV: a typed Map's `[k, v]` for-of reads the key and
+            // the value of each entry apart (`Cons::MapEntryAt`); `undefined`
+            // for a value that is no collection.
+            Expr::MapEntryKeyAt { map, idx } | Expr::MapEntryValueAt { map, idx } => {
+                let value = matches!(e, Expr::MapEntryValueAt { .. });
+                let m = self.expr(fx, map);
+                let _ = self.expr(fx, idx);
+                let out = self.tmp("map-entry");
+                self.m.cons(m, Cons::MapEntryAt { value, dst: out });
+                self.m.add_prim(out, prim::UNDEF);
+                out
+            }
+            Expr::SetValueAt { set: map, idx } => {
                 // The for-of index walk over a typed Map or Set (HIR
                 // `lower_decl/body_stmt.rs`): the runtime reads the
                 // collection's own entry list at a live index
@@ -190,10 +200,21 @@ impl<'a> Gen<'a> {
                 out
             }
             Expr::MapEntries(x) => {
+                // Rule MAP-KV: each entry of the materialized Map is
+                // CreateArrayFromList(« key, value ») (ECMA-262 24.1.5.1):
+                // index 0 the key, index 1 the value (`Cons::MapEntryAt`),
+                // each its own slot (`Model::index_slot`).
                 let m = self.expr(fx, x);
-                let ek = self.m.elem_key();
-                let el = self.load(m, ek);
-                let pair = self.new_arr_from(mi, "entry", &[el]);
+                let tm = self.new_arr_birth(mi, "entry", false, false);
+                self.m.ordinary_arrays.insert(tm);
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                for (i, value) in [(0, false), (1, true)] {
+                    let part = self.tmp("map-entry");
+                    self.m.cons(m, Cons::MapEntryAt { value, dst: part });
+                    let s = self.m.index_slot(t, i);
+                    self.m.edge(part, s);
+                }
+                let pair = self.tok_node(t);
                 self.new_arr_from(mi, "entries", &[pair])
             }
             Expr::MapKeys(x) | Expr::MapValues(x) | Expr::SetValues(x) => {

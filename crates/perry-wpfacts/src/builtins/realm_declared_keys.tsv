@@ -258,6 +258,7 @@ accessor	Object.prototype	__proto__	Object.prototype.__proto__.<get>	Object.prot
 accessor	Performance	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	Performance	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	Performance	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
+accessor	Performance.prototype	nodeTiming	Performance.prototype.nodeTiming.<get>
 accessor	Performance.prototype	timeOrigin	Performance.prototype.timeOrigin.<get>
 accessor	PerformanceEntry	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	PerformanceEntry	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
@@ -869,6 +870,30 @@ accessor	process.stderr	__proto__	Object.prototype.__proto__.<get>	Object.protot
 accessor	process.stdin	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	process.stdout	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	process.versions	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+enum	%Global%	Performance
+enum	%Global%	PerformanceEntry
+enum	%Global%	PerformanceMark
+enum	%Global%	PerformanceMeasure
+enum	%Global%	PerformanceObserver
+enum	%Global%	PerformanceObserverEntryList
+enum	%Global%	PerformanceResourceTiming
+enum	%Global%	atob
+enum	%Global%	btoa
+enum	%Global%	clearImmediate
+enum	%Global%	clearInterval
+enum	%Global%	clearTimeout
+enum	%Global%	crypto
+enum	%Global%	fetch
+enum	%Global%	global
+enum	%Global%	localStorage
+enum	%Global%	navigator
+enum	%Global%	performance
+enum	%Global%	queueMicrotask
+enum	%Global%	sessionStorage
+enum	%Global%	setImmediate
+enum	%Global%	setInterval
+enum	%Global%	setTimeout
+enum	%Global%	structuredClone
 getter-this	%TypedArray%	@@species	%TypedArray%["@@species"].<get>
 getter-this	Array	@@species	Array["@@species"].<get>
 getter-this	ArrayBuffer	@@species	ArrayBuffer["@@species"].<get>
@@ -2713,7 +2738,6 @@ native	Proxy	revocable	Proxy.revocable
 native	Proxy	toLocaleString	Object.prototype.toLocaleString
 native	Proxy	toString	Function.prototype.toString
 native	Proxy	valueOf	Object.prototype.valueOf
-native	Proxy.prototype	constructor	Proxy
 native	RangeError	@@hasInstance	Function.prototype["@@hasInstance"]
 native	RangeError	__defineGetter__	Object.prototype.__defineGetter__
 native	RangeError	__defineSetter__	Object.prototype.__defineSetter__
@@ -10613,7 +10637,6 @@ ns	Promise	try
 ns	Promise	withResolvers
 ns	Proxy	length
 ns	Proxy	name
-ns	Proxy	prototype
 ns	Proxy	revocable
 ns	RangeError	length
 ns	RangeError	name

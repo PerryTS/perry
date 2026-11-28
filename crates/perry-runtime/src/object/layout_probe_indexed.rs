@@ -19,11 +19,12 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         return if SITE {
             site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
         } else {
-            absent_from::<ABSENT>(
+            own_miss::<ABSENT>(
                 dir,
                 obj,
                 key_bits,
                 site_key_hash::<LAZY_HASH>(key_bits, hash),
+                r as *mut ShapeRecord,
             )
         };
     }
@@ -92,11 +93,12 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
             return if SITE {
                 site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
             } else {
-                absent_from::<ABSENT>(
+                own_miss::<ABSENT>(
                     dir,
                     obj,
                     key_bits,
                     site_key_hash::<LAZY_HASH>(key_bits, hash),
+                    r,
                 )
             };
         }

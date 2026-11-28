@@ -137,6 +137,24 @@ impl Model {
                     self.index_kept(t);
                 }
             }
+            Cons::MapEntryAt { value, dst } => {
+                let ek = self.elem_key();
+                for &t in toks {
+                    self.prov_tok(pv, t);
+                    if self.keyed_collection(t) {
+                        let part = match value {
+                            true => self.map_vals(t),
+                            false => self.map_keys(t),
+                        };
+                        self.edge(part, dst);
+                    } else {
+                        self.load_from(t, t, ek, dst);
+                    }
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, ek, dst));
+                }
+            }
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {
@@ -999,6 +1017,8 @@ impl Model {
                         self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
+                    } else if builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_key(t, key);
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -1362,7 +1382,8 @@ impl Model {
                     // collapsed token also holds stores onto add-open
                     // prototypes, which this receiver's chain never sees.
                     if let Key::Named(a) = key {
-                        if matches!(self.toks[q as usize], TokKind::ObjectProto)
+                        let ql = builtins::chain_link(self, of, q);
+                        if matches!(self.toks[ql as usize], TokKind::ObjectProto)
                             && builtins::locked_chain_read(self, of, a)
                         {
                             self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
@@ -1392,6 +1413,19 @@ impl Model {
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
+                    } else if builtins::chain_link(self, of, q) != q {
+                        // Rule OPROTO (M1): `q` is a link of `of`'s birth
+                        // chain, read above as the collapsed chain read
+                        // (`chain_link`), which stands for the builtin
+                        // members of every link up to `Object.prototype`:
+                        // the links above add the program's stores there.
+                        for p in builtins::born_links_above(self, q) {
+                            let f = match key {
+                                Key::Named(a) => self.field_r(p, a),
+                                Key::Any(_) => self.key_fields(p, key),
+                            };
+                            self.edge(f, dst);
+                        }
                     } else {
                         let up = self.cv_up(q, key, builtin);
                         self.edge(up, dst);
@@ -1433,8 +1467,13 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(..)
                     ) {
+                        // The method found on `q` runs in its native frame,
+                        // as its dispatch does (`Model::native_frame`).
+                        let native = builtins::proto_native(self, q, key);
                         self.with_native(call, |m, call| {
-                            builtins::proto_method(m, q, origin, key, call)
+                            m.native_frame(call, native, |m| {
+                                builtins::proto_method(m, q, origin, key, call)
+                            })
                         });
                     }
                 }
@@ -1506,8 +1545,26 @@ impl Model {
                 // the class's [[Prototype]] runs as itself.
                 let native = crate::builtins::native_parent_value(self, class);
                 for &parent in toks {
+                    // The value is the realm constructor of a summarized
+                    // native parent (`builtins::native_parent_of`) reached
+                    // without a name link: a member heritage (`extends
+                    // globalThis.Error`) evaluates the same value a bare name
+                    // does (ECMA-262 9.1.1.2.6 GetBindingValue of the global
+                    // object record is [[Get]] on the global object), so
+                    // `super()` runs the same native summary. A name-linked
+                    // class ran it already (`Cons::SuperCtor`).
+                    let summarized = match native {
+                        None => crate::builtins::native_parent_of(self, parent),
+                        Some(_) => None,
+                    };
                     match self.toks[parent as usize] {
                         _ if Some(parent) == native => {}
+                        _ if summarized.is_some() => {
+                            let name = summarized.expect("guarded");
+                            self.with_native(call, |m, call| {
+                                crate::builtins::native_parent_ctor_named(m, name, call, origin)
+                            });
+                        }
                         TokKind::ClassObj(tm) => {
                             // Record the link before the parent's stores
                             // reach the instance (§17.2 item 2).
@@ -1632,20 +1689,45 @@ impl Model {
                     }
                 }
             }
+            // The Annex B rules run `Object.prototype`'s native for the
+            // program call `call`, as its dispatch does (`call_tok`): in that
+            // native's frame (`Model::native_frame`).
             Cons::AnnexBDefine { call, setter } => {
+                let name = if setter {
+                    "__defineSetter__"
+                } else {
+                    "__defineGetter__"
+                };
+                let (op, a) = (self.tok(TokKind::ObjectProto), self.atom(name));
+                let native = builtins::proto_native(self, op, Key::Named(a));
                 for &t in toks {
-                    self.with_native(call, |m, call| builtins::annexb_define(m, t, call, setter));
+                    self.with_native(call, |m, call| {
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_define(m, t, call, setter)
+                        })
+                    });
                 }
             }
             Cons::AnnexBLookup { call, setter } => {
+                let name = if setter {
+                    "__lookupSetter__"
+                } else {
+                    "__lookupGetter__"
+                };
+                let (op, a) = (self.tok(TokKind::ObjectProto), self.atom(name));
+                let native = builtins::proto_native(self, op, Key::Named(a));
                 for &t in toks {
                     self.with_native(call, |m, call| {
-                        builtins::annexb_lookup(m, Some(t), call, setter)
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_lookup(m, Some(t), call, setter)
+                        })
                     });
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
                     self.with_native(call, |m, call| {
-                        builtins::annexb_lookup_prim(m, prim, call, setter)
+                        m.native_frame(call, native, |m| {
+                            builtins::annexb_lookup_prim(m, prim, call, setter)
+                        })
                     });
                 }
             }
@@ -2080,6 +2162,25 @@ impl Model {
                         .insert((n, q, dst, crate::model::IDX_ENUM_CHAIN))
                     {
                         self.accessor_walk(of, q, key, ChainAct::Load(dst, self.thrown));
+                        // Rule OPROTO (M1): past an intrinsic prototype
+                        // `from` was born with, the collapsed chain read
+                        // (`Model::collapsed_end`) stands for the builtin
+                        // members of every link up to `Object.prototype`;
+                        // those links add what the program put there.
+                        if !matches!(self.toks[q as usize], TokKind::ObjectProto)
+                            && self.collapsed_end(from, q)
+                        {
+                            for p in builtins::born_links_above(self, q) {
+                                if !self.enum_kept(p) {
+                                    self.load_from(of, p, key, dst);
+                                    continue;
+                                }
+                                self.enum_file(p, EnumFiled::Chain { of, key, dst });
+                                self.enum_fields(of, p, key, dst);
+                                self.accessor_walk(of, p, key, ChainAct::Load(dst, self.thrown));
+                            }
+                            continue;
+                        }
                         let up = self.proto_node(q);
                         let link = Cons::EnumChain {
                             key,
@@ -2087,21 +2188,10 @@ impl Model {
                             of,
                             from: q,
                         };
-                        // SKINROOT27: one prototype level per queue entry, not
-                        // per Rust frame group (55k levels overflowed r8).
-                        if self.chain_active {
-                            self.chain_defer = true;
-                            self.cons(up, link);
-                        } else {
-                            self.chain_active = true;
-                            self.cons(up, link);
-                            while let Some((n2, c2, i2)) = self.chain_q.pop() {
-                                if !self.aborted {
-                                    self.replay_cons(n2, c2, i2);
-                                }
-                            }
-                            self.chain_active = false;
-                        }
+                        // SKINROOT27: one prototype level per replay queue
+                        // entry (`Model::replay_q`), not per Rust frame group
+                        // (55k levels overflowed r8).
+                        self.cons(up, link);
                     }
                 }
             }
@@ -2274,6 +2364,18 @@ impl Model {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
                             self.load_from(origin, obj, Key::Any(shape), dst);
                         }
+                        // P-PROTOKEY: a reflective own key beside other
+                        // values (a Symbol of `Reflect.ownKeys`) reads
+                        // under its shape too: a class's `prototype`.
+                        if named
+                            && self.key_may_be_reflective(n)
+                            && self
+                                .idx_done
+                                .insert((n, obj, dst, crate::model::IDX_REFL_KEY))
+                        {
+                            let s = self.any_string_shape();
+                            self.load_from(origin, obj, Key::Any(s), dst);
+                        }
                     }
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
@@ -2371,7 +2473,9 @@ impl Model {
                             let own = self.key_fields(t, Key::Any(shape));
                             self.bind_via(own, call, t);
                         }
-                        self.plain_key(t, ChainAct::Call(call));
+                        if self.shape_may_be_numeric(shape) {
+                            self.plain_key(t, ChainAct::Call(call));
+                        }
                         self.cons(
                             idx,
                             Cons::IdxKeyCall {
@@ -2450,7 +2554,7 @@ impl Model {
                 // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
                 // ForIn/OfHeadEvaluation step 6.a).
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.for_in_every_key(call, ft);
+                    self.for_in_every_key(call, ft, list == crate::model::KeyList::OwnNames);
                 }
                 for &t in toks {
                     self.for_in_tok(call, ft, t, list);
@@ -2507,6 +2611,30 @@ impl Model {
                     }
                 }
             }
+            Cons::DeleteKeyed {
+                o,
+                reason,
+                enum_subject,
+            } => self.delete_keyed(n, o, reason, enum_subject),
+            Cons::DeleteEnum { reason } => {
+                for &t in toks {
+                    if t != TOP && builtins::global_object(self, t) && !self.unit_mode {
+                        self.delete_global_enum(t, reason);
+                    } else {
+                        self.mark_hard(t, Hard::E7Delete, reason);
+                    }
+                }
+            }
+            Cons::DeleteEnumWhen { t, key, reason } => {
+                if !toks.is_empty() || prim != 0 {
+                    match key {
+                        Some(a) => self.delete_global_key(t, a),
+                        None => {
+                            self.mark_hard(t, Hard::E7Delete, reason);
+                        }
+                    }
+                }
+            }
             Cons::StoreKeyed {
                 o,
                 src,
@@ -2518,12 +2646,12 @@ impl Model {
                 // for-in run over the keys `for_in_keys` lists,
                 // `for_in_named_run`) is one of them: a named store per
                 // constant, made as constants arrive. A key that turns any
-                // String later takes the rule below.
-                let (kp, ks) = (self.nodes[n as usize].prim, self.nodes[n as usize].strs);
-                if !self.key_nodes.contains_key(&n)
-                    && kp == prim::STR
-                    && ks >= crate::model::STRS_SET0
-                {
+                // String later takes the rule below, and so does one holding
+                // a solver spelling (`const_str_key`): the any-String entry
+                // of a reflective key (`reflective_key_strs`) names every
+                // key, not the one its spelling is.
+                let ks = self.nodes[n as usize].strs;
+                if !self.key_nodes.contains_key(&n) && self.const_str_key(n) {
                     for i in 0..self.str_atoms(ks).len() {
                         let a = self.str_atoms(ks)[i];
                         if self.keyed_named.insert((n, src, a)) {

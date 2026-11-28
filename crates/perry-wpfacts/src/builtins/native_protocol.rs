@@ -35,6 +35,12 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
 /// has no built-in parent or its holder declares none under that name.
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
     let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    declared_parent_ctor(m, &module, &name)
+}
+
+/// The value of the constructor holder `module` (`builtin`: the global
+/// object) declares under `name`.
+fn declared_parent_ctor(m: &mut Model, module: &str, name: &str) -> Option<Tok> {
     let ns = if module == "builtin" {
         BuiltinNs::GlobalThis
     } else {
@@ -42,11 +48,30 @@ pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
         m.tok(TokKind::Builtin(ns));
         ns
     };
-    let identity = m.namespace_property(ns, &name)?.native?;
+    let identity = m.namespace_property(ns, name)?.native?;
     Some(m.tok(TokKind::BuiltinFn(Native::Member {
         identity,
         holder: None,
     })))
+}
+
+/// The summarized native parent (`native_parent_summarized`) whose declared
+/// constructor `t` is, by token identity: `t` is the value
+/// `declared_parent_ctor` gives for the holder and name the token names (a
+/// realm namespace constructor: `Error` of the global object; a module
+/// export: `node:events.EventEmitter`). However the program reached it
+/// (`Error`, `globalThis.Error`, `events.EventEmitter`), it is one value.
+pub fn native_parent_of(m: &mut Model, t: Tok) -> Option<&'static str> {
+    let (module, name): (&'static str, &'static str) = match m.toks[t as usize] {
+        TokKind::Builtin(ns) => ("builtin", super::loads::proto_family(ns)?.2),
+        TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        }) => identity.rsplit_once('.').unwrap_or(("builtin", identity)),
+        _ => return None,
+    };
+    (native_parent_summarized(name) && declared_parent_ctor(m, module, name) == Some(t))
+        .then_some(name)
 }
 
 /// `super(...)` into a native parent.
@@ -56,16 +81,27 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         .as_ref()
         .map(|(_, c)| c.clone())
         .unwrap_or_default();
-    if !native_parent_summarized(&name) {
+    native_parent_ctor_named(m, &name, call, inst)
+}
+
+/// `super(...)` into the realm constructor of native parent `name`.
+pub fn native_parent_ctor_named(m: &mut Model, name: &str, call: CallId, inst: Tok) {
+    if !native_parent_summarized(name) {
         let r = m.reason(&format!("E21 native parent {name} without a summary"));
         m.mark_hard(inst, Hard::E21NativeParent, r);
         m.escape(inst, r);
         unknown_method(m, call, "E21 native parent constructor argument");
         return;
     }
-    implicit_args(m, call, "native parent constructor argument", Protocol::Any);
+    let error_family = error_family_parent(name);
+    if !error_family {
+        implicit_args(m, call, "native parent constructor argument", Protocol::Any);
+    }
     let site = m.anon_birth_site(&format!("{name} constructor"));
-    for k in native_parent_keys(&name) {
+    if error_family {
+        error_parent_args(m, call, inst, site);
+    }
+    for k in native_parent_keys(name) {
         let a = m.atom(k);
         let v = m.node_l("native-key");
         if k.starts_with('_') {
@@ -87,6 +123,84 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
             },
         );
     }
+}
+
+/// Is the summarized native parent named by the argument the realm's Error family: the global object's
+/// `Error` or one of its NativeErrors, as the realm namespaces declare them
+/// (`ns_by_name`: `BuiltinNs::Error` / `BuiltinNs::NativeError`, the
+/// identities the runtime's `init_error_family_receiver` initializes)?
+fn error_family_parent(name: &str) -> bool {
+    matches!(
+        ns_by_name(name),
+        Some(BuiltinNs::Error | BuiltinNs::NativeError(_))
+    )
+}
+
+/// Rule NPARG: `super(message, options, ...)` into an Error-family parent
+/// acts on its arguments only per the constructor's contract (ECMA-262
+/// 20.5.1.1 Error / 20.5.6.1.1 NativeError, 20.5.8.1 InstallErrorCause; the
+/// runtime's `js_error_subclass_default_init_with_options`, `message` =
+/// `js_jsvalue_to_string(arg0)`, and `js_error_apply_cause_to_object`, a
+/// [[Get]] of `cause` on a pointer `arg1` whose result, when not undefined,
+/// is the instance's own `cause`):
+/// - `message`: ToString (Protocol::ToPrimitive: a program `toString`,
+///   `valueOf` or `@@toPrimitive` runs with `this` = the message, nothing
+///   else of it is read or called);
+/// - `options`: one [[Get]] of `cause` (an accessor or a Proxy `get` trap
+///   runs), stored on the instance under `cause`;
+/// - later arguments: never read.
+/// A call the spread view did not reach (`reach_spread_args` off) still
+/// holds its spread arrays: each element may stand at either position.
+fn error_parent_args(m: &mut Model, call: CallId, inst: Tok, site: SiteId) {
+    let c = m.calls[call as usize].clone();
+    let mut message: Vec<NodeId> = c.arg(0).copied().into_iter().collect();
+    let mut options: Vec<NodeId> = c.arg(1).copied().into_iter().collect();
+    if !c.spread.is_empty() && !m.reach_spread_args {
+        let ek = m.elem_key();
+        for &s in &c.spread {
+            let e = m.node_l("error-arg-spread");
+            m.cons(s, Cons::Load { key: ek, dst: e });
+            message.push(e);
+            options.push(e);
+        }
+    }
+    let r = m.reason("Error message ToString");
+    for &a in &message {
+        m.why_implicit(a, r, call);
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+                region: m.thrown,
+            },
+        );
+    }
+    if options.is_empty() {
+        return;
+    }
+    let ca = m.atom("cause");
+    let cause = m.node_l("error-cause");
+    for &o in &options {
+        m.cons(
+            o,
+            Cons::Load {
+                key: Key::Named(ca),
+                dst: cause,
+            },
+        );
+    }
+    let n = m.node_l("inst");
+    m.add_tok(n, inst);
+    m.cons(
+        n,
+        Cons::Store {
+            key: Key::Named(ca),
+            src: cause,
+            site,
+            region: m.thrown,
+        },
+    );
 }
 
 /// The own keys of a summarized native parent's prototypes below
@@ -297,6 +411,22 @@ fn written_by(
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
     let stored = |t: Tok| stored_key(t, a);
+    // DEL-KEY: a named delete of the global object (`delete g.name`,
+    // `Model::delete_global_key`) is no program store: its key's field holds
+    // no `undefined`, so the entry counts as a write that only deletes,
+    // for the writers `counts` takes such a write for.
+    let gone_counts = counts(&crate::model::NativeWrite {
+        reason: 0,
+        accessor: false,
+        getters: Vec::new(),
+        setters: Vec::new(),
+        opaque: false,
+        stored: Vec::new(),
+        absent: true,
+    });
+    let gone = |t: Tok, k: Option<Atom>| {
+        gone_counts && m.native_writes.get(&(t, k)).is_some_and(|w| w.absent)
+    };
     // A computed read of the global object takes the field of each named
     // key it may spell (`global_shaped_read`, `global_shaped_replay`): a
     // named program store it may name is one of those fields, not a write
@@ -310,6 +440,12 @@ fn written_by(
     let hit = |t: Tok| {
         has(t, None)
             || (has(t, Some(a)) && !stored(t))
+            || (stored(t) && gone(t, Some(a)))
+            || (any
+                && gone_counts
+                && m.native_writes
+                    .range((t, None)..=(t, Some(Atom::MAX)))
+                    .any(|(&(_, k), x)| x.absent && field_named(t, k)))
             || num.is_some_and(|n| has(t, Some(n)))
             || (any && any_on(t, &|k| !field_named(t, k)))
             || (num_read && any_on(t, &|k| k.is_some_and(|k| m.numeric_atom(k))))
@@ -738,6 +874,10 @@ fn note_write(
     // A global read only deletes reached stays parked
     // (`global_maybe_deleted`): this entry's first stored value replays it.
     let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
+    // A parked global read (`NativeMiss::Global`) the entry's stored values
+    // reached took no `undefined`: its first delete replays it (a delete
+    // made after the read, ECMA-262 10.1.10, is one of its writers too).
+    let first_absent = matches!(value, WriteValue::Absent) && !w.absent;
     match value {
         WriteValue::Opaque => w.opaque = true,
         WriteValue::Value(n) => {
@@ -757,6 +897,11 @@ fn note_write(
             fns.push(f);
         }
     }
+    // ENUM-DEL: a write of a global object a for-in delete reaches
+    // (`Model::delete_global_enum`) makes its key one the for-in may yield.
+    if !matches!(value, WriteValue::Absent) {
+        m.enum_delete_written(t, k);
+    }
     if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
         replay_native_by(m, Some((t, k)));
         return;
@@ -768,7 +913,7 @@ fn note_write(
     // `note_handed_to_unknown`), never on the other entries. Lookups parked
     // unwritten change only when the entry is new.
     feed_answered(m, (t, k), value);
-    if fresh || first_value {
+    if fresh || first_value || first_absent {
         replay_pending(m, Some((t, k)));
     }
 }
@@ -1688,7 +1833,83 @@ fn global_any_link(m: &mut Model, r: GlobalAnyRead, dst: NodeId) {
     for f in hits {
         m.edge(f, dst);
     }
+    if let Some(f) = m.global_num_field {
+        if global_num_hits(m, &r) {
+            m.edge(f, dst);
+        }
+    }
     m.global_any_reads.push((r, dst));
+}
+
+/// Rule W10-IDX: may a global read `r` name a property a Number key names
+/// (ECMA-262 7.1.19: ToString of a Number, a canonical numeric String)?
+fn global_num_hits(m: &Model, r: &GlobalAnyRead) -> bool {
+    match r {
+        GlobalAnyRead::All => true,
+        GlobalAnyRead::Name(n) => global_num_name(n),
+        GlobalAnyRead::Shape(k) => m.key_may_name_str(Key::Any(*k), crate::model::ELEM),
+    }
+}
+
+/// Rule W10-IDX: `n` is a name a Number key can be: a canonical numeric
+/// String, or the model's own names of a Number key (the element key, the
+/// numeric range, a Number-or-BigInt key).
+fn global_num_name(n: &str) -> bool {
+    crate::solve::numeric_key(n)
+        || matches!(n, crate::model::ELEM | crate::model::NUM_KEY | crate::model::DIGITS)
+}
+
+/// Rule W10-IDX: the global object's field under Number keys (an element
+/// key, a Number-valued computed key: an Array.prototype method's index
+/// [[Set]] on the global object, `globalThis[i] = v`), made by the first
+/// store under such a key. The reads whose key can spell a canonical
+/// numeric String read it (`global_num_hits`, a Number-key read's
+/// `num_fields`; those made before it too), never a read of a global
+/// binding whose name is no such String.
+pub fn global_num_field(m: &mut Model) -> NodeId {
+    if let Some(f) = m.global_num_field {
+        return f;
+    }
+    let f = m.node_l("global-number-key");
+    m.global_num_field = Some(f);
+    // A Number-key read of the global object reads its `num_fields`.
+    let nums: Vec<NodeId> = m
+        .num_fields
+        .iter()
+        .filter(|&(&t, _)| super::global_object(m, t))
+        .map(|(_, &n)| n)
+        .collect();
+    for n in nums {
+        m.edge(f, n);
+    }
+    let reads: Vec<NodeId> = m
+        .global_any_reads
+        .iter()
+        .filter(|(r, _)| global_num_hits(m, r))
+        .map(|(_, d)| *d)
+        .collect();
+    for d in reads {
+        m.edge(f, d);
+    }
+    let news: Vec<CallId> = m
+        .global_any_news
+        .iter()
+        .filter(|(n, _)| global_num_name(n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in news {
+        m.cons(f, Cons::New { call });
+    }
+    let calls: Vec<CallId> = m
+        .runtime_global_calls
+        .iter()
+        .filter(|(n, _)| global_num_name(n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in calls {
+        m.cons(f, Cons::Call { call });
+    }
+    f
 }
 
 /// G2: a read of global binding `n` (bare name, `globalThis.n`, a module
@@ -1724,6 +1945,9 @@ pub fn global_any_new(m: &mut Model, name: &str, call: CallId) {
         .map(|(_, f)| *f)
         .collect();
     for f in hits {
+        m.cons(f, Cons::New { call });
+    }
+    if let Some(f) = m.global_num_field.filter(|_| global_num_name(name)) {
         m.cons(f, Cons::New { call });
     }
     m.global_any_news.push((name.to_string(), call));
@@ -1786,6 +2010,9 @@ pub fn runtime_global_call(m: &mut Model, name: &str, call: CallId) {
         .map(|(_, f)| *f)
         .collect();
     for f in hits {
+        m.cons(f, Cons::Call { call });
+    }
+    if let Some(f) = m.global_num_field.filter(|_| global_num_name(name)) {
         m.cons(f, Cons::Call { call });
     }
     m.runtime_global_calls.push((name.to_string(), call));

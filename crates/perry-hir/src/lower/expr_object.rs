@@ -1350,11 +1350,14 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // HIR builder. No hidden home object is needed, so allocating and
         // calling an IIFE merely to build the fresh literal is redundant.
         // Check every op: computed definitions that name their value,
-        // accessors and prototype setters retain the complete builder above.
+        // accessors and prototype setters retain the complete builder above,
+        // as does a literal that suspends: `ObjectSpread` is one expression,
+        // so a hoisted `yield`/`await` would run before its earlier parts.
         // A computed data definition is a `Computed` part: its key is
         // evaluated and converted (ToPropertyKey) before its value.
         let can_emit_spread_object = has_spread
             && !computed_names_value
+            && !super::expr_assign::suspends(obj)
             && ops.iter().all(|op| match op {
                 SpreadOp::Set {
                     key: Expr::String(_),

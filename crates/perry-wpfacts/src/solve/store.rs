@@ -236,6 +236,176 @@ impl Model {
         Some(self.key_nodes.get(&n).copied())
     }
 
+    /// DEL-KEY (`Cons::DeleteKeyed` on key node `n`): `delete o[k]` deletes
+    /// the one own property ToPropertyKey(k) names (ECMA-262 13.5.1.2 ->
+    /// 10.1.10 OrdinaryDelete). A for-in run's one key (`key_nodes`) and a
+    /// key that holds finitely many String constants only (`const_str_keys`;
+    /// ToPropertyKey of a String is that String, 7.1.19) delete each by name
+    /// (`Cons::DeleteKey`, as `delete o.name`), made as constants arrive. Any
+    /// other key (an unbounded String, a Number, a Symbol, an object whose
+    /// ToPropertyKey runs code, a key-shape entry) may name any key: E7 HARD
+    /// on `o`, once. The node only grows: the named deletes made before stay.
+    ///
+    /// ENUM-DEL: in `for (k in s) delete s[k]` (`enum_subject`) such a key is
+    /// one the for-in yields for the object deleted from: `Cons::DeleteEnum`
+    /// on `o` decides per object.
+    pub(super) fn delete_keyed(&mut self, n: NodeId, o: NodeId, reason: u32, enum_subject: bool) {
+        if let Some(&a) = self.key_nodes.get(&n) {
+            if self.delete_keyed.insert((n, o, a)) {
+                self.cons(o, Cons::DeleteKey { key: a, reason });
+            }
+            return;
+        }
+        let kn = &self.nodes[n as usize];
+        if kn.prim == 0 && kn.pts.is_empty() {
+            return;
+        }
+        let named = self.const_str_keys(n).filter(|ks| {
+            ks.iter()
+                .all(|&a| !self.atom_is_mark(a) && self.atoms[a as usize] != crate::STAR_KEY)
+        });
+        match named {
+            Some(ks) => {
+                for a in ks {
+                    if self.delete_keyed.insert((n, o, a)) {
+                        self.cons(o, Cons::DeleteKey { key: a, reason });
+                    }
+                }
+            }
+            None if enum_subject => {
+                if self.keyed_done.insert((n, o, 5)) {
+                    self.cons(o, Cons::DeleteEnum { reason });
+                }
+            }
+            None => {
+                if self.keyed_done.insert((n, o, 4)) {
+                    self.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E7Delete,
+                            reason,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// ENUM-DEL (`Cons::DeleteEnum`): `delete g[k]` with `k` a key a for-in
+    /// over the global object `t` yields (ECMA-262 14.7.5.9: its enumerable
+    /// own String keys; an inherited key names no own property of `t`, or
+    /// one the own property shadows). Those are: the keys the realm installs
+    /// enumerable (`builtins::global_enumerable_keys`, derived from the
+    /// runtime's realm declaration; the other realm globals are
+    /// non-enumerable, clause 17), every key the program wrote on `t` (a field
+    /// that holds a value, now and as fields appear, `enum_key_gained`), its
+    /// numeric keys, and, once `t` is written under a key no name lists
+    /// (`enum_key_watch`, a store into ⊤ there), any key
+    /// (`Cons::DeleteEnumWhen`). Each named one is the named delete
+    /// (`delete_global_key`); the realm's non-enumerable bindings stay.
+    pub(super) fn delete_global_enum(&mut self, t: Tok, reason: u32) {
+        let v = self.enum_key_deletes.entry(t).or_default();
+        if v.contains(&reason) {
+            return;
+        }
+        v.push(reason);
+        for k in builtins::global_enumerable_keys() {
+            let a = self.atom(k);
+            self.delete_global_key(t, a);
+        }
+        let num = self.atom(crate::model::NUM_KEY);
+        self.delete_global_key(t, num);
+        let star = self.atom(crate::STAR_KEY);
+        if self
+            .accessor_keys
+            .get(&t)
+            .is_some_and(|ks| ks.contains(&star))
+        {
+            self.mark_hard(t, Hard::E7Delete, reason);
+        }
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if self.nodes[self.fields[&(t, a)] as usize].enum_key {
+                self.delete_enum_named(t, a, reason);
+            }
+        }
+        // A key a writer other than a program store wrote (a realm binding's
+        // [[Set]] or definition, an accessor installed): `enum_delete_written`.
+        let written: Vec<Option<Atom>> = self
+            .native_writes
+            .range((t, None)..=(t, Some(Atom::MAX)))
+            .filter(|(_, w)| {
+                w.opaque || w.accessor || !w.stored.is_empty() || !w.getters.is_empty() || !w.setters.is_empty()
+            })
+            .map(|(&(_, k), _)| k)
+            .collect();
+        for k in written {
+            self.enum_delete_written(t, k);
+        }
+        let w = self.enum_key_watch(t);
+        self.cons(w, Cons::DeleteEnumWhen { t, key: None, reason });
+        if !self.enum_obj(t) {
+            let w = self.node_l("enum-delete-top-written");
+            builtins::enum_top_written_any(self, t, w);
+            self.cons(w, Cons::DeleteEnumWhen { t, key: None, reason });
+        }
+    }
+
+    /// ENUM-DEL: field `a` of global object `t` (made by a store, a data
+    /// definition or a read, `builtins::global_field`): once it holds a
+    /// value the program wrote `a` there, a key a for-in over `t` may
+    /// yield, and the for-in delete of `t` (`delete_global_enum`) deletes
+    /// it (`Cons::DeleteEnumWhen`). A read alone leaves the field empty: a
+    /// realm binding only read stays.
+    pub(super) fn delete_enum_named(&mut self, t: Tok, a: Atom, reason: u32) {
+        if !self.enum_string_key(a) || !self.enum_delete_watched.insert((t, a, reason)) {
+            return;
+        }
+        let key = (self.atoms[a as usize] != crate::STAR_KEY).then_some(a);
+        let f = self.fields[&(t, a)];
+        self.cons(f, Cons::DeleteEnumWhen { t, key, reason });
+    }
+
+    /// ENUM-DEL: a native write (`builtins::note_write`: not a delete) of
+    /// global object `t` under `k`: if a for-in delete reaches `t`
+    /// (`delete_global_enum`), `k` is a key the for-in may yield: the named
+    /// delete of it, or under a key no name lists the E7 delete under any key.
+    pub(crate) fn enum_delete_written(&mut self, t: Tok, k: Option<Atom>) {
+        let Some(&reason) = self.enum_key_deletes.get(&t).and_then(|v| v.first()) else {
+            return;
+        };
+        match k {
+            Some(a) if self.atoms[a as usize] != crate::STAR_KEY => {
+                if self.enum_string_key(a) {
+                    self.delete_global_key(t, a);
+                }
+            }
+            _ => {
+                self.mark_hard(t, Hard::E7Delete, reason);
+            }
+        }
+    }
+
+    /// DEL-KEY: `delete g.name` on the global object, whole program. The
+    /// global object is an ordinary object whose own properties are the
+    /// global bindings (ECMA-262 9.1.1.4); OrdinaryDelete (10.1.10) removes
+    /// that one property, stores no value, runs no code and hands the
+    /// object nowhere. A read of the binding may find it absent: a native
+    /// write of that key alone that only deletes (`global_maybe_deleted`:
+    /// `undefined` beside its values). No other key is written: no any-key
+    /// write, no HARD mark, as the named define there (`Cons::DefineKey`).
+    /// Its enumerable reads may go on to the chain (B-del, `enum_lose`).
+    pub(super) fn delete_global_key(&mut self, t: Tok, key: Atom) {
+        self.enum_lose(t);
+        self.virt_revoke(t, Some(key));
+        crate::builtins::note_native_data_write(
+            self,
+            t,
+            Some(Key::Named(key)),
+            "E7 delete",
+            crate::builtins::WriteValue::Absent,
+        );
+    }
+
     /// A store into a published method's receiver marker is a store into
     /// an instance of this unit as well: the marker stands for instances of
     /// the classes the method is published with (DECISIONS 59), and this
@@ -589,8 +759,10 @@ impl Model {
         // never names `__proto__`; a key whose known strings do keeps the
         // path below.
         // A Number key (`num_only`: an element or digits key) names an
-        // index property of the global object (ToString, 7.1.19): a String
-        // key no global binding read names, the same field.
+        // index property of the global object (ToString, 7.1.19): a
+        // canonical numeric String, which no global binding read names
+        // unless its name is one (rule W10-IDX: its own field,
+        // `global_num_field`, never the any-String field).
         if let Key::Any(shape) = key {
             if (shape != 0 || num_only)
                 && !theirs
@@ -599,9 +771,13 @@ impl Model {
                 && builtins::global_object(self, t)
                 && !self.key_names_known_str(key, "__proto__")
             {
-                let ga = builtins::global_any_field(self, shape);
+                let (ga, replay) = if num_only {
+                    (builtins::global_num_field(self), self.elem_key())
+                } else {
+                    (builtins::global_any_field(self, shape), key)
+                };
                 self.edge(src, ga);
-                self.global_any_stores.push((t, key, src, site));
+                self.global_any_stores.push((t, replay, src, site));
                 return;
             }
         }

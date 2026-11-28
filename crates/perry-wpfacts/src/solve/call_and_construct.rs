@@ -20,6 +20,32 @@ impl Model {
     }
 
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
+    /// Run `f` as the native `native` dispatched at `call`: a value it hands
+    /// to unknown code may run there, throwing into the call's region
+    /// (`Model::cur_native_call`); a STOP report names the native.
+    pub(crate) fn native_frame<R>(
+        &mut self,
+        call: CallId,
+        native: Option<Tok>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.cur_native_call.replace(call);
+        let pushed = native.is_some_and(|t| {
+            self.stop_top
+                .as_mut()
+                .map(|s| s.natives.push((call, t)))
+                .is_some()
+        });
+        let r = f(self);
+        if pushed {
+            if let Some(s) = self.stop_top.as_mut() {
+                s.natives.pop();
+            }
+        }
+        self.cur_native_call = prev;
+        r
+    }
+
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         // MATHB1B: the generic-arm call of a namespace pair does not bind
         // the original member: the pair's intrinsic arm is that call
@@ -92,15 +118,7 @@ impl Model {
         } else {
             call
         };
-        let prev = self.cur_native_call.replace(call);
-        if let Some(s) = self.stop_top.as_mut() {
-            s.natives.push((call, t));
-        }
-        let native = self.native_call(call, t, this_tok);
-        if let Some(s) = self.stop_top.as_mut() {
-            s.natives.pop();
-        }
-        self.cur_native_call = prev;
+        let native = self.native_frame(call, Some(t), |m| m.native_call(call, t, this_tok));
         if native {
             return;
         }
@@ -370,7 +388,15 @@ impl Model {
             self.top_calls += 1;
         }
         let foreign = self.foreign_calls.contains(&call) || (t == TOP && self.foreign_fn_value);
-        let r = if foreign {
+        let r = if foreign && t == TOP && self.diagnostic.is_some() {
+            // ROOTS2: the escape names its call, as below for a call of ⊤
+            // that is not foreign code: the unknown callee decides.
+            let r = self.reason(&format!(
+                "passed to foreign code (a declared extern) [call {call}]"
+            ));
+            self.foreign_call_reasons.insert(r);
+            r
+        } else if foreign {
             match self.foreign_reason {
                 Some(r) => r,
                 None => {
@@ -739,11 +765,17 @@ impl Model {
             return v;
         }
         let c = self.calls[call as usize].clone();
-        let elems = self.node_l("spread-view-elems");
-        for &s in &c.spread {
-            let key = self.elem_key();
-            self.cons(s, Cons::Load { key, dst: elems });
-        }
+        let elems = match c.spread[..] {
+            [s] => self.spread_elems_of(s),
+            _ => {
+                let elems = self.node_l("spread-view-elems");
+                for &s in &c.spread {
+                    let e = self.spread_elems_of(s);
+                    self.edge(e, elems);
+                }
+                elems
+            }
+        };
         let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
         let n = c.args.len().max(fixed + 1);
         let mut args = Vec::with_capacity(n);
@@ -777,6 +809,34 @@ impl Model {
         self.spread_view.insert(call, v);
         self.spread_view.insert(v, v);
         v
+    }
+
+    /// The elements of spread source `s` (a Load of the any-index key):
+    /// one node per source, whichever call or model reads them. Every
+    /// reader only reads it, so a solver-made call per callee or per
+    /// receiver token adds no new load to `s`. Generation in an inert body
+    /// (D2) makes its own: its load waits for the body's activation, and a
+    /// reader outside it must not wait with it.
+    pub(crate) fn spread_elems_of(&mut self, s: NodeId) -> NodeId {
+        #[cfg(test)]
+        let packet = self.packet_scope.is_some();
+        #[cfg(not(test))]
+        let packet = false;
+        // A summary packet records the load as its own operation.
+        if packet || self.gen_inert(self.cur_fn) {
+            let e = self.node_l("spread-elems");
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: e });
+            return e;
+        }
+        if let Some(&e) = self.spread_elems.get(&s) {
+            return e;
+        }
+        let e = self.node_l("spread-elems");
+        let key = self.elem_key();
+        self.cons(s, Cons::Load { key, dst: e });
+        self.spread_elems.insert(s, e);
+        e
     }
 
     pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {

@@ -98,7 +98,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // The getter, holding FastBuffer in capture slot 0.
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Buffer[\"@@species\"].<get>", capture = [ref("%BufferSpeciesConstructor%")], constructible = true)] export crate::object::native_module::callable_exports::buffer_species::buffer_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Buffer[\"@@species\"].<get>", capture = [ref("%BufferSpeciesConstructor%")])] export crate::object::native_module::callable_exports::buffer_species::buffer_species_getter_thunk, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         1,
     );
     if getter.is_null() {

@@ -51,13 +51,14 @@ pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
     global_any_field, global_any_names, global_any_new, global_def_field, global_field,
-    global_user_key, global_user_method, global_value_written, is_builtin_module,
+    global_num_field, global_user_key, global_user_method, global_value_written, is_builtin_module,
     native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
-    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
-    note_global_holder, note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
-    note_realm_held, program_global_fn, require_parts, runtime_global_call, settle_native_given,
-    GlobalAnyRead, WriteValue,
+    native_parent_ctor_named, native_parent_keys, native_parent_of, native_parent_summarized,
+    native_parent_value, native_proto, native_writers_why, native_written, native_written_by,
+    note_foreign_holds, note_global_holder, note_global_in_top, note_handed_to_unknown,
+    note_native_accessor, note_native_data_write, note_native_write, note_realm_held,
+    program_global_fn, require_parts, runtime_global_call, settle_native_given, GlobalAnyRead,
+    WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
@@ -1492,6 +1493,11 @@ pub(crate) fn proto_read_final(m: &Model, what: &str, a: Atom) -> bool {
 /// collapsed token may stand for an add-open prototype (`%TypedArray%`,
 /// `Error.prototype`), not `Object.prototype`.
 pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
+    // A bound value's chain is its root target's (`bound_root`); its own
+    // keys (`name`, `length`, what the program stored) are the caller's.
+    if let TokKind::Bound(b) = m.toks[t as usize] {
+        return locked_chain_read(m, m.bound_root[b as usize], a);
+    }
     if matches!(m.toks[t as usize], TokKind::NativeProto(..)) {
         return false;
     }
@@ -1565,6 +1571,9 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
 /// native member is found, never the chain end's `undefined`
 /// (`Promise.prototype.then` on a promise).
 pub(crate) fn locked_chain_defines(m: &Model, t: Tok, a: Atom) -> bool {
+    if let TokKind::Bound(b) = m.toks[t as usize] {
+        return locked_chain_defines(m, m.bound_root[b as usize], a);
+    }
     if !locked_chain_read(m, t, a) {
         return false;
     }
@@ -2217,10 +2226,8 @@ fn undescribed_member(m: &mut Model, dst: NodeId) {
     m.add_prim(dst, prim::ALL);
 }
 
-/// A read on `ObjectProto` itself, not through a chain (`Function.prototype
-/// .call`, `String.prototype.replace`): it stands for every builtin
-/// prototype, the undescribed ones included, so any key but `constructor`
-/// (`tok_load`) may name a builtin function or a primitive member.
+/// A read on `ObjectProto` itself, not through a chain: the methods of
+/// `Object.prototype` no builtin prototype overrides (`ProtoOwn`).
 pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
     if m.is_constructor_key(key) {
         return;
@@ -2238,8 +2245,9 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
             return;
         }
     }
-    anyfall("undescribed intrinsic prototype member", &"intrinsic", &key);
-    undescribed_member(m, dst);
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only, whose
+    // declared own keys `tok_load` reads; every other prototype is a token
+    // of its own with its own (realm or opaque) read.
 }
 
 mod loads;
@@ -2443,6 +2451,8 @@ pub(crate) fn own_values_filled(what: &str) -> bool {
 
 fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
+        // A bound value's chain is its root target's (`bound_root`).
+        TokKind::Bound(b) => seed_family(m, m.bound_root[*b as usize]),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
             _ if m.virt_protos.contains_key(&t) => None,
@@ -2456,7 +2466,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
                 .then_some(Family::Object)
         }
         TokKind::NativeProto(..) => Some(Family::Object),
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => Some(Family::Function),
+        TokKind::Func(_, _) | TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)
@@ -2466,25 +2476,251 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     }
 }
 
-/// The builtin whose prototype object is the `ObjectProto` the chain of
-/// `t` starts with (`proto_node` seeds it; `seed_family`'s kinds): an
-/// array's `Array`, a site builtin object's own builtin, a function's
-/// `Function`; a typed array prototype's goes on to `%TypedArray%.prototype`,
-/// which the one `TypedArray` prototype stands for. `None`: the chain's
-/// prototypes are values or a class's, or `t` is no builtin receiver.
 /// Is program function `f` born with `%Function.prototype%` as its
 /// `[[Prototype]]` (the prototype-kind predicate,
 /// `perry_hir::fn_proto::FnProtoKind::Function`)? Not an async, generator
 /// or async-generator function (`%AsyncFunction.prototype%` & co.), and not
 /// a generator's step closure, which stands for the generator object
 /// (`FuncInfo::gen_step`).
+/// Rule OPROTO: the realm-table name of the intrinsic prototype a builtin
+/// made object `t` is born with where its chain seed (`Model::proto_node`)
+/// holds `ObjectProto` in that prototype's place: an array, Map, Set or
+/// String iterator's (ECMA-262 23.1.5.1 CreateArrayIterator, 24.1.5.1,
+/// 24.2.6.1, 22.1.5.1), and the `prototype` object a generator function is
+/// created with (27.3.4.3, 27.4.4.3: `%GeneratorPrototype%`,
+/// `%AsyncGeneratorPrototype%`). `ObjectProto` is %Object.prototype% only,
+/// so its value is not this prototype's.
+fn born_realm_proto(m: &Model, t: Tok) -> Option<&'static str> {
+    use perry_hir::fn_proto::FnProtoKind as K;
+    match &m.toks[t as usize] {
+        TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what, .. } if *what == members::ARRAY_ITERATOR => {
+                Some("%ArrayIteratorPrototype%")
+            }
+            TmplKind::BObj { what, .. } => members::image_locked_prototype(what)
+                .map(|(name, _)| name)
+                .filter(|name| name.starts_with('%')),
+            _ => None,
+        },
+        TokKind::Proto(tm) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::FnInst { func } => match m.funcs[*func as usize].proto {
+                Some(K::Generator) => Some("%GeneratorPrototype%"),
+                Some(K::AsyncGenerator) => Some("%AsyncGeneratorPrototype%"),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub(crate) fn born_with_function_proto(m: &Model, f: FnIdx) -> bool {
     let fi = &m.funcs[f as usize];
     fi.proto == Some(perry_hir::fn_proto::FnProtoKind::Function) && !fi.gen_step()
 }
 
+/// Rule OPROTO (M1): the [[Prototype]] a builtin-made receiver `t` is born
+/// with, as the exact token of that prototype object (a function's
+/// `Function.prototype`, an array's `Array.prototype`, a builtin object's
+/// its builtin's or its realm declaration's), which `proto_node` seeds its
+/// chain with; that token's own chain is the realm's (`Object.prototype`).
+/// `None`: the receiver's chain starts at %Object.prototype% itself
+/// (`ObjectProto`), or at a prototype the model does not describe, which
+/// keeps the family read of its kind (`seed_family`).
+pub(crate) fn intrinsic_proto_seeds(m: &mut Model, t: Tok) -> Vec<Tok> {
+    if let Some(name) = born_realm_proto(m, t) {
+        return vec![loads::realm_proto_tok(m, name)];
+    }
+    if any_iterator(m, t) {
+        // An iterator of unknown kind is one of the realm's iterators: its
+        // prototype is one the realm declares to inherit %IteratorPrototype%
+        // (ECMA-262 27.1.2: every built-in iterator prototype does).
+        let names: Vec<&'static str> = crate::native_effects::realm()
+            .iter()
+            .filter(|e| {
+                e.kind == perry_hir::realm_manifest::RealmKind::Prototype
+                    && e.proto == Some("%IteratorPrototype%")
+            })
+            .map(|e| e.name)
+            .collect();
+        return names.into_iter().map(|n| loads::realm_proto_tok(m, n)).collect();
+    }
+    intrinsic_proto_seed(m, t).into_iter().collect()
+}
+
+/// Is `t` an iterator a builtin made whose kind the model does not know
+/// (`members::ANY_ITERATOR`)?
+fn any_iterator(m: &Model, t: Tok) -> bool {
+    match &m.toks[t as usize] {
+        TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => false,
+        TokKind::Obj(tm, _) => matches!(
+            &m.tmpls[*tm as usize].kind,
+            TmplKind::BObj { what, .. } if *what == members::ANY_ITERATOR
+        ),
+        _ => false,
+    }
+}
+
+/// Rule OPROTO (M1): the [[Prototype]] the realm declares for intrinsic
+/// prototype `p` (`NativeProto` with a realm `Prototype` declaration): its
+/// token, `Ok(None)` for null; `Err(())` where the realm declares none.
+pub(crate) fn declared_proto(m: &mut Model, p: Tok) -> Result<Option<Tok>, ()> {
+    let TokKind::NativeProto(n, _) = &m.toks[p as usize] else {
+        return Err(());
+    };
+    let e = match n.starts_with('%') {
+        true => members::realm_entry(n),
+        false => members::realm_entry(&format!("{n}.prototype")),
+    };
+    match e.filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype) {
+        Some(e) => Ok(e.proto.map(|q| loads::realm_proto_tok(m, q))),
+        None => Err(()),
+    }
+}
+
+/// Rule OPROTO (M1): is `q` one of the intrinsic prototypes `t` is born
+/// inheriting from (its seeds, `intrinsic_proto_seeds`, and up their
+/// declared chains, `declared_proto`, short of `Object.prototype`), or of a
+/// generator object's? A lookup on `t` at such a link reads what the
+/// collapsed chain read there (`chain_link`).
+fn born_chain_link(m: &mut Model, t: Tok, q: Tok) -> bool {
+    let op = m.tok(TokKind::ObjectProto);
+    let mut todo = match &m.toks[t as usize] {
+        TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => {
+            let name = match m.funcs[*f as usize].gen_async {
+                true => "%AsyncGeneratorPrototype%",
+                false => "%GeneratorPrototype%",
+            };
+            vec![loads::realm_proto_tok(m, name)]
+        }
+        _ => birth_links(m, t),
+    };
+    let mut seen = Vec::new();
+    while let Some(p) = todo.pop() {
+        if p == q {
+            return true;
+        }
+        if p == op || seen.contains(&p) {
+            continue;
+        }
+        seen.push(p);
+        todo.extend(birth_links(m, p));
+    }
+    false
+}
+
+/// The intrinsic prototypes `t`'s chain was seeded with at its birth
+/// (`Model::birth_protos`, filled where `Model::proto_node` seeds it; for
+/// an intrinsic prototype whose chain was not made yet, its declared
+/// [[Prototype]]).
+fn birth_links(m: &mut Model, t: Tok) -> Vec<Tok> {
+    if let Some(v) = m.birth_protos.get(&t) {
+        return v.clone();
+    }
+    match m.toks[t as usize] {
+        TokKind::NativeProto(..) if !m.proto_node.contains_key(&t) => {
+            declared_proto(m, t).ok().flatten().into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Rule OPROTO (M1): the links above born link `q` (`chain_link`), up its
+/// declared chain as `Model::proto_node` seeds it (`declared_proto`; a
+/// prototype the realm declares none for reaches `Object.prototype`), to
+/// `Object.prototype` or a null [[Prototype]]. The collapsed read at `q`
+/// stands for the builtin members of all of them, as `ObjectProto` did
+/// before the chain was exact; above `q` a lookup adds only what the
+/// program stored on them.
+pub(crate) fn born_links_above(m: &mut Model, q: Tok) -> Vec<Tok> {
+    let op = m.tok(TokKind::ObjectProto);
+    let mut out = Vec::new();
+    let mut p = q;
+    while p != op {
+        let up = match declared_proto(m, p) {
+            Ok(Some(u)) => u,
+            Ok(None) => break,
+            Err(()) => op,
+        };
+        if up == q || out.contains(&up) {
+            break;
+        }
+        out.push(up);
+        p = up;
+    }
+    out
+}
+
+/// Rule OPROTO (M1): the token a lookup of `t` reads at chain link `q`. A
+/// builtin-made receiver's chain holds its exact intrinsic prototypes; its
+/// own dispatch models their members (`function_method`, the family's
+/// methods), and a member read there is its family's chain read
+/// (`seed_family`): `ObjectProto` with `t` as origin, as before the chain
+/// was exact. Any other link reads as itself.
+pub(crate) fn chain_link(m: &mut Model, t: Tok, q: Tok) -> Tok {
+    if matches!(m.toks[q as usize], TokKind::NativeProto(..))
+        && (born_chain_link(m, t, q) || link_born_on_chain(m, t, q))
+    {
+        return m.tok(TokKind::ObjectProto);
+    }
+    q
+}
+
+/// Rule OPROTO (M1): is `q` a birth link (`born_chain_link`) of a link of
+/// `t`'s chain (`Model::cp`, as the solve knows it): a class's parent class
+/// object, a builtin function given as a prototype? Where the chain was
+/// collapsed that position held `ObjectProto`, read with `t` as origin.
+fn link_born_on_chain(m: &mut Model, t: Tok, q: Tok) -> bool {
+    let Some(&cp) = m.cp_nodes.get(&t) else {
+        return false;
+    };
+    let links = m.nodes[cp as usize].pts.to_sorted();
+    links
+        .into_iter()
+        .any(|p| p != q && p != crate::model::TOP && born_chain_link(m, p, q))
+}
+
+fn intrinsic_proto_seed(m: &mut Model, t: Tok) -> Option<Tok> {
+    let (fam, what) = match &m.toks[t as usize] {
+        TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => return None,
+        // An async, generator or async-generator function is born with
+        // another intrinsic prototype (`born_with_function_proto`).
+        TokKind::Func(f, _) if !born_with_function_proto(m, *f) => return None,
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) | TokKind::ClassObj(_) => {
+            (Family::Function, None)
+        }
+        TokKind::Builtin(ns) => (members::ns_chain(*ns), None),
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Arr { .. } => (Family::Array, None),
+            TmplKind::BObj { what, .. } => (members::bobj_family(what), Some(*what)),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    loads::family_proto_tok(m, fam, what)
+}
+
+/// The root target of `t` when it is a bound value, else `t`: the function
+/// value whose [[Prototype]] BoundFunctionCreate gave it (ECMA-262 10.4.1.3
+/// step 1: `target.[[GetPrototypeOf]]()`, through every bound target). The
+/// chain of a bound value is its root's, past the root's own keys.
+pub(crate) fn bound_root(m: &Model, t: Tok) -> Tok {
+    match m.toks[t as usize] {
+        TokKind::Bound(b) => m.bound_root[b as usize],
+        _ => t,
+    }
+}
+
+/// The builtin whose prototype object is the `ObjectProto` the chain of
+/// `t` starts with (`proto_node` seeds it; `seed_family`'s kinds): an
+/// array's `Array`, a site builtin object's own builtin, a function's
+/// `Function` (a bound value's: its root target's); a typed array prototype's goes on to `%TypedArray%.prototype`,
+/// which the one `TypedArray` prototype stands for. `None`: the chain's
+/// prototypes are values or a class's, or `t` is no builtin receiver.
 pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
     match &m.toks[t as usize] {
+        TokKind::Bound(b) => chain_ns(m, m.bound_root[*b as usize]),
         TokKind::Obj(_, _) if m.virt_protos.contains_key(&t) => None,
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => Some(BuiltinNs::Array),
@@ -2495,9 +2731,7 @@ pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
             TmplKind::BObj { what, .. } => ns_by_name(what),
             _ => None,
         },
-        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => {
-            Some(BuiltinNs::Function)
-        }
+        TokKind::Func(_, _) | TokKind::BuiltinFn(_) => Some(BuiltinNs::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
             (tm.parent.is_none() && tm.parent_value.is_none()).then_some(BuiltinNs::Function)
@@ -2556,6 +2790,20 @@ pub(crate) fn enum_free_fn(identity: &str) -> bool {
 /// `process`, the global object, `require`, a module's exports: their
 /// members are enumerable), not the Error constructors (V8's own
 /// `Error.stackTraceLimit` is enumerable).
+/// ENUM-DEL: the keys the realm installs on the global object enumerable
+/// (`enum` rows of `realm_declared_keys.tsv`, generated from the runtime's
+/// realm declaration: `fetch`, `setTimeout`, `global`, ...). Every other
+/// global the realm installs is non-enumerable ({[[Enumerable]]: false},
+/// ECMA-262 17), so a for-in over the global object never yields it.
+pub(crate) fn global_enumerable_keys() -> impl Iterator<Item = &'static str> {
+    realm_declared::DECLARED.lines().filter_map(|line| {
+        let mut row = line.split('\t');
+        (row.next()? == "enum" && row.next()? == "%Global%")
+            .then(|| row.next())
+            .flatten()
+    })
+}
+
 pub(crate) fn enum_free_ns(ns: BuiltinNs) -> bool {
     use BuiltinNs::*;
     matches!(
@@ -2644,16 +2892,18 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     // model does not describe is that and a native prototype of its own
     // (`loads::family_proto_value`), so its reads stay apart from
     // `Object.prototype`'s.
+    // Rule OPROTO: `ObjectProto` is %Object.prototype% only; a builtin the
+    // model does not describe has its own prototype token (the realm's
+    // declaration of it, else an opaque one), never `ObjectProto`.
     match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => m.add_tok(dst, p),
         None => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
-            if let Some(ns) = ns.filter(|ns| *ns != BuiltinNs::Object) {
-                let name = format!("{ns:?}.prototype");
-                let p = native_proto(m, &name);
-                m.add_tok(dst, p);
-            }
+            let p = match ns {
+                Some(BuiltinNs::Object) => m.tok(TokKind::ObjectProto),
+                Some(ns) => native_proto(m, &format!("{ns:?}")),
+                None => native_proto(m, "%UnknownPrototype%"),
+            };
+            m.add_tok(dst, p);
         }
     }
 }
@@ -2891,7 +3141,7 @@ pub(crate) use accessor_lookup::{
     realm_accessor_call,
 };
 pub use methods::*;
-pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
+pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define, proto_native};
 /// Whether the generated global object declares a callable under this key.
 /// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
 /// (`members::box_chain`), as `Gen::json_value` models them, whose fields
@@ -3457,6 +3707,76 @@ pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -
         _ => false,
     };
     own && !native_written(m, t, a)
+}
+
+/// SITEB1: key `a` read off the global object `t` (`globalThis`, or the
+/// HIR's global sentinel a bare global name is read off: 9.1.1.4.6
+/// GetBindingValue of the global environment's object record, [[Get]] of
+/// the global object) is an own data property the realm gives the global
+/// object (`%Global%`'s declared own keys, ECMA-262 19.1-19.4: `Math`,
+/// `Map`, `console`, ...; not an accessor such as `localStorage`), and no
+/// write the solve sees reached the key on any global-object token or on ⊤:
+/// every [[Set]] (`globalThis.N = v`, a sloppy or strict `N = v`, a computed
+/// store whose key may be `N`), [[DefineOwnProperty]], [[Delete]] and a
+/// global object handed to unknown code record one in `native_writes`
+/// (as `derive::namespace_callee`'s "global binding not replaced"), and
+/// no program store left a value in a global-object field under the key or
+/// under any key. Then
+/// 10.1.8.1 OrdinaryGet finds that own property, the realm's value. No
+/// namespace object is a lock holder, so interpreted code or an unseen
+/// module, which may write any global, refuse. Whole-program solves only.
+pub(crate) fn global_declared_unwritten(m: &Model, t: Tok, a: Atom) -> bool {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    if m.unit_mode
+        || m.interp_runs
+        || m.unseen_module_runs
+        || m.is_private_atom(a)
+        || !global_object(m, t)
+    {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    let data = members::realm_entry("%Global%").is_some_and(|e| {
+        e.own.iter().any(|p| {
+            !p.symbol && p.key == name && !matches!(p.value, RealmOwnValue::Accessor { .. })
+        })
+    });
+    let written = |w: Tok| {
+        m.native_writes.contains_key(&(w, None)) || m.native_writes.contains_key(&(w, Some(a)))
+    };
+    // A program store onto the global object (a named store, a computed
+    // one whose key may be `a`) puts its value in the global's field, not
+    // in `native_writes` (`native_protocol::written_by`, `stored_key`).
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let stored = [BuiltinNs::GlobalThis, BuiltinNs::Other].into_iter().any(|ns| {
+        m.tok_index.get(&TokKind::Builtin(ns)).is_some_and(|&g| {
+            !empty(m.fields.get(&(g, a))) || !empty(m.field_any.get(&g))
+        })
+    });
+    // A program store onto the global object under a String key the solve
+    // cannot name (`globalThis[k] = v`, a computed-key define) takes the
+    // global's any-key field of its key shape (`global_any_field`), which a
+    // read of binding `a` takes when the shape can spell `a`
+    // (`global_any_read`): the same test makes it a write of `a`. A
+    // Number-key store (an index property, 7.1.19) shares the shape-0
+    // field here; under W10-IDX it has its own field (`global_num_field`),
+    // which no realm-declared name reads, so the test stays the same.
+    let any_stored = m
+        .global_any_fields
+        .iter()
+        .any(|&(s, f)| m.key_may_name_str(Key::Any(s), name) && !empty(Some(&f)));
+    data && !stored
+        && !any_stored
+        && !written(TOP)
+        && !m
+            .native_writes
+            .keys()
+            .any(|&(w, k)| w != TOP && global_object(m, w) && k.is_none_or(|k| k == a))
 }
 
 /// R9READ9: named key `a` is absent on builtin function value `t` and its
@@ -4532,16 +4852,27 @@ fn ns_method_inner(
                 ("all", true, Some(a)) if promise_all_index() => m.lit_elems_at(call, a),
                 _ => None,
             };
-            let settled = m.node_l("settled");
+            // 27.2.4.1-5: the settle functions of a run are born with its
+            // result promise: internal fields of the promise.
+            let settled = {
+                let a = effects::internal_atom(m, "PromiseAllSettled");
+                m.field(p, a)
+            };
             // R-JOBTHROW: an item's rejection goes where the combinator
             // sends it (27.2.4.1.2 / .2.2 / .3.1 / .5.1): `all` and `race`
             // reject their promise with it, `allSettled` records it, `any`
             // collects it into the AggregateError's errors; never the
             // shared thrown cell.
-            let item_rej = m.node_l("item-reason");
+            let item_rej = {
+                let a = effects::internal_atom(m, "PromiseAllItemReason");
+                m.field(p, a)
+            };
             if let Some(els) = lit {
                 for (i, e) in els.into_iter().enumerate() {
-                    let s = m.node_l("settled");
+                    let s = {
+                        let a = effects::internal_atom(m, &format!("PromiseAllSettled{i}"));
+                        m.field(p, a)
+                    };
                     adopt_r(m, call, e, s, item_rej);
                     m.edge(s, settled);
                     let slot = m.index_slot(arr, i as u32);
@@ -4596,7 +4927,10 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             let pb = site_tmpl(m, call, "arraybox");
             let fa = m.field_any(pb);
-            m.add_prim(fa, prim::STR | prim::SYMBOL);
+            // P-PROTOKEY: its Strings are reflective keys.
+            m.add_prim(fa, prim::SYMBOL);
+            let set = m.reflective_key_strs();
+            m.add_s(fa, &[], prim::STR, set);
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Reflect, "has") => {

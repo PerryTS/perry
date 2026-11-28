@@ -320,8 +320,15 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
+                // The method found on `start` runs in its native frame, as
+                // the dispatch of the value `bind_via` hands the call does
+                // (`Model::native_frame`): whichever of the two runs first,
+                // what it hands to unknown code raises into the call's region.
+                let native = builtins::proto_native(self, start, key);
                 self.with_native(call, |m, call| {
-                    builtins::proto_method(m, start, origin, key, call)
+                    m.native_frame(call, native, |m| {
+                        builtins::proto_method(m, start, origin, key, call)
+                    })
                 });
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);
