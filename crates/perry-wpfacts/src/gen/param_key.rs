@@ -175,6 +175,7 @@ impl<'a> Gen<'a> {
                     globs: ks.into_iter().map(|k| vec![k]).collect(),
                     free: Vec::new(),
                     except: Vec::new(),
+                    numeric: false,
                 })
             }
             _ => KeyShape::of(e),
@@ -201,6 +202,7 @@ impl<'a> Gen<'a> {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         seen.push(id);
@@ -223,6 +225,7 @@ impl<'a> Gen<'a> {
             globs,
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         })
     }
 }

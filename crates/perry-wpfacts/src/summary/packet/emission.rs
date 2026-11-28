@@ -410,7 +410,9 @@ impl Model {
 
     pub(super) fn packet_shape(&self, shape: KeyShapeId) -> Option<&[Vec<String>]> {
         // A free form (rule EXCL-KEY) has no glob spelling: any key.
-        (shape != 0 && self.key_shapes[shape as usize].free.is_empty())
+        (shape != 0
+            && self.key_shapes[shape as usize].free.is_empty()
+            && !self.key_shapes[shape as usize].numeric)
             .then(|| self.key_shapes[shape as usize].globs.as_slice())
     }
 

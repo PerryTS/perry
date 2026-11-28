@@ -32,6 +32,11 @@ pub struct KeyShape {
     /// String but a member name of Storage.prototype, `realm_effect.rs`
     /// `RealmSlotStep::StrKey`). It may spell a Number key.
     pub except: Vec<String>,
+    /// Rule NUM-ACC: beside them every canonical numeric String, the names
+    /// a Number key spells (ECMA-262 7.1.19 ToPropertyKey of a Number is
+    /// its ToString, 7.1.12.1 / 6.1.6.1.20: `solve::numeric_key`). The
+    /// shape of a walk under a Number key (`Model::number_key_shape`).
+    pub numeric: bool,
 }
 
 /// Rule EXCL-KEY: is `name` some `X + s` with `X` free of `e`'s ASCII
@@ -98,6 +103,7 @@ impl KeyShape {
                 globs: vec![vec![format!("{}{name}", crate::builtins::WK_PREFIX)]],
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         let mut parts = Vec::new();
@@ -126,6 +132,7 @@ impl KeyShape {
             globs: vec![pieces],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         })
     }
 
@@ -156,6 +163,7 @@ impl KeyShape {
             globs,
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         })
     }
 
@@ -164,6 +172,7 @@ impl KeyShape {
         self.globs.iter().any(|g| glob_admits(g, name))
             || self.free.iter().any(|(e, s)| free_admits(*e, s, name))
             || (!self.except.is_empty() && !self.except.iter().any(|x| x == name))
+            || (self.numeric && crate::solve::numeric_key(name))
     }
 
     /// May one string match both shapes? False only when every pair of
@@ -174,6 +183,8 @@ impl KeyShape {
         // A free form may meet anything (no pairwise test is kept for it).
         !self.free.is_empty()
             || !o.free.is_empty()
+            || (self.numeric && o.may_be_numeric())
+            || (o.numeric && self.may_be_numeric())
             || (!self.except.is_empty() && (!o.except.is_empty() || !o.globs.is_empty()))
             || (!o.except.is_empty() && !self.globs.is_empty())
             || self
@@ -186,7 +197,8 @@ impl KeyShape {
     pub(crate) fn may_be_numeric(&self) -> bool {
         // A free form `X + s`: a Number key when `s` holds only characters
         // a Number's text may hold (`X` may be the rest of that text).
-        !self.except.is_empty()
+        self.numeric
+            || !self.except.is_empty()
             || self.globs.iter().any(|g| glob_may_be_numeric(g))
             || self.free.iter().any(|(_, s)| {
                 s.chars()
@@ -311,6 +323,7 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         if let Some(&id) = self.key_shape_ids.get(&s) {
@@ -330,6 +343,7 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         names.sort();
@@ -341,6 +355,7 @@ impl Model {
             globs: Vec::new(),
             free: Vec::new(),
             except: names,
+            numeric: false,
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -360,12 +375,14 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         let s = KeyShape {
             globs: vec![glob],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -384,12 +401,14 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         let k = KeyShape {
             globs: Vec::new(),
             free: vec![(e, s.to_string())],
             except: Vec::new(),
+            numeric: false,
         };
         if let Some(&id) = self.key_shape_ids.get(&k) {
             return id;
@@ -397,6 +416,37 @@ impl Model {
         let id = self.key_shapes.len() as KeyShapeId;
         self.key_shapes.push(k.clone());
         self.key_shape_ids.insert(k, id);
+        id
+    }
+
+    /// Rule NUM-ACC: the shape of a Number key (`KeyShape::numeric`): it
+    /// names only canonical numeric Strings, so an accessor walk under it
+    /// runs, on a holder the shape splits (`shape_splits`), only the
+    /// accessors defined under such a name or under a computed key
+    /// (`STAR_KEY`), as [[Get]]/[[Set]] of that property key does (10.1.8.1
+    /// OrdinaryGet, 10.1.9.2 OrdinarySetWithOwnDescriptor). Interned as
+    /// `any_string_shape` is.
+    pub fn number_key_shape(&mut self) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+                numeric: false,
+            });
+        }
+        let s = KeyShape {
+            globs: Vec::new(),
+            free: Vec::new(),
+            except: Vec::new(),
+            numeric: true,
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
         id
     }
 
@@ -408,12 +458,14 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         let s = KeyShape {
             globs: vec![vec![String::new(), String::new()]],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
@@ -434,12 +486,14 @@ impl Model {
                 globs: Vec::new(),
                 free: Vec::new(),
                 except: Vec::new(),
+                numeric: false,
             });
         }
         let s = KeyShape {
             globs: vec![vec![String::new(), c.to_string(), String::new()]],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;

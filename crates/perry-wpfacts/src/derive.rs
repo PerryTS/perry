@@ -2903,6 +2903,19 @@ fn judge(
                 verdict.get_or_insert(Verdict::OwnDataOrAbsent);
             }
         }
+        // R9READ10 with no object beside the primitives: a call on a
+        // String, Number or Boolean whose family lacks the key
+        // (`beside_prims`) reads `undefined` there (10.1.8.1) and throws
+        // calling it (13.3.6.2 EvaluateCall, 7.3.14), after its arguments,
+        // so not `Throws`; a nullish one throws in ToObject (7.1.18). Each
+        // kind is its TypeError arm, as beside an object: PerKind
+        // (count-only, no claim).
+        if s.is_call {
+            if let Ok((r, _)) = beside_prims(m, key, s.key, prim, true) {
+                receivers.extend(r);
+                verdict.get_or_insert(Verdict::PerKind);
+            }
+        }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     if born_own && chain_read {
