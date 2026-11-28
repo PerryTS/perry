@@ -279,6 +279,10 @@ fn tower_facts(m: &Module) -> crate::codegen::ProgramFactsView {
 /// the tower cases a class only when its prototype layout is static
 /// (`static_prototype::chain`).
 fn tower_ir(m: &Module) -> String {
+    tower_ir_with(m, tower_facts(m))
+}
+
+fn tower_ir_with(m: &Module, facts: crate::codegen::ProgramFactsView) -> String {
     let mut opts = ir_opts();
     opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
         [("main.ts", m)],
@@ -288,7 +292,7 @@ fn tower_ir(m: &Module) -> String {
     let births = crate::module_birth_shapes(m, opts.clone()).unwrap();
     let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
     opts.static_shape_ids = ids.into_iter().collect();
-    opts.program_facts = tower_facts(m);
+    opts.program_facts = facts;
     String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
@@ -326,6 +330,72 @@ fn a_proven_tower_case_calls_the_clone_unchecked_when_the_family_holds_the_birth
     assert!(
         !k.contains("idispatch.case0.generic"),
         "a proven case whose family holds the birth layout needs no recheck:\n{k}"
+    );
+}
+
+/// CALL-ONE: a call on an `any` receiver the facts do not prove (the site is
+/// refused) lowers to the class switch; `V` declares `m`, so its arm's only
+/// case value is `V`'s id.
+const CALL_ANY: &str = r#"
+class V {
+  x: number;
+  y: number;
+  constructor(x: number) { this.x = x; this.y = 2; }
+  m(): number { return this.x * 2 + this.y; }
+}
+function callM(v: any): number { return v.m(); }
+console.log(callM(new V(3)));
+"#;
+
+/// Class facts only (no receiver proof anywhere): `V`'s `fixed_layout`.
+fn class_only_facts(m: &Module, name: &str, fixed: bool) -> crate::codegen::ProgramFactsView {
+    use crate::codegen::{ElisionFacts, FactsClass};
+    let class = m.classes.iter().find(|c| c.name == name).expect("class");
+    let mut elision = ElisionFacts::default();
+    elision.classes.insert(
+        class.id,
+        FactsClass {
+            absent: Vec::new(),
+            display: class.name.clone(),
+            fixed_layout: fixed,
+            fields: Vec::new(),
+        },
+    );
+    crate::codegen::ProgramFactsView {
+        elision: std::sync::Arc::new(elision),
+        ..Default::default()
+    }
+}
+
+/// CALL-ONE: the refused site's exact arm for `V`, whose layout the facts
+/// prove fixed, calls the clone with no recheck, as a proven site's does.
+#[test]
+fn a_refused_tower_case_calls_the_clone_unchecked_when_its_class_layout_is_fixed() {
+    let m = module(CALL_ANY);
+    let ir = tower_ir_with(&m, class_only_facts(&m, "V", true));
+    let k = function_body(&ir, "callM");
+    assert!(
+        k.contains("pconst.") && k.contains("idispatch.case0") && k.contains("V__m$pshape"),
+        "the refused fixture no longer routes the class switch to the clone:\n{k}"
+    );
+    assert!(
+        !k.contains("idispatch.case0.generic"),
+        "an exact arm of a fixed-layout class needs no recheck:\n{k}"
+    );
+}
+
+/// CALL-ONE needs the class's `fixed_layout`: without it the refused site's
+/// arm keeps its recheck.
+#[test]
+fn a_refused_tower_case_keeps_its_recheck_when_its_class_layout_is_not_fixed() {
+    let m = module(CALL_ANY);
+    let ir = tower_ir_with(&m, class_only_facts(&m, "V", false));
+    let k = function_body(&ir, "callM");
+    assert!(
+        k.contains("idispatch.case0.pshape")
+            && k.contains("V__m$pshape")
+            && k.contains("idispatch.case0.generic"),
+        "without fixed_layout the case must recheck before it enters the clone:\n{k}"
     );
 }
 
