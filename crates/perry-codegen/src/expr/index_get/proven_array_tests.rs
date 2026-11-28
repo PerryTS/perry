@@ -107,6 +107,17 @@ const REP_SRC: &str = "export function at(a: number[], i: number): number { retu
 /// `key`: the key interval of every read; `number`: each read's value is a
 /// proven Number.
 fn rep_ir(rep: FactsArrRep, key: Option<(i64, i64)>, number: bool) -> String {
+    rep_ir_kept(rep, key, number, None)
+}
+
+/// [`rep_ir`] with every read an in-bounds read (`RepRead::kept`) when
+/// `kept` is set.
+fn rep_ir_kept(
+    rep: FactsArrRep,
+    key: Option<(i64, i64)>,
+    number: bool,
+    kept: Option<bool>,
+) -> String {
     let m = lower(REP_SRC);
     let mut elision = ElisionFacts::default();
     for f in &m.functions {
@@ -120,6 +131,9 @@ fn rep_ir(rep: FactsArrRep, key: Option<(i64, i64)>, number: bool) -> String {
         }
         if number {
             elision.number_element_reads.insert(i as u32 + 1, false);
+        }
+        if let Some(present) = kept {
+            elision.inbounds_reads.insert(i as u32 + 1, present);
         }
     }
     let opts = CompileOptions {
@@ -674,4 +688,25 @@ fn an_erased_receiver_without_a_rep_keeps_the_generic_access() {
         let b = body(&ir, name).join("\n");
         assert!(generic_element_call(&b), "{name}\n{b}");
     }
+}
+
+#[test]
+fn a_kept_read_of_a_holey_array_keeps_its_capacity_bound() {
+    // The key is below the length, which a holey Array's store may not
+    // reach (`new Array(k)` past the dense bound): the slot needs
+    // `idx <u capacity`. A hole-free Array's length never passes its store.
+    let rep = FactsArrRep {
+        elem: FactsElemRep::F64,
+        floor: 0,
+        dense: false,
+        fixed: false,
+        im: false,
+        at_rest: false,
+    };
+    let holey = rep_ir_kept(rep, None, false, Some(false));
+    let f = body(&holey, "__at").join("\n");
+    assert!(f.contains("arep.inside"), "capacity bound\n{f}");
+    let present = rep_ir_kept(rep, None, false, Some(true));
+    let f = body(&present, "__at").join("\n");
+    assert!(!f.contains("arep.inside"), "no bound\n{f}");
 }
