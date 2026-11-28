@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Rust toolchain: install [rustup](https://rustup.rs/); the workspace pins
-  `nightly-2026-10-04` in `rust-toolchain.toml` because its exception transport
+  `nightly-2026-11-15` in `rust-toolchain.toml` because its exception transport
   needs nightly unwind-table flags. Running Cargo from the checkout installs
   or selects the pinned toolchain automatically, with its `rust-src` component:
   every build of the workspace compiles the Rust standard library from source

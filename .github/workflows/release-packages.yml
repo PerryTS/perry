@@ -669,7 +669,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target x86_64-apple-darwin
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --target x86_64-apple-darwin
       - uses: ./.github/actions/perry-mbx-cache
         with:
           cache-generation: perry-release-x86_64-apple-darwin
@@ -850,7 +850,7 @@ jobs:
       # llvm-nm. The container legs below install no LLVM on the runner, so
       # without it the check has no nm of LLVM 22+ and fails closed.
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component llvm-tools --target ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --component llvm-tools --target ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
       # installing a second LLVM copy on the noble runner for these two legs.
@@ -2007,7 +2007,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain + cross target
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --target ${{ matrix.target }}
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2

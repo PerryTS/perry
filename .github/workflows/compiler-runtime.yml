@@ -662,7 +662,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
@@ -856,7 +856,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.scope.outputs.pkgs != ''
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - if: steps.scope.outputs.pkgs != ''
         uses: ./.github/actions/setup-llvm22
       - name: Link the ext crates
@@ -1041,7 +1041,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Setup Node.js (executes the runner; oracle is the pinned dist)
         uses: ./.github/actions/perry/actions/setup-node
@@ -1148,7 +1148,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Resolve Node version from the pinned test-corpus ref
         id: node_core_version
@@ -1377,7 +1377,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
@@ -1481,7 +1481,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain with the WASI target
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --target wasm32-wasip2
       - name: Install the WASI C compiler and sysroot
         shell: bash
         run: |
@@ -1541,7 +1541,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain with the WASI target
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --target wasm32-wasip2
       - uses: ./.github/actions/setup-llvm22
       - name: Install pinned Node oracle for WASI compatibility tests
         uses: ./.github/actions/perry/actions/setup-node
@@ -1679,7 +1679,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
@@ -1850,7 +1850,7 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
           df -h / | tail -1
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache
@@ -1933,7 +1933,7 @@ jobs:
           sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
           df -h / | tail -1
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache
@@ -2001,7 +2001,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache
@@ -2066,7 +2066,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache
@@ -2257,7 +2257,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Install iOS simulator Rust target
         run: rustup target add aarch64-apple-ios-sim aarch64-apple-ios
@@ -2365,7 +2365,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -2482,7 +2482,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
@@ -2632,7 +2632,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo
         uses: ./.github/actions/perry/actions/cache
@@ -2869,7 +2869,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo
         uses: ./.github/actions/perry/actions/cache
@@ -2992,7 +2992,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Measure clean-build time
         run: |
@@ -3151,7 +3151,7 @@ jobs:
           git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
           git checkout --force --detach FETCH_HEAD
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo and Perry build
         uses: ./.github/actions/perry/actions/cache
@@ -3244,7 +3244,7 @@ jobs:
           git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
           git checkout --force --detach FETCH_HEAD
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - name: Download measurement artifact
         uses: ./.github/actions/perry/actions/download-artifact
         with:
@@ -3414,7 +3414,7 @@ jobs:
           fi
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-11-15 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
       - name: Build perry and the runtime archives

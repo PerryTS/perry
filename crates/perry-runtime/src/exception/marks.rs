@@ -69,7 +69,7 @@
 //! mark and the longjmp path runs the same [`unwind_managed_stacks`].
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-extern "C" {
+extern "llvm-intrinsic" {
     /// The address of the physical frame's return-address slot: its CFA - 8.
     #[cfg(target_arch = "x86_64")]
     #[link_name = "llvm.addressofreturnaddress.p0"]

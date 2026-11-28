@@ -2,16 +2,21 @@
 # dtolnay/rust-toolchain (#8550). Keep the three in sync: this file,
 # those workflows, and `external-tools.json`'s `rust` entry.
 #
-# Why a dated nightly rather than stable: `.cargo/config.toml` uses the
-# nightly-only rustc flag `-Z use-sync-unwind` for compact synchronous unwind
-# tables. Pinning also keeps local builds aligned with CI.
+# Why a dated nightly rather than stable or beta, both of which reject all of:
+# - `.cargo/config.toml` `[unstable]`: `build-std` (std rebuilt without its
+#   backtrace support) and `panic-abort-tests`.
+# - rustc `-Z use-sync-unwind` (compact unwind tables for the exception
+#   transport) and, on Android, `-Z has-thread-local` / `-Z tls-model`.
+# - `#![feature(...)]` in perry-runtime, perry-stdlib and perry-ffi, notably
+#   `explicit_tail_calls`, `linkage`, `thread_local` and
+#   `link_llvm_intrinsics`.
+# - rustfmt's unstable `skip_macro_invocations` in `rustfmt.toml`.
 #
 # Why this file has to exist as well as the workflow inputs: those inputs
 # only govern jobs that go through the action. Nothing else does — a
 # contributor's `cargo build`, a bisect, a hand-built release artifact, or
-# any script invoking cargo directly. `perry-runtime` uses the
-# `float_algebraic` methods, so without this file those builds fail with
-# E0658 while CI stays green.
+# any script invoking cargo directly; without this file those builds fail
+# with E0658 while CI stays green.
 [toolchain]
-channel = "nightly-2026-10-04"
+channel = "nightly-2026-11-15"
 components = ["rustfmt", "clippy", "rust-src"]
