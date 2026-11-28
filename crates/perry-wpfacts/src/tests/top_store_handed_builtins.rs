@@ -100,14 +100,9 @@ fn a_builtin_object_handed_first_is_not_written_by_a_top_store() {
         let hand = format!("unknown.take2({});", c.hand);
         let src = format!("{PRE}{hand}\n{}", c.body);
         let pf = facts(&src);
-        // TODO(imprecise, sound): `Object` handed to unknown code still
-        // leaves `v.inner` open ("receiver is a builtin/function value"):
-        // a built-in constructor handed on keeps its members unknown,
-        // although nothing writes it (P-N1; owner 2026-11-19, unknown code
-        // writes no intrinsic it is handed). Kept unproven until that is
-        // modelled exactly.
-        let want = c.what != "Object";
-        assert_eq!(proven(&pf, c.key), want, "{}: {src}\n{}", c.what, pf.dump_text());
+        // `Object` handed on keeps its members too (owner premise
+        // 2026-11-19, rule R1): `v.inner` is exact on every arm.
+        assert!(proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
     }
 }
 
@@ -121,14 +116,9 @@ fn a_builtin_object_handed_after_the_lookup_is_not_written_by_a_top_store() {
         let hand = format!("unknown.take2({});", c.hand);
         let src = format!("{PRE}{}\n{hand}", c.body);
         let pf = facts(&src);
-        // TODO(imprecise, sound): `Object` handed to unknown code still
-        // leaves `v.inner` open ("receiver is a builtin/function value"):
-        // a built-in constructor handed on keeps its members unknown,
-        // although nothing writes it (P-N1; owner 2026-11-19, unknown code
-        // writes no intrinsic it is handed). Kept unproven until that is
-        // modelled exactly.
-        let want = c.what != "Object";
-        assert_eq!(proven(&pf, c.key), want, "{}: {src}\n{}", c.what, pf.dump_text());
+        // `Object` handed on keeps its members too (owner premise
+        // 2026-11-19, rule R1): `v.inner` is exact on every arm.
+        assert!(proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
     }
 }
 

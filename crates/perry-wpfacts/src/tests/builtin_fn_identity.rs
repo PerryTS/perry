@@ -671,7 +671,7 @@ fn inherited_typed_array_statics_have_one_identity_per_function() {
 }
 
 #[test]
-fn exposure_keeps_the_native_body_and_opens_the_handed_functions_missing_members() {
+fn exposure_keeps_the_native_body_and_its_missing_members_absent() {
     for exposed in ["t", "[1][process.argv[2]??'map']"] {
         verdict(
             &timer_source(
@@ -693,12 +693,11 @@ fn exposure_keeps_the_native_body_and_opens_the_handed_functions_missing_members
                 console.log(o.field); // EXPOSED-MEMBER
             "#
             );
-            // `t` handed to foreign code: its missing member `zap` is open
-            // (what foreign code holds it may give). Handing an array's
-            // member instead leaves `t` unhanded: `t.zap` stays absent, the
-            // call throws, `o` reaches no one (owner 2026-11-19: unknown
-            // code writes no intrinsic reached through a handed value).
-            verdict(&src, "// EXPOSED-MEMBER", "field", exposed != "t");
+            // `t` handed to unknown code or not: unknown code adds no member
+            // to an intrinsic it is handed (owner premise 2026-11-19, rule
+            // R1), so `t.zap` stays absent, the call throws and `o` reaches
+            // no one.
+            verdict(&src, "// EXPOSED-MEMBER", "field", true);
         }
     }
 }
