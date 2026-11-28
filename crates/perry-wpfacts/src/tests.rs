@@ -1675,6 +1675,7 @@ mod builtin_ctor_number_key;
 mod callregion;
 mod cliffd;
 mod cover3;
+mod create_require_members;
 mod d1;
 mod date_then;
 mod elems1;
