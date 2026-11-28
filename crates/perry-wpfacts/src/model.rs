@@ -2447,6 +2447,10 @@ pub struct Model {
     /// prototype closure, and those closure nodes (`Cons::HasProp`).
     pub chain_has_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
     pub chain_has_nodes: crate::pts::FxHashSet<NodeId>,
+    /// Rule R-IN: (object, named key, result node) whose `true` waits for
+    /// the object or its chain to have the key (`Model::settle_has_prop`).
+    pub has_pending: Vec<(Tok, Atom, NodeId)>,
+    pub has_seen: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
     /// Rule PXCHAIN: receivers with a `Cons::ChainRecv` on their closure.
     /// (holder, receiver): `holder`'s closure has `Cons::ChainRecv { origin: receiver }`.
     pub chain_recv_done: crate::pts::FxHashSet<(Tok, Tok)>,

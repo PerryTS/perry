@@ -44,9 +44,10 @@ pub fn map_cons(
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
         Detached => Detached,
-        HasProp { key, idx } => HasProp {
+        HasProp { key, idx, dst } => HasProp {
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+            dst: if dst == NO_NODE { NO_NODE } else { n(dst) },
         },
         OwnProp { key, idx } => OwnProp {
             key,
@@ -741,6 +742,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     matches!(
         c,
         Identity { .. }
+            | HasProp { .. }
             | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }

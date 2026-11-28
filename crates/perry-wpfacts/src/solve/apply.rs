@@ -12,14 +12,26 @@ impl Model {
             // and key node), where a Proxy runs its `has` trap (rule
             // PXCHAIN, `solve/proxy.rs`). The closure holds every link, so
             // its ordinary links add nothing.
-            Cons::HasProp { key, idx } => {
+            Cons::HasProp { key, idx, dst } => {
                 if !self.chain_has_nodes.contains(&n) {
                     for &t in toks {
                         if t != TOP && self.chain_has_done.insert((t, key, idx)) {
                             let cp = self.cp(t);
                             self.chain_has_nodes.insert(cp);
-                            self.cons(cp, Cons::HasProp { key, idx });
+                            self.cons(
+                                cp,
+                                Cons::HasProp {
+                                    key,
+                                    idx,
+                                    dst: NO_NODE,
+                                },
+                            );
                         }
+                    }
+                }
+                if dst != NO_NODE {
+                    for &t in toks {
+                        self.has_prop_result(t, key, dst);
                     }
                 }
             }

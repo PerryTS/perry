@@ -42,6 +42,7 @@ mod store;
 
 mod escape;
 mod fields;
+mod has_prop;
 mod json_pos;
 pub(crate) mod json_rt;
 mod shaped_keys;
@@ -1420,6 +1421,7 @@ impl Model {
                     && !self.settle_record_entry()
                     && !self.settle_not_error()
                     && !self.settle_ta_len()
+                    && !self.settle_has_prop()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;
