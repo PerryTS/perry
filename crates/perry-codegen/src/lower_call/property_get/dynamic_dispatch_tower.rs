@@ -267,3 +267,30 @@ pub(super) fn emit_tower_pshape_call(
         ],
     )
 }
+
+/// CALL-ONE site count (`PERRY_FACTS_REPORT`): a refused call site (no
+/// proven receiver) with `cases` class-switch arms, of which `routed` call a
+/// class's `$pshape` body and `dropped` do so with no recheck. A site with a
+/// dropped recheck is counted `checked:call-one`, never proven: its class
+/// switch still decides at run time and a miss takes the generic body. The
+/// other refused tower sites are listed as `refused-tower`.
+pub(super) fn report_call_one(
+    ctx: &FnCtx<'_>,
+    member: &Expr,
+    property: &str,
+    (dropped, routed): (usize, usize),
+    cases: usize,
+) {
+    if cases == 0 || std::env::var_os("PERRY_FACTS_REPORT").is_none() {
+        return;
+    }
+    let kind = if dropped > 0 { "call-one" } else { "refused-tower" };
+    let offset = match member {
+        Expr::PropertyGet { byte_offset, .. } => *byte_offset,
+        _ => 0,
+    };
+    eprintln!(
+        "# checked_method_call kind={kind} module={} offset={offset} key={property} arms={dropped}/{routed}/{cases}",
+        ctx.module_slug
+    );
+}
