@@ -461,8 +461,11 @@ pub enum Cons {
     DeleteKey { key: Atom, reason: u32 },
     /// `key in o` (ECMA-262 13.10.1 HasProperty): no flow on an ordinary
     /// object; a Proxy runs its `has` trap (`solve/proxy.rs`). `idx`: the
-    /// key value, or `NO_NODE` for a named key.
-    HasProp { key: Key, idx: NodeId },
+    /// key value, or `NO_NODE` for a named key. `dst` (rule R-IN): the
+    /// result, `true` once some value of `o` may have the key, `false`
+    /// once some value may lack it (`NO_NODE`: no result, as the chain
+    /// walk's and a `with` binding's).
+    HasProp { key: Key, idx: NodeId, dst: NodeId },
     /// `Object.hasOwn(o, k)`, `o.hasOwnProperty(k)`, `propertyIsEnumerable`
     /// (ECMA-262 [[GetOwnProperty]], 10.1.5): the twin of `HasProp`. No
     /// flow on an ordinary object; a Proxy runs its

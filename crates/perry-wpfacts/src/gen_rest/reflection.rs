@@ -90,9 +90,11 @@ impl<'a> Gen<'a> {
                         (Key::any(), kn)
                     }
                 };
-                self.m.cons(o, Cons::HasProp { key: k, idx });
+                // Reflect.has (28.1.9): HasProperty, rule R-IN.
+                let dst = self.tmp("in");
+                self.m.cons(o, Cons::HasProp { key: k, idx, dst });
                 self.raise_on(o);
-                self.prim_node(prim::BOOL)
+                dst
             }
             Expr::ProxyDelete { proxy, key } => {
                 let o = self.expr(fx, proxy);

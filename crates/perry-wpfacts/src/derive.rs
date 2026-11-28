@@ -4052,7 +4052,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// The `absent_key` walk: `t`'s prototype chain holds no `a` and ends at
 /// `%Object.prototype%`, which lacks it. `own`: `t` itself holds nothing
 /// under `a` either.
-fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
+pub(crate) fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
     let _holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];
