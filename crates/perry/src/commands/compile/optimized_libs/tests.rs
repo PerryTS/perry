@@ -314,6 +314,17 @@ fn tls_import_routes_net_wrapper() {
     assert!(well_known_iteration_set(&ctx).contains("net"));
 }
 
+/// An `https` socket is a perry-ext-net TLSSocket: the entry installs `net`,
+/// whose hook arms the TLS members (`authorized`, `isSessionReused`).
+#[test]
+fn https_import_installs_net() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.native_module_imports.insert("node:https".to_string());
+    let _guard = env_lock();
+    assert!(program_module_set(&ctx).contains("net"));
+}
+
 /// tokio lane L4: perry-stdlib's bundled `net` / `ws` copies are deleted, so
 /// PERRY_DISABLE_WELL_KNOWN=1 must still put those two wrappers on the link
 /// line (there is no copy to revert to) while every other binding keeps

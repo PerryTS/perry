@@ -86,13 +86,13 @@ pub(crate) fn program_module_set(ctx: &CompilationContext) -> BTreeSet<String> {
             }
         }
     }
-    // tokio lane L4: `node:tls` is served by perry-stdlib's TLS module over
-    // perry-ext-net's sockets — `tls.connect` and every client TLSSocket
-    // method are ext-net's — and bundled `net`, which used to fill that role
-    // for a TLS-only program, is gone. So a `tls` import routes `net` too.
+    // `node:tls` is served by perry-stdlib's TLS module over perry-ext-net's
+    // sockets: `tls.connect` and every TLSSocket member are ext-net's, and an
+    // `https` socket is such a TLSSocket. So a `tls` or `https` import routes
+    // `net` too, whose install hook is what arms the TLS members.
     if iteration_set
         .iter()
-        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls")
+        .any(|m| matches!(m.strip_prefix("node:").unwrap_or(m), "tls" | "https"))
     {
         iteration_set.insert("net".to_string());
     }
