@@ -1684,13 +1684,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    // One instance token per class: the receiver an entry guard admits.
-    let mut class_tok: FxHashMap<TmplId, Tok> = FxHashMap::default();
+    // The receivers an entry guard `class_id(x) == C` admits: every token
+    // of C (GUARDSOUND1). A delete or defineProperty on one instance keeps
+    // its class id (no `[[Delete]]` path rewrites it) while it moves or
+    // drops the slot, so the guarded judgment takes each instance's own
+    // marks (hard, own keys, escape), not the template-wide mark
+    // Obj(C, NO_CTX) alone, which carries none of them.
+    let mut class_tok: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
     for (i, t) in m.toks.iter().enumerate() {
-        if let TokKind::Obj(tm, c) = t {
-            if *c == NO_CTX || !class_tok.contains_key(tm) {
-                class_tok.insert(*tm, i as Tok);
-            }
+        if let TokKind::Obj(tm, _) = t {
+            class_tok.entry(*tm).or_default().push(i as Tok);
         }
     }
     // One fact per read site: records of the same site (a body walked
@@ -1797,9 +1800,9 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 .filter(|g| g.windows(2).all(|w| w[0] == w[1]))
                 .and_then(|g| g.first().copied())
             {
-                if let Some(&it) = class_tok.get(&tm) {
+                if let Some(its) = class_tok.get(&tm) {
                     let (r2, _, v2, f2, t2) =
-                        judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
+                        judge(m, &by_id, &runtime, s, &key, its, 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
                         if m.stop_top.is_some() {
                             // TOPSTOP2: what the unguarded set held (the

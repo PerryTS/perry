@@ -1697,6 +1697,7 @@ mod birthdef1;
 mod siteb4;
 mod siteb5;
 mod synth1;
+mod guardsound1;
 mod bns_recv;
 mod siteb1;
 mod builtin_ctor_number_key;
