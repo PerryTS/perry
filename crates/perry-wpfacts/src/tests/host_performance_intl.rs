@@ -178,3 +178,31 @@ fn a_written_global_reads_what_was_written() {
     );
     assert!(esc(&pf, "O"), "{}", pf.dump_text());
 }
+
+/// NODETIME1: `performance.nodeTiming` (an accessor on
+/// `Performance.prototype`, the runtime's one cached PerformanceNodeTiming
+/// entry) reads its getter's declared result: an object of
+/// `PerformanceEntry.prototype` with the 12 milestone fields, born at the
+/// one getter call on the one `performance` object (the global and
+/// `require("perf_hooks").performance` alike). Red before: the solve aborts
+/// with `REALMVAL: performance member nodeTiming has no modelled value`.
+#[test]
+fn node_timing_reads_its_getters_declared_entry() {
+    let pf = facts(
+        r#"
+        class R { v = 1; }
+        const { performance: ph } = require("perf_hooks");
+        const a: any = performance.nodeTiming;
+        const b: any = ph.nodeTiming;
+        a.r = new R();
+        const u = a.uvMetricsInfo;
+        console.log(a.bootstrapComplete + 1, a.name.length, u.loopCount + 1, b.r.v, a === b);
+        export const keep = 1;
+    "#,
+    );
+    no_host_top(&pf);
+    for key in ["nodeTiming", "bootstrapComplete", "uvMetricsInfo", "loopCount", "v"] {
+        assert!(!site_top(&pf, key), "{key}: {}", pf.dump_text());
+    }
+    assert!(!esc(&pf, "R"), "{}", pf.dump_text());
+}

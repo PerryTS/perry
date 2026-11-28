@@ -386,7 +386,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             // from being born with the prototype, which the global populator
             // builds for programs whose realm never reaches the entry's layouts.
             let getter = perf_method_value(
-                crate::fn_info!(#[realm("Performance.prototype.nodeTiming.<get>")] export crate::perf_hooks::prototypes::perf_node_timing_getter_thunk, 0; with_name("get nodeTiming"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm("Performance.prototype.nodeTiming.<get>", effects = { stores(fresh); returns(fresh(PerformanceEntry.prototype, fields = {name: prim(str), entryType: prim(str), startTime: prim(num), duration: prim(num), nodeStart: prim(num), v8Start: prim(num), bootstrapComplete: prim(num), environment: prim(num), loopStart: prim(num), loopExit: prim(num), idleTime: prim(num), uvMetricsInfo: fresh(Object.prototype, fields = {loopCount: prim(num), events: prim(num), eventsWaiting: prim(num)})})) })] export crate::perf_hooks::prototypes::perf_node_timing_getter_thunk, 0; with_name("get nodeTiming"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 "get nodeTiming",
                 0,
             );
