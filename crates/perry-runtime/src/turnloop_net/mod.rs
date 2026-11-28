@@ -946,9 +946,11 @@ pub fn close(id: i64) -> NetResult<()> {
                 }
             }
             census::note_submit(OP_CLOSE);
-            driver
-                .close(entry.handle, token(OP_CLOSE, id))
-                .map_err(|e| map_error(e, "close"))?;
+            if let Err(e) = driver.close(entry.handle, token(OP_CLOSE, id)) {
+                // No `Closed` follows a refused close: a later close retries.
+                entry.closing = false;
+                return Err(map_error(e, "close"));
+            }
             if !attempt && !transport::tearing_down() {
                 closing::queue_id(id, entry.subsystem, entry.handle);
             }

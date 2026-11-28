@@ -185,7 +185,7 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
         tl::NET_EOF => on_eof(c.id),
         tl::NET_WROTE => {}
         tl::NET_SHUTDOWN => on_shutdown(c.id),
-        tl::NET_CLOSED => on_closed(c.id),
+        tl::NET_CLOSED => on_closed(c.id, c.flags & tl::NET_FLAG_TEARDOWN != 0),
         tl::NET_TIMER => on_timer(c.id),
         tl::NET_ERROR => on_error(c.id, c.terminal != 0),
         _ => {}
@@ -945,15 +945,18 @@ fn on_shutdown(id: i64) {
     }
 }
 
-fn on_closed(id: i64) {
-    if upgraded(id) {
-        if let Some(host) = host_of(id) {
-            host.on_upgraded(id, Upgraded::Closed);
+/// During agent teardown only the id and its record go: no JS runs.
+fn on_closed(id: i64, teardown: bool) {
+    if !teardown {
+        if upgraded(id) {
+            if let Some(host) = host_of(id) {
+                host.on_upgraded(id, Upgraded::Closed);
+            }
         }
+        // A peer that vanished mid-request reaches the terminal `Closed`
+        // without ever passing through `destroy`.
+        note_aborted(id);
     }
-    // A peer that vanished mid-request reaches the terminal `Closed` without
-    // ever passing through `destroy`.
-    note_aborted(id);
     cancel_idle(id);
     let owned = conns()
         .lock()
