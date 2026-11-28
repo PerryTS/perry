@@ -1,0 +1,1 @@
+Fix: compiling a program that replaces a builtin method with a bound copy of itself (`console.log = console.log.bind(console)`) finishes again; the whole-program facts no longer mint a new bound call on every round.

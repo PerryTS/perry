@@ -808,6 +808,11 @@ impl Model {
         );
         self.spread_view.insert(call, v);
         self.spread_view.insert(v, v);
+        // A view of a solver-made bound call is solver-made too: a bound
+        // value it reaches joins the merged call instead of nesting another.
+        if self.bound_synth.contains(&call) {
+            self.bound_synth.insert(v);
+        }
         v
     }
 

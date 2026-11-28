@@ -93,3 +93,51 @@ console.log(o.matrix.e[0]);
 "#
     ));
 }
+
+/// `src` reaches its fixpoint within the work bound: no widening, no
+/// abort. A solve that keeps minting calls widens past the bound and stops
+/// at `WIDENED_WORK` times it, so the test fails instead of hanging.
+fn converges(src: &str) {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let cfg = FactsConfig {
+        max_work: Some(500_000),
+        ..FactsConfig::default()
+    };
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
+    assert!(
+        !pf.stats.aborted && !pf.stats.widened,
+        "the solve reaches its fixpoint: {:?}",
+        pf.stats
+    );
+}
+
+/// A namespace method replaced by its own bound copy: the bound call reaches
+/// the native, which runs the stored bound value again. Its argument view
+/// (the bound call spreads its arguments) is the same solver-made call, so
+/// it joins the merged call instead of nesting another.
+#[test]
+fn a_method_replaced_by_its_bound_self_joins_one_call() {
+    converges(
+        r#"
+const origLog = console.log;
+console.log = origLog.bind(console);
+console.log("through bind");
+"#,
+    );
+}
+
+/// The same after a wrapper that forwards its arguments to the original.
+#[test]
+fn a_wrapped_then_rebound_method_joins_one_call() {
+    converges(
+        r#"
+const origLog = console.log;
+console.log = (...a: any[]) => origLog("[wrapped]", ...a);
+console.log("through wrapper");
+console.log = origLog.bind(console);
+console.log("through bind");
+console.log = origLog;
+"#,
+    );
+}
