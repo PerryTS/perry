@@ -2672,6 +2672,13 @@ pub struct Model {
     /// (`Model::enum_flush`).
     pub enum_filed: FxHashMap<Tok, Vec<EnumFiled>>,
     pub enum_filed_seen: crate::pts::FxHashSet<(Tok, EnumFiled)>,
+    /// E7DEL2: the enumerable reads of a token a delete may have taken a
+    /// key from, read per key of its walk (`Model::enum_lost_read`): each
+    /// key it gains later is read too, and all of them run as the ordinary
+    /// read once its keys stop being the walk's (`enum_lost_widen`).
+    pub enum_lost_reads: FxHashMap<Tok, Vec<EnumFiled>>,
+    pub enum_lost_seen: crate::pts::FxHashSet<(Tok, EnumFiled)>,
+    pub enum_lost_keys: crate::pts::FxHashSet<(Tok, EnumFiled, Atom)>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// The `join` calls of the Array.prototype.toString model (ECMA-262

@@ -1542,6 +1542,11 @@ impl Model {
     /// object is written by unknown code. The object is HARD all the same
     /// (layout, escape and the runtime lock unchanged).
     pub fn mark_hard_as(&mut self, t: Tok, kind: Hard, reason: u32, seed: bool) {
+        // E7DEL2: a definition or `with` may add or redefine any key of
+        // `t`: its walk is no longer the program's keys (`enum_lost_exact`).
+        if t != TOP && !matches!(kind, Hard::E7Delete | Hard::B1Exposed) {
+            self.enum_lost_widen(t);
+        }
         // DEC 250: a delete that reaches the runtime's prototypes (the
         // collapsed `ObjectProto`) removes only a key the lock admits: the
         // runtime refuses (TypeError) to delete a member the image gives a

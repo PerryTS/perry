@@ -325,6 +325,25 @@ impl<'a> Gen<'a> {
         false
     }
 
+    /// `tm` itself takes its parent from a value not settled to one class
+    /// (§17.2): before the solve, no link says which class it is.
+    fn value_parent_pending(&self, tm: TmplId) -> bool {
+        let t = &self.m.tmpls[tm as usize];
+        t.parent_value.is_some() && t.parent.is_none() && !self.m.realm_parent.contains_key(&tm)
+    }
+
+    /// `x` is `tm` or a class up `tm`'s parent links.
+    fn on_chain(&self, tm: TmplId, x: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if c == x {
+                return true;
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     /// A constructor up `tm`'s chain may leak `this` before `tm`'s own
     /// stores run: one that leaks, a native parent, a parent value not
     /// settled, or another unit's class (its constructor is not seen).
@@ -378,8 +397,9 @@ impl<'a> Gen<'a> {
     /// for a chain of this program's classes that never leaks `this` before
     /// its keys are stored (no observer could delete one) and whose
     /// constructors return no value (`super()` binds `this` to the object
-    /// the parent constructed).
-    pub(super) fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)]) {
+    /// the parent constructed). `only`: these classes (parents first) instead
+    /// of every derived one.
+    pub(super) fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)], only: Option<&[TmplId]>) {
         let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -398,6 +418,7 @@ impl<'a> Gen<'a> {
             .keys()
             .copied()
             .filter(|&tm| self.m.tmpls[tm as usize].parent.is_some())
+            .filter(|tm| only.is_none_or(|o| o.contains(tm)))
             .collect();
         todo.sort_by_key(|&tm| (depth(&self.m, tm), tm));
         for tm in todo {
@@ -488,22 +509,40 @@ impl<'a> Gen<'a> {
                     .collect::<std::collections::BTreeSet<String>>(),
                 _ => continue,
             };
-            // Some class below `tm` defines a followed method.
+            // Some class below `tm` defines a followed method. SITEB5: a
+            // class whose parent is a value not yet settled (`extends v`,
+            // §17.2) has no parent link before the solve: the solve may
+            // settle `v` to `tm` or a class below it, and then its instances
+            // run its own method at the call (10.1.8 [[Get]] from their
+            // prototype, a subclass's first). Every class up to that value
+            // link may be below `tm`, as a class linked by name is.
+            // SITEB6: unless that class is `tm` or one of `tm`'s ancestors
+            // by its links: a prototype chain has no cycle (ECMA-262 10.1.2.1
+            // OrdinarySetPrototypeOf step 8; a class's prototype is made
+            // after its heritage is evaluated, 15.7.14 ClassDefinitionEvaluation
+            // steps 6-7), so no value can settle it below `tm`.
             let overridden = tms.iter().any(|&d| {
                 let mut cur = Some(d);
                 let mut between = Vec::new();
                 while let Some(x) = cur {
                     if x == tm {
-                        return between.iter().any(|b: &TmplId| {
-                            by_tm
-                                .get(b)
-                                .is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
-                        });
+                        break;
                     }
                     between.push(x);
                     cur = self.m.tmpls[x as usize].parent;
                 }
-                false
+                let below = match cur {
+                    Some(_) => true,
+                    None => between.last().is_some_and(|&top| {
+                        self.value_parent_pending(top) && !self.on_chain(tm, top)
+                    }),
+                };
+                below
+                    && between.iter().any(|b: &TmplId| {
+                        by_tm
+                            .get(b)
+                            .is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
+                    })
             });
             if !overridden {
                 continue;
@@ -521,9 +560,24 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, off);
             }
         }
-        // The classes that reach a followed call with another method there.
+        self.m_override_leaks = self.override_leaks(&by_tm, &tms);
+    }
+
+    /// The classes that reach a followed call (`CtorPhase::m_calls`,
+    /// `s_calls`) of a parent constructor with another method there (rule M),
+    /// through the parent links as they stand.
+    fn override_leaks(
+        &self,
+        by_tm: &FxHashMap<TmplId, (usize, &'a Class)>,
+        tms: &[TmplId],
+    ) -> crate::pts::FxHashSet<TmplId> {
+        let defines = |c: &Class, k: &str| {
+            c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+        };
         let mut leaks = crate::pts::FxHashSet::default();
-        for &c in &tms {
+        for &c in tms {
             let mut seen: Vec<TmplId> = vec![c];
             let mut cur = self.m.tmpls[c as usize].parent;
             while let Some(p) = cur {
@@ -540,7 +594,7 @@ impl<'a> Gen<'a> {
                 cur = self.m.tmpls[p as usize].parent;
             }
         }
-        self.m_override_leaks = leaks;
+        leaks
     }
 
     pub(super) fn parent_chain_leaks(&self, tm: TmplId) -> bool {
@@ -595,6 +649,33 @@ impl<'a> Gen<'a> {
                 let tm = self.mods[mi].classes[&c.name];
                 if self.value_parent_on_chain(tm) {
                     redo.push((tm, mi));
+                }
+            }
+        }
+        // SITEB4: before the solve a parent value not yet settled closed the
+        // phase at `super()` (`parent_pending`) and left the parent's keys
+        // out of the layout order, so every store of an inherited key was an
+        // out-of-order add. Settled, the chain is one of this program's
+        // classes: rule M (overrides seen through the settled links) and rule C
+        // (the parent chain's definite keys present after `super()`) run for
+        // these classes as they do for a class linked by name, parents first.
+        if !redo.is_empty() {
+            let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+            for mi in 0..modules.len() {
+                for c in self.classes_of(mi) {
+                    by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+                }
+            }
+            let mut tms: Vec<TmplId> = by_tm.keys().copied().collect();
+            tms.sort_unstable();
+            let leaks = self.override_leaks(&by_tm, &tms);
+            self.m_override_leaks.extend(leaks);
+            let only: Vec<TmplId> = redo.iter().map(|&(tm, _)| tm).collect();
+            self.ctor_phase_present(&modules, Some(&only));
+            for &tm in &only {
+                let leaks = self.parent_chain_leaks(tm);
+                if let Some(ph) = self.ctor_phase.get_mut(&tm) {
+                    ph.parent_leaks = leaks;
                 }
             }
         }

@@ -61,7 +61,7 @@ impl<'a> Gen<'a> {
             }
         }
         self.settle_rule_m(&modules, None);
-        self.ctor_phase_present(&modules);
+        self.ctor_phase_present(&modules, None);
         // The push-filled births (`push_fills`), with the birth lengths.
         if self.m.push_fills
             && self.m.rest_elems

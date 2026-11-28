@@ -110,7 +110,6 @@ impl Model {
                 || self.enum_obj(t)
                 || builtins::enum_free_instance(self, t)
                 || builtins::enum_free_buffer(self, t))
-            && self.enum_kept(t)
         {
             let e = EnumFiled::Idx {
                 origin,
@@ -119,8 +118,19 @@ impl Model {
                 shape,
                 kept,
             };
-            self.enum_file(t, e);
-            return self.enum_read_tok(idx, t, dst, shape);
+            if self.enum_kept(t) {
+                self.enum_file(t, e);
+                return self.enum_read_tok(idx, t, dst, shape);
+            }
+            // E7DEL2: `o[k]` of the walk on an object a delete may have
+            // taken keys from: OrdinaryGet under the keys of the walk.
+            if self.enum_lost_exact(t) {
+                if let Some(&a) = self.key_nodes.get(&idx) {
+                    return self.load_from(origin, t, Key::Named(a), dst);
+                }
+                self.enum_lost_read(t, e);
+                return self.enum_read_tok(idx, t, dst, shape);
+            }
         }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
         if let Some(&a) = self.key_nodes.get(&idx) {
@@ -346,11 +356,166 @@ impl Model {
                     dst,
                     shape,
                     kept,
+                } => self.idx_load_from(origin, idx, t, dst, shape, true, kept),
+                EnumFiled::Chain { of, key, dst } => self.enum_chain_lost(of, t, key, dst),
+                EnumFiled::Key { key, dst } => self.load_from(t, t, key, dst),
+            }
+        }
+    }
+
+    /// E7DEL2 (B-del, exact): does the walk of `t` still yield only the
+    /// keys the program wrote on it? `t` is a program object whose own
+    /// properties are its fields (`enum_obj`, not an array), not escaped
+    /// (unknown code may make any own key enumerable, `enum_own`), not
+    /// joined with other units' keys, and met no HARD operation but a
+    /// delete (a delete stores no key, ECMA-262 10.1.10 OrdinaryDelete;
+    /// a definition or `with` may). A delete through ⊤ never denotes it
+    /// (`enum_top_reach`: it did not escape).
+    pub(crate) fn enum_lost_exact(&self, t: Tok) -> bool {
+        t != TOP
+            && self.enum_obj(t)
+            && !self.is_array_like(t)
+            && !self.is_escaped(t)
+            && self.joined_of(t).is_none()
+            && self
+                .hard
+                .get(&t)
+                .is_none_or(|&(k, _)| k == crate::model::Hard::E7Delete)
+    }
+
+    /// E7DEL2 (B-del, exact): enumerable read `e` of `t` once a delete may
+    /// have taken a key of `t`. The key `k` the walk gives is one of the
+    /// enumerable String keys of `t` and its chain when the walk lists it
+    /// (ECMA-262 14.7.5.9 EnumerateObjectProperties; a key added later is
+    /// one the program writes on `t` too); a delete may take it before
+    /// `o[k]` reads it, and the read is then OrdinaryGet(o, k) (10.1.8.1):
+    /// `undefined`, or the member named `k` further up the chain, a
+    /// non-enumerable builtin one included. So per key the walk can give:
+    /// a named key reads that name on `t` and its chain; the numeric keys
+    /// (a Number-keyed store, an index) read the numeric fields and the
+    /// chain under a numeric name (`plain_key_from`, which names no
+    /// builtin member); a key no name lists (a store under a key of
+    /// unknown content, `*`) may be any String: the ordinary read. The
+    /// keys of the chain's links are their own walk reads (`EnumChain`).
+    /// Keys `t` gains later are read as they appear (`enum_key_gained`,
+    /// `enum_index_field`).
+    pub(super) fn enum_lost_read(&mut self, t: Tok, e: EnumFiled) {
+        if !self.enum_lost_seen.insert((t, e)) {
+            return;
+        }
+        self.enum_lost_reads.entry(t).or_default().push(e);
+        let dst = match e {
+            EnumFiled::Idx { dst, .. } | EnumFiled::Chain { dst, .. } | EnumFiled::Key { dst, .. } => dst,
+        };
+        self.add_prim(dst, prim::UNDEF);
+        let mut keys: Vec<Atom> = Vec::new();
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            let f = self.fields[&(t, a)];
+            if self.enum_own(t, f, a) {
+                keys.push(a);
+            }
+        }
+        let num = self.atom(crate::model::NUM_KEY);
+        if self.fields.contains_key(&(t, num)) && !keys.contains(&num) {
+            keys.push(num);
+        }
+        for a in keys {
+            self.enum_lost_key(t, e, a);
+        }
+    }
+
+    /// E7DEL2: key `a` of the walk of `t` for lost read `e` (`enum_lost_read`).
+    fn enum_lost_key(&mut self, t: Tok, e: EnumFiled, a: Atom) {
+        if !self.enum_lost_keys.insert((t, e, a)) {
+            return;
+        }
+        let star = self.atoms[a as usize] == crate::STAR_KEY;
+        let num = self.atoms[a as usize] == crate::model::NUM_KEY;
+        match e {
+            EnumFiled::Idx {
+                origin,
+                idx,
+                dst,
+                shape,
+                kept,
+            } => {
+                if star {
+                    self.idx_load_from(origin, idx, t, dst, shape, false, kept);
+                } else if num {
+                    let f = self.num_fields(t);
+                    self.edge(f, dst);
+                    self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
+                } else {
+                    self.load_from(origin, t, Key::Named(a), dst);
+                }
+            }
+            EnumFiled::Chain { of, key, dst } => {
+                if star {
+                    self.load_from(of, t, key, dst);
+                } else if num {
+                    let f = self.num_fields(t);
+                    self.edge(f, dst);
+                    self.plain_key_from(of, t, ChainAct::Load(dst, self.thrown));
+                } else {
+                    self.load_from(of, t, Key::Named(a), dst);
+                }
+            }
+            EnumFiled::Key { key, dst } => self.load_from(t, t, key, dst),
+        }
+    }
+
+    /// E7DEL2: key `a` (`NUM_KEY`: a numeric one) joined the walk of `t`.
+    pub(super) fn enum_lost_gained(&mut self, t: Tok, a: Atom) {
+        if let Some(v) = self.enum_lost_reads.get(&t).cloned() {
+            for e in v {
+                self.enum_lost_key(t, e, a);
+            }
+        }
+    }
+
+    /// E7DEL2: `t` stopped holding only its walk's keys (`enum_lost_exact`:
+    /// it escaped, or met a definition or `with`): its lost reads are the
+    /// ordinary read.
+    pub(crate) fn enum_lost_widen(&mut self, t: Tok) {
+        let Some(v) = self.enum_lost_reads.remove(&t) else {
+            return;
+        };
+        for e in v {
+            match e {
+                EnumFiled::Idx {
+                    origin,
+                    idx,
+                    dst,
+                    shape,
+                    kept,
                 } => self.idx_load_from(origin, idx, t, dst, shape, false, kept),
                 EnumFiled::Chain { of, key, dst } => self.load_from(of, t, key, dst),
                 EnumFiled::Key { key, dst } => self.load_from(t, t, key, dst),
             }
         }
+    }
+
+    /// B-del on chain link `q` of `of` (`Cons::EnumChain`) a delete may have
+    /// taken a key from: OrdinaryGet under `key`; under a computed key, per
+    /// key of `q`'s walk (`enum_lost_read`) beside its enumerable read.
+    pub(super) fn enum_chain_lost(&mut self, of: Tok, q: Tok, key: Key, dst: NodeId) {
+        if matches!(key, Key::Any(_)) && self.enum_lost_exact(q) {
+            self.enum_lost_read(q, EnumFiled::Chain { of, key, dst });
+            self.enum_fields(of, q, key, dst);
+            self.accessor_walk(of, q, key, ChainAct::Load(dst, self.thrown));
+            let up = self.proto_node(q);
+            self.cons(
+                up,
+                Cons::EnumChain {
+                    key,
+                    dst,
+                    of,
+                    from: q,
+                },
+            );
+            return;
+        }
+        self.load_from(of, q, key, dst);
     }
 
     /// `enum_read_key` once `enum_kept(t)` holds; `idx` keys its one-time
@@ -625,11 +790,16 @@ impl Model {
         if let Some(&e) = self.enum_key_fields.get(&t) {
             self.edge(f, e);
         }
+        if self.enum_lost_reads.contains_key(&t) {
+            let num = self.atom(crate::model::NUM_KEY);
+            self.enum_lost_gained(t, num);
+        }
     }
 
     /// ENUM3: key `a` appeared on token `t`: the keyed stores `t`'s
     /// enumerated keys decide store under it too.
     pub(super) fn enum_key_gained(&mut self, t: Tok, a: Atom) {
+        self.enum_lost_gained(t, a);
         if let Some(v) = self.enum_key_stores.get(&t).cloned() {
             for (o, src, site) in v {
                 self.enum_key_named(o, src, site, a);

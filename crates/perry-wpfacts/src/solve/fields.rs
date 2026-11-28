@@ -174,6 +174,7 @@ impl Model {
     /// spreads.
     pub(crate) fn enum_escaped(&mut self, t: Tok) {
         self.json_rt_escaped(t);
+        self.enum_lost_widen(t);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.field_r(t, a);
             if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
