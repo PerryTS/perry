@@ -206,6 +206,7 @@ mod locked_store;
 mod locked_top_define;
 mod locked_top_store;
 mod logical_and;
+mod made_root_calls;
 mod map_entry_pairs;
 mod map_identity_ops;
 mod map_values;
