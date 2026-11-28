@@ -29,7 +29,8 @@ fn recv(pf: &ProgramFacts, key: &str) -> String {
 }
 
 fn has_member(r: &str) -> bool {
-    r.contains("ObjectProtoMethod")
+    // The collapsed member token, or (a named read) the member itself.
+    r.contains("ObjectProtoMethod") || r.contains("Object.prototype.")
 }
 
 const JSON_D: &str = "const d: any = JSON.parse(String(Math.random()) + '{\"toString\": 1}');\n";
@@ -86,4 +87,38 @@ fn control_a_delete_of_another_object_keeps_the_enumerable_read() {
     ));
     let r = recv(&pf, "wq");
     assert!(!has_member(&r), "{r}");
+}
+
+// E7DEL2: the read after a delete is OrdinaryGet under a key the walk
+// gives (14.7.5.9): a key the program wrote on the object. A Number-keyed
+// map's keys are numeric strings and a Boolean-keyed one's are "true" and
+// "false": neither names a builtin member of the chain.
+
+#[test]
+fn a_numeric_keyed_walk_after_a_delete_reads_no_builtin_member() {
+    let pf = one(
+        "const m: any = {};\nfunction put(id: number) { const s: any = { v: id }; m[id] = s; }\nput(1); put(2);\nfor (const k in m) { const s = m[k]; delete m[k]; console.log(s.wq); }\n",
+    );
+    let r = recv(&pf, "wq");
+    assert!(!has_member(&r), "{r}");
+}
+
+#[test]
+fn nested_walks_deleting_their_keys_read_only_the_maps() {
+    let pf = one(
+        "const outer: any = {};\nfunction put(id: number, w: boolean) { let inner = outer[id]; if (inner === undefined) { inner = {}; outer[id] = inner; } inner[w] = { v: id }; }\nput(1, true); put(2, false);\nfor (const a in outer) { const inner = outer[a]; for (const b in inner) { const st = inner[b]; console.log(st.wq); delete inner[b]; } delete outer[a]; }\n",
+    );
+    let r = recv(&pf, "wq");
+    assert!(!has_member(&r) && !r.contains("Function"), "{r}");
+}
+
+#[test]
+fn a_named_walk_key_after_a_delete_reads_that_member() {
+    // The walk gives "constructor": after the delete, OrdinaryGet finds
+    // `Object.prototype.constructor`.
+    let pf = one(
+        "const m: any = {};\nm.constructor = { v: 1 };\nm[Number(Math.random())] = { v: 2 };\nfor (const k in m) { delete m[k]; const s = m[k]; console.log(s.wq); }\n",
+    );
+    let r = recv(&pf, "wq");
+    assert!(r.contains("Object"), "{r}");
 }

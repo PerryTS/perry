@@ -2133,8 +2133,12 @@ impl Model {
                     // B-del: a link a delete may have taken a key from
                     // (`enum_kept`): OrdinaryGet goes on past the deleted
                     // key to the builtin members above it.
-                    if !self.enum_link(from, q) || !self.enum_kept(q) {
+                    if !self.enum_link(from, q) {
                         self.load_from(of, q, key, dst);
+                        continue;
+                    }
+                    if !self.enum_kept(q) {
+                        self.enum_chain_lost(of, q, key, dst);
                         continue;
                     }
                     self.enum_file(q, EnumFiled::Chain { of, key, dst });
@@ -2172,7 +2176,7 @@ impl Model {
                         {
                             for p in builtins::born_links_above(self, q) {
                                 if !self.enum_kept(p) {
-                                    self.load_from(of, p, key, dst);
+                                    self.enum_chain_lost(of, p, key, dst);
                                     continue;
                                 }
                                 self.enum_file(p, EnumFiled::Chain { of, key, dst });
