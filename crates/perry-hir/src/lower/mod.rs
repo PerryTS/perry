@@ -157,6 +157,8 @@ mod collection_view_tests;
 #[cfg(test)]
 mod compound_assign_temp_type_tests;
 #[cfg(test)]
+mod late_assigned_client_request_tests;
+#[cfg(test)]
 mod for_multi_decl_tests;
 #[cfg(test)]
 mod for_of_counter_tests;
