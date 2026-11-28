@@ -4250,11 +4250,22 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     {
         return Err("the key was defined by a data descriptor (its attributes)".into());
     }
-    if !m
-        .tmpl_of(t)
-        .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
-    {
-        return Err("accessor keys on the template".into());
+    // SITEB7: an accessor of the template (a class getter or setter, one
+    // defined on the object at its birth) under another key is not met by
+    // OrdinaryGet of `a` (ECMA-262 10.1.8.1 reads the property `a` only);
+    // one under `a`, or under a key not known (`STAR_KEY`), may be it.
+    let star = m.atom_index.get(crate::STAR_KEY).copied();
+    match m.tmpl_of(t) {
+        None => return Err("no template".into()),
+        Some(tm)
+            if m.tmpls[tm as usize]
+                .accessor_keys
+                .iter()
+                .any(|&k| k == a || Some(k) == star) =>
+        {
+            return Err("the template has an accessor under the key".into());
+        }
+        Some(_) => {}
     }
     if relinked {
         json_relink_closed(m, t, key, a)?;
