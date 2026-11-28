@@ -198,6 +198,11 @@ pub(crate) fn ready() -> bool {
 
 /// The close-callbacks phase.
 pub(crate) fn run() {
+    // Taken at entry: a close the retired completions below start waits for
+    // the next phase.
+    let Some(horizon) = QUEUE.with(|q| q.borrow().next_seq.checked_sub(1)) else {
+        return;
+    };
     let waiting = QUEUE.with(|q| !q.borrow().waiting.is_empty());
     if waiting {
         for completion in
@@ -206,9 +211,6 @@ pub(crate) fn run() {
             super::dispatch(completion);
         }
     }
-    let Some(horizon) = QUEUE.with(|q| q.borrow().next_seq.checked_sub(1)) else {
-        return;
-    };
     // One taken at a time, with no borrow held: delivery runs JS, which may
     // close more sockets (they wait for the next phase) or deliver a `Closed`.
     while let Some(entry) = QUEUE.with(|q| {

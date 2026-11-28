@@ -736,6 +736,14 @@ fn client_transport_ready(id: i64) {
         }
     });
     flush_id(id);
+    // A close() queued before the connect ends an already idle session now.
+    if peek(id, |c| {
+        c.draining && c.core.as_ref().is_some_and(|core| core.is_drained())
+    })
+    .unwrap_or(false)
+    {
+        graceful_close(id);
+    }
 }
 
 // ── Data ────────────────────────────────────────────────────────────────────
