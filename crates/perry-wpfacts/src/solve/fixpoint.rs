@@ -34,6 +34,13 @@ impl Model {
                 match e {
                     crate::model::Foreign::Cons(h, ci, _, det) => {
                         if !self.nodes[*h as usize].obs {
+                            if let Cons::HandRaise { region } =
+                                self.nodes[*h as usize].cons[*ci as usize]
+                            {
+                                if let Some(k) = self.hand_raise.get_mut(&(*h, region)) {
+                                    *k -= 1;
+                                }
+                            }
                             self.nodes[*h as usize].cons[*ci as usize] = Cons::Detached;
                             *det = true;
                         }
@@ -102,6 +109,9 @@ impl Model {
                     match e {
                         crate::model::Foreign::Cons(h, ci, c, det) => {
                             if det {
+                                if let Cons::HandRaise { region } = c {
+                                    *self.hand_raise.entry((h, region)).or_default() += 1;
+                                }
                                 self.nodes[h as usize].cons[ci as usize] = c;
                             }
                             self.own_refuted_cons(h, c);

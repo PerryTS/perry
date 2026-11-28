@@ -2484,6 +2484,12 @@ pub struct Model {
     /// The nodes sunk with a writer reason (`Model::writes_any`): a node
     /// sunk with a contract reason first is sunk again at that level.
     pub sunk_writer_nodes: crate::pts::FxHashSet<NodeId>,
+    /// (node, region) -> how many live `Cons::HandRaise { region }` rules
+    /// the node holds: the attached ones minus those D2 detached
+    /// (`detach_foreign`). `sink_node` asks it instead of scanning the
+    /// node's rules, which on a node many native calls sink is one scan
+    /// per sink over a list as long as those calls.
+    pub(crate) hand_raise: FxHashMap<(NodeId, NodeId), u32>,
     /// The escape reasons a builtin contract states (`Model::contract_reason`):
     /// their holder writes a handed value only as that contract says.
     pub contract_reasons: crate::pts::FxHashSet<u32>,
