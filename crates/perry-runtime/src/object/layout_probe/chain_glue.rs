@@ -513,11 +513,24 @@ pub(super) unsafe fn has(
     }
 }
 
-/// GC: every node's `obj` word, rewritten like the shape identity words.
-pub(crate) unsafe fn for_each_node_obj(mut f: impl FnMut(*mut u64)) {
+/// GC: every node's `obj` word and every key word of its desc, rewritten like
+/// the shape identity words. A desc copies its keys from the holders' lists;
+/// a symbol key is a heap pointer that moves with its symbol (its hash, the
+/// symbol id, does not, so the entry keeps its bucket).
+pub(crate) unsafe fn for_each_node_word(mut f: impl FnMut(*mut u64)) {
     let mut n = ALL.with(|a| a.get());
     while !n.is_null() {
         f(std::ptr::addr_of_mut!((*n).obj));
+        let d = (*n).desc;
+        if !d.is_null() {
+            let es = ChainDesc::entries(d) as *mut cd::ChainEntry;
+            for i in 0..=(*d).mask as usize {
+                let key = std::ptr::addr_of_mut!((*es.add(i)).key_bits);
+                if *key != cd::EMPTY_KEY {
+                    f(key);
+                }
+            }
+        }
         n = (*n).all_next;
     }
 }

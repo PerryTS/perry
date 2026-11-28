@@ -168,7 +168,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
         tl::NET_DATA => on_data(c.id, unsafe { c.bytes() }),
         tl::NET_EOF => on_eof(c.id),
         tl::NET_SHUTDOWN => on_shutdown(c.id),
-        tl::NET_CLOSED => on_closed(c.id),
+        tl::NET_CLOSED => on_closed(c.id, c.flags & tl::NET_FLAG_TEARDOWN != 0),
         tl::NET_ERROR => {
             // SAFETY: the runtime builds these from `&'static str`s.
             let code = unsafe { c.code() }.unwrap_or("EPIPE");
@@ -443,13 +443,14 @@ fn on_shutdown(id: i64) {
     let _ = tl::close(id);
 }
 
-fn on_closed(id: i64) {
+/// During agent teardown only the id and its record go: no JS runs.
+fn on_closed(id: i64, teardown: bool) {
     let adopted = with_client(id, |client| client.adopted) == Some(true);
-    if adopted {
+    if adopted && !teardown {
         crate::turnloop_link::on_closed(id);
     }
     if let Some(mut client) = forget(id) {
-        if !adopted {
+        if !adopted && !teardown {
             settle_pending(&mut client, "socket hang up");
         }
     }

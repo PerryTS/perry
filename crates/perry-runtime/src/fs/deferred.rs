@@ -114,8 +114,8 @@ fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64, provider: &'st
     // Zero delay: the operation runs on the next turn of whichever loop is
     // driving — the generated event loop, or the poll loop an `await` spins.
     // A pending callback timer is a live event source, so a program that ends
-    // by draining its loop still performs it; `process.exit()` never ticks the
-    // timer queues, so an exit in the same tick drops it, as Node does.
+    // by draining its loop still performs it; `process.exit()` performs it
+    // without settling it (`perform_parked_at_exit`).
     let _ = crate::timer::schedule_native_turn(closure as i64, provider);
     if is_write_mode(mode) {
         track_pending_path_write(path_handle.get_nanbox_f64());
@@ -290,16 +290,7 @@ extern "C" fn perform_deferred_fs_op(
                 return Ok(true);
             }
         }
-        let result = if mode == MODE_APPEND_PROMISE || mode == MODE_APPEND_CALLBACK {
-            // Append retains its existing error contract; only writeFile owns this consumer.
-            let _ = super::js_fs_append_file_sync_options(path, data, options);
-            Ok(())
-        } else if mode == MODE_UNLINK_PROMISE || mode == MODE_UNLINK_CALLBACK {
-            unsafe { super::js_fs_unlink_result(path).map_err(|error| error.value()) }
-        } else {
-            unsafe { super::write_file_path_or_fd_result(path, data, options) }
-        };
-        result.map(|()| false)
+        perform_effect(mode, path, data, options).map(|()| false)
     });
     let error = match outcome {
         Ok(Ok(true)) => return undefined(),
@@ -313,6 +304,44 @@ extern "C" fn perform_deferred_fs_op(
         error,
     );
     undefined()
+}
+
+/// The operation's effect on the file system, without settling its sink.
+fn perform_effect(mode: f64, path: f64, data: f64, options: f64) -> Result<(), f64> {
+    if mode == MODE_APPEND_PROMISE || mode == MODE_APPEND_CALLBACK {
+        // Append retains its existing error contract; only writeFile owns this consumer.
+        let _ = super::js_fs_append_file_sync_options(path, data, options);
+        Ok(())
+    } else if mode == MODE_UNLINK_PROMISE || mode == MODE_UNLINK_CALLBACK {
+        unsafe { super::js_fs_unlink_result(path).map_err(|error| error.value()) }
+    } else {
+        unsafe { super::write_file_path_or_fd_result(path, data, options) }
+    }
+}
+
+/// `process.exit()` performs the operations still parked, in the order they
+/// were queued, as libuv's threadpool finishes the requests already queued
+/// before the process ends. No promise or callback settles, and a writeFile
+/// whose data is read from an iterable stays unwritten: reading it runs JS.
+pub(crate) fn perform_parked_at_exit() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parked: Vec<_> = crate::timer::take_native_turns(perform_deferred_fs_op as *const u8)
+        .into_iter()
+        .map(|closure| scope.root_raw_const_ptr(closure as *const ClosureHeader))
+        .collect();
+    for closure in parked {
+        let closure = closure.get_raw_const_ptr::<ClosureHeader>();
+        let mode = js_closure_get_capture_f64(closure, CAP_MODE);
+        let data = js_closure_get_capture_f64(closure, CAP_DATA);
+        if (mode == MODE_WRITE_PROMISE || mode == MODE_WRITE_CALLBACK)
+            && !super::stream::is_direct_write_data(data)
+        {
+            continue;
+        }
+        let path = js_closure_get_capture_f64(closure, CAP_PATH);
+        let options = js_closure_get_capture_f64(closure, CAP_OPTIONS);
+        let _ = crate::exception::catch_js_throw(|| perform_effect(mode, path, data, options));
+    }
 }
 
 pub(crate) fn complete_deferred_write(

@@ -306,6 +306,9 @@ pub(crate) fn lower_opt_chain_expr(
             // checked `obj == null`, which crashed when `obj.method` was
             // undefined while `obj` itself was a valid object.
             let callee = &call.callee;
+            if let ast::Expr::SuperProp(super_prop) = callee.as_ref() {
+                return lower_super_optional_call(ctx, super_prop, call, opt_chain.span.lo.0);
+            }
 
             // Check for spread arguments
             let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
@@ -766,6 +769,66 @@ pub(crate) fn lower_opt_chain_expr(
             ))
         }
     }
+}
+
+/// `super.m?.(args)` / `super[k]?.(args)`. The callee is a SuperProperty
+/// reference (MakeSuperPropertyReference, 13.3.7.1) whose this value is the
+/// current `this`; the optional call (13.3.9.1) gets the member once, yields
+/// `undefined` when it is nullish, and otherwise calls it with that this value
+/// (EvaluateCall, 13.3.6.2), the receiver the plain `super.m(args)` binds.
+/// The call is the intrinsic Call(F, this, args) (`ReflectApply` over the
+/// argument list), not a lookup of the member's overridable `.call`.
+fn lower_super_optional_call(
+    ctx: &mut LoweringContext,
+    super_prop: &ast::SuperPropExpr,
+    call: &ast::OptCall,
+    at: u32,
+) -> Result<Expr> {
+    let member = crate::lower::expr_misc::lower_super_prop(ctx, super_prop)?;
+    let mut bindings = Vec::new();
+    let func = capture_base(ctx, member, &mut bindings, false);
+    let mut elements = Vec::with_capacity(call.args.len());
+    for arg in &call.args {
+        let value = lower_expr(ctx, &arg.expr)?;
+        elements.push(if arg.spread.is_some() {
+            ArrayElement::Spread(value)
+        } else {
+            ArrayElement::Expr(value)
+        });
+    }
+    let args = if elements.iter().all(|e| matches!(e, ArrayElement::Expr(_))) {
+        Expr::Array(
+            elements
+                .into_iter()
+                .map(|e| match e {
+                    ArrayElement::Expr(v) => v,
+                    _ => unreachable!("checked: every element is positional"),
+                })
+                .collect(),
+            None,
+        )
+    } else {
+        Expr::ArraySpread(elements)
+    };
+    let call_expr = Expr::ReflectApply {
+        func: Box::new(func.clone()),
+        this_arg: Box::new(Expr::This),
+        args: Box::new(args),
+    };
+    Ok(bind_bases(
+        Expr::Conditional {
+            byte_offset: at,
+            condition: Box::new(Expr::Compare {
+                byte_offset: at,
+                op: CompareOp::LooseEq,
+                left: Box::new(func),
+                right: Box::new(Expr::Null),
+            }),
+            then_expr: Box::new(Expr::Undefined),
+            else_expr: Box::new(call_expr),
+        },
+        bindings,
+    ))
 }
 
 /// Where an optional call stands: a method call (`a?.b()`, `a.b?.()`,

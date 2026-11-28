@@ -659,6 +659,13 @@ impl AgentTimers {
             .collect()
     }
 
+    /// Remove every entry `take` admits, in scheduling order.
+    pub(super) fn take_where(&mut self, take: impl Fn(&Entry) -> bool) -> Vec<Entry> {
+        let mut taken = self.remove_where(take);
+        taken.sort_by_key(|entry| entry.seq);
+        taken
+    }
+
     /// Apply `ref()`/`unref()` to a queued entry. Returns whether one was found.
     pub(super) fn set_ref(&mut self, id: i64, refed: bool) -> bool {
         let Some(&index) = self.by_id.get(&id) else {

@@ -207,22 +207,10 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
     undefined()
 }
 
-/// Node emits a server session's `'close'` from its socket's `'close'`, so
-/// it runs in that socket's close callback.
+/// Node emits a server session's `'close'` from its socket's `'close'`.
 unsafe extern "C" fn socket_closed(closure: *const RawClosureHeader, _: JsThis) -> f64 {
-    use crate::server::http2_server::Http2SessionHandle;
     let session = perry_ffi::closure_capture_f64(closure, 0) as i64;
-    let listeners = match perry_ffi::get_handle_mut::<Http2SessionHandle>(session) {
-        Some(handle) => {
-            handle.mark_destroyed();
-            handle.take_close_listeners()
-        }
-        None => return undefined(),
-    };
-    let scope = TransientRootScope::enter();
-    for listener in scope.root_addrs(&listeners) {
-        crate::server::http2_server::call0(listener.get());
-    }
+    crate::server::http2_server::emit_session_close(session);
     undefined()
 }
 

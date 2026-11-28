@@ -56,7 +56,7 @@ pub(crate) use controls::{
     numeric_value, queue_session_goaway, queue_session_ping, queue_session_settings,
 };
 pub(crate) use pump::{
-    has_active_h2_clients, process_pending_h2, process_pending_h2_events,
+    emit_session_close, has_active_h2_clients, process_pending_h2, process_pending_h2_events,
     try_recv_pending_h2_nonblocking,
 };
 #[cfg(test)]
@@ -68,13 +68,14 @@ pub(crate) use session::{
 };
 pub(crate) use turnloop_glue::{
     bind_turnloop_client_port, bind_turnloop_session, bind_turnloop_stream_id,
-    complete_turnloop_ping, complete_turnloop_settings, mark_turnloop_client_connected,
-    mark_turnloop_session_closed, mark_turnloop_settings_acked, mark_turnloop_stream_closed,
-    queue_turnloop_client_body, queue_turnloop_client_response, queue_turnloop_goaway,
-    queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_session_tls_error,
-    queue_turnloop_stream_cancel, queue_turnloop_stream_error, queue_turnloop_stream_reset,
-    register_turnloop_server_session, register_turnloop_stream_handle, server_has_stream_listener,
-    socket_of_session, turnloop_conn_of_session, turnloop_target_of_stream,
+    complete_turnloop_ping, complete_turnloop_settings, detach_turnloop_session,
+    mark_turnloop_client_connected, mark_turnloop_session_closed, mark_turnloop_session_ended,
+    mark_turnloop_settings_acked, mark_turnloop_stream_closed, queue_turnloop_client_body,
+    queue_turnloop_client_response, queue_turnloop_goaway, queue_turnloop_remote_settings,
+    queue_turnloop_session_error, queue_turnloop_session_tls_error, queue_turnloop_stream_cancel,
+    queue_turnloop_stream_error, queue_turnloop_stream_reset, register_turnloop_server_session,
+    register_turnloop_stream_handle, server_has_stream_listener, socket_of_session,
+    turnloop_conn_of_session, turnloop_target_of_stream,
 };
 
 pub(crate) static H2_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<Http2PendingEvent>>> =
@@ -115,8 +116,7 @@ pub(crate) fn scan_h2_pending_event_roots(visitor: &mut perry_ffi::GcRootVisitor
     ) {
         for event in events {
             match event {
-                Http2PendingEvent::ClientClose { callback, .. }
-                | Http2PendingEvent::SessionSettingsCallback { callback, .. }
+                Http2PendingEvent::SessionSettingsCallback { callback, .. }
                 | Http2PendingEvent::SessionPingCallback { callback, .. } => {
                     if *callback != 0 {
                         visitor.visit_i64_slot(callback);
@@ -210,6 +210,8 @@ pub struct Http2SessionHandle {
     pub local_window_size: i64,
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
+    /// `'close'` has been emitted; a session emits it once.
+    pub close_emitted: bool,
     pub pending_callbacks: Vec<i64>,
     /// When each PING still awaiting its acknowledgement was sent, oldest
     /// first; the ack measures the round trip from it.
@@ -276,9 +278,9 @@ pub(crate) enum Http2PendingEvent {
     ClientStreamClose {
         stream_handle: i64,
     },
+    /// The `'close'` of a session whose transport never reports its close.
     ClientClose {
         session_handle: i64,
-        callback: i64,
     },
     SessionSettingsEvent {
         session_handle: i64,

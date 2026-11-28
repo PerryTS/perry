@@ -248,6 +248,12 @@ pub(crate) fn session_close(conn_id: impl Into<Target>) {
 /// `session.destroy()` — no GOAWAY, no drain.
 pub(crate) fn session_destroy(conn_id: impl Into<Target>) {
     let conn_id = conn_id.into();
+    // A graceful close already ending the transport closes it once its
+    // GOAWAY has drained, as Node's destroy() waits for the session's
+    // pending output.
+    if conn::peek(conn_id, |c| c.closing).unwrap_or(false) {
+        return;
+    }
     conn::destroy_connection(conn_id);
 }
 

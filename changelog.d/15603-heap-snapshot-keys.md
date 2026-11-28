@@ -1,0 +1,1 @@
+- **Heap snapshot property names.** `v8.writeHeapSnapshot` / `v8.getHeapSnapshot` list the key of a property whose value is a primitive in the snapshot's strings, as V8 does.

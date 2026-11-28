@@ -1,9 +1,9 @@
-// #9442, CommonJS half. `process.exit()` must abandon async fs work that has
-// not run yet in a `.cts` module too — the fix lives in the runtime's fs entry
-// points, not in the ESM lowering, and this fixture is what proves that rather
-// than assuming it. See test_gap_9442_process_exit_abandons_async_fs.ts for the
-// full role set and the reasoning; this one keeps the repro plus the two
-// controls that stop a fix from over-abandoning.
+// #9442, CommonJS half. `process.exit()` performs the async fs requests already
+// queued without settling them in a `.cts` module too: the behaviour lives in
+// the runtime's fs entry points, not in the ESM lowering, and this fixture is
+// what proves that rather than assuming it. See
+// test_gap_9442_process_exit_abandons_async_fs.ts for the full role set and the
+// reasoning; this one keeps the repro plus the two controls.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");

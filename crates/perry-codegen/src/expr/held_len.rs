@@ -20,9 +20,10 @@
 //!
 //! **The read** (`lower_read`) is the rep-keyed tier's
 //! (`index_get::proven_array`) with `RepRead::bounded`: no `idx <u
-//! capacity` test, and, when every Array the local may hold has a defined
-//! length (`stable_front`), the slot at `h + 24 + 8 * idx` with no capacity
-//! or size load. The forwarding test stays (the value in the local may be
+//! capacity` test for a dense receiver (a holey one's length may pass its
+//! store), and, when every Array the local may hold has a defined
+//! length (`stable_front`), the slot at `h + 24 + 8 * idx` with no size
+//! load (nor a capacity load for a dense receiver). The forwarding test stays (the value in the local may be
 //! an Array's old header from before the loop), as do the hole test and, in
 //! a number context, the plain-Number test.
 //!

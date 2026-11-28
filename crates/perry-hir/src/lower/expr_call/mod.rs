@@ -616,17 +616,7 @@ fn lower_call_inner(
                         // the current `this`. Rewriting it to `this[key]`
                         // re-selects an override on the derived class (and for
                         // `super[Symbol.iterator]()` recurses forever).
-                        if let Some(class_name) = ctx.current_class.clone() {
-                            let home = if ctx.current_class_member_is_static {
-                                Expr::ClassRef(class_name)
-                            } else {
-                                Expr::PropertyGet {
-                                    byte_end: 0,
-                                    object: Box::new(Expr::ClassRef(class_name)),
-                                    property: "prototype".to_string(),
-                                    byte_offset: 0,
-                                }
-                            };
+                        if let Some(home) = super::expr_misc::class_super_home(ctx) {
                             return Ok(Expr::ObjectSuperMethodCall {
                                 byte_offset: crate::lower::call_token(call),
                                 home: Box::new(home),

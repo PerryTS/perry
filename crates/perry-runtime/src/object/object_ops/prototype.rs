@@ -757,6 +757,8 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // no static prototype is recorded, return null to break
                 // the would-be `getPrototypeOf(cls) === cls` self-cycle.
                 if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                    // An unborn lazy builtin constructor links to its parent in its birth.
+                    crate::object::birth_unborn_family_of(raw_addr as usize);
                     if let Some(proto_bits) =
                         crate::closure::closure_static_prototype(raw_addr as usize)
                     {
@@ -1010,6 +1012,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             // prototype if any, else null to break the chain-walk
             // self-cycle.
             if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                crate::object::birth_unborn_family_of(bits as usize);
                 if let Some(proto_bits) = crate::closure::closure_static_prototype(bits as usize) {
                     return f64::from_bits(proto_bits);
                 }
