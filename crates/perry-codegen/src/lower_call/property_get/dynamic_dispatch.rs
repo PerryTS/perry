@@ -611,6 +611,7 @@ fn lower_instance_method_call(
                         proven: proven.as_ref(),
                         split,
                         call_byte_offset,
+                        member,
                     },
                 )
                 .map(Some);
@@ -635,17 +636,21 @@ fn lower_instance_method_call(
             // classes. 0 = no compiled body: the site's generic arm.
             // `arms`: the implementors a selection names (one per switch arm);
             // `None` for a proven site, whose switch lists every class.
-            let (selected, arms) = if let Some((_, nullable)) = &proven {
+            // `exact`: the arms whose only case value is their own class's id.
+            let (selected, arms, exact) = if let Some((_, nullable)) = &proven {
                 (
                     crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable),
                     None,
+                    Vec::new(),
                 )
             } else if cased.contains(&true) {
-                let (selected, arms) = select::select(ctx, &recv, property, &implementors, &cased);
-                (selected, Some(arms))
+                let (selected, arms, exact) =
+                    select::select(ctx, &recv, property, &implementors, &cased);
+                (selected, Some(arms), exact)
             } else {
-                ("0".to_string(), Some(Vec::new()))
+                ("0".to_string(), Some(Vec::new()), Vec::new())
             };
+            let mut call_one = (0usize, 0usize);
             // #11910: a receiver no compiled body claims reads its method
             // through the split method site before the arguments.
             let pre_lookup = if split {
@@ -760,10 +765,13 @@ fn lower_instance_method_call(
                 );
                 let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                // The facts prove the receiver is this arm's class (`proven`)
-                // and that class's layout never changes (`fixed_layout`): the
-                // arm needs no recheck.
-                let layout_proven = proven.is_some()
+                // The arm's receiver is exactly this class: the facts prove it
+                // (`proven`), or the switch's only case value for the arm is
+                // the class's id (`exact`, CALL-ONE). Where that class's
+                // layout never changes (`fixed_layout`) the arm needs no
+                // recheck.
+                let exact_arm = proven.is_some() || exact.contains(&i);
+                let layout_proven = exact_arm
                     && impl_owner[i]
                         .as_deref()
                         .is_some_and(|owner| tower_layout_proven(ctx, owner, implementors[i].0));
@@ -775,6 +783,10 @@ fn lower_instance_method_call(
                     args,
                 ) {
                     Some(route) => {
+                        if proven.is_none() {
+                            call_one.1 += 1;
+                            call_one.0 += usize::from(layout_proven);
+                        }
                         let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
                         let owner = impl_owner[i].as_deref().unwrap_or_default();
                         emit_tower_pshape_call(
@@ -827,6 +839,8 @@ fn lower_instance_method_call(
                 }
                 phi_inputs.push((v, after));
             }
+            let refused_cases = if proven.is_none() { case_idxs.len() } else { 0 };
+            tower::report_call_one(ctx, member, property, call_one, refused_cases);
             // The generic arm: the split call half (the method was read before
             // the arguments), else the universal method site. A proven site
             // has none: its block is the contract build's witness, or dead.
@@ -1372,7 +1386,7 @@ fn lower_instance_method_call(
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
-                let (selected, arms) = select::select_with_word(
+                let (selected, arms, _) = select::select_with_word(
                     ctx,
                     &recv,
                     property,
