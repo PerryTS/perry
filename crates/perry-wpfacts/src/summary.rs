@@ -1415,8 +1415,7 @@ impl Model {
             // Rule C: a closure maker's runs are per call site; so are those
             // of a function with a rest parameter no receiver lays out (E2).
             _ if call != NO_NODE && (self.closure_maker(f, x) || self.rest_per_site(f, lay)) => {
-                let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
-                (7, site, ft)
+                (7, self.text_site(call), ft)
             }
             _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             _ if let Some(site) = self.nested_site(call, ft) => (0, site, ft),
@@ -1491,6 +1490,20 @@ impl Model {
     /// widened solve makes are bounded too. A key the solve made (a
     /// nested-site chain copy, a solver call, a receiver or trap context)
     /// has no such bound and merges.
+    /// The program-text site of `call` (rules C and E2: one run per call
+    /// site): a program call is its own; an instance's copy of a body's
+    /// call is that body's call (`tmpl_of`); a solver-made call (a native
+    /// model's call: `apply`, `call`, a callback) is the site of the call
+    /// its chain of solver-made calls started at (`made_root`). Never the
+    /// id of a call the solve minted: that id is new per level of a
+    /// recursion (a wrapper that calls the function it replaced through
+    /// `f.apply(this, arguments)` reaches itself), so a key holding it
+    /// names a new run per level, without end.
+    fn text_site(&self, call: CallId) -> CallId {
+        let root = self.made_root.get(&call).copied().unwrap_or(call);
+        self.sum.tmpl_of.get(&root).copied().unwrap_or(root)
+    }
+
     fn text_key(key: (u8, u32, Tok), n_prog: usize) -> bool {
         matches!(key.0, 0 | 7 | 9) && (key.1 as usize) < n_prog
     }
