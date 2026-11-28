@@ -1423,7 +1423,12 @@ fn connect_failed(id: i64, err: NodeError) -> bool {
         return false;
     }
     // Release this attempt's handle first: `Closed` is what starts the next.
-    let _ = close(id);
+    if close(id).is_err() {
+        // Refused, so no `Closed` starts one: the connect fails here, and a
+        // later caller close() is a close, not this attempt's.
+        NET.with(|net| net.borrow_mut().plans.remove(&id));
+        return false;
+    }
     true
 }
 

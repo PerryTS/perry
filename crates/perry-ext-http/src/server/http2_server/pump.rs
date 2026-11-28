@@ -483,6 +483,10 @@ fn dispatch_h2_event(event: Http2PendingEvent) {
                     js_promise_run_microtasks();
                 }
             }
+            // Node closes the session after a NO_ERROR GOAWAY's listeners ran.
+            if code == 0.0 {
+                super::mark_turnloop_session_ended(session_handle);
+            }
         }
         Http2PendingEvent::ClientError {
             handle,
