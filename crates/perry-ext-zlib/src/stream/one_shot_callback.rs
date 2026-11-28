@@ -224,6 +224,18 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
         if field(call.owner.get(), "brotliLargeWindow") == 1.0 {
             payload(engine.get()).unwrap().allow_brotli_large_window();
         }
+        if matches!(codec, Codec::ZstdCompress) {
+            let size = np::get_mut::<Completion>(call.owner.get(), &COMPLETION)
+                .unwrap()
+                .input
+                .len();
+            if let Err(error) = payload(engine.get())
+                .unwrap()
+                .pledge_zstd_source_size(size as u64)
+            {
+                throw_zstd_error(&error);
+            }
+        }
         // Both jobs capture the ordinary owner; this field is traced/re-written.
         // No JS address is hidden in Completion, and no second driver exists.
         np::own(call.owner.get(), "engine", engine.get());
