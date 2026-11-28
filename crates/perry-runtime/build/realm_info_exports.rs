@@ -272,7 +272,13 @@ fn realm_native_receiver_facts_match_namespace_births() {{
             assert_eq!((*header).obj_type, crate::gc::GC_TYPE_OBJECT, "{{name}}");
             assert_eq!((*header)._reserved, reserved, "{{name}}");
             assert_eq!((*obj).class_id, super::NATIVE_MODULE_CLASS_ID, "{{name}}");
-            assert_eq!(super::read_native_module_name(obj).as_deref(), Some(module), "{{name}}");
+            // An alias names the one namespace it is (`path.posix` is `path`
+            // on POSIX hosts).
+            assert_eq!(
+                super::read_native_module_name(obj).as_deref(),
+                Some(super::normalize_native_module_alias(module)),
+                "{{name}}"
+            );
         }}
     }}
 }}

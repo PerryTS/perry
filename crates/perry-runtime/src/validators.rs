@@ -90,21 +90,29 @@ pub fn throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 pub fn format_range_received(n: f64) -> String {
     let base = format_received_number(n);
     if n.is_finite() && n.fract() == 0.0 && n.abs() > 4_294_967_296.0 {
-        let (sign, digits) = base
-            .strip_prefix('-')
-            .map_or(("", base.as_str()), |rest| ("-", rest));
-        let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-        let len = digits.len();
-        for (i, ch) in digits.chars().enumerate() {
-            if i > 0 && (len - i) % 3 == 0 {
-                out.push('_');
-            }
-            out.push(ch);
-        }
-        format!("{sign}{out}")
+        add_numerical_separator(&base)
     } else {
         base
     }
+}
+
+/// node `addNumericalSeparator`: a `_` before each group of three characters
+/// counted from the end of `String(n)`, exponent and fraction included
+/// (`1e+21` reads `1e_+21`), as Node renders it.
+pub fn add_numerical_separator(val: &str) -> String {
+    let start = usize::from(val.starts_with('-'));
+    let mut end = val.len();
+    let mut groups = Vec::new();
+    while end >= start + 4 {
+        groups.push(&val[end - 3..end]);
+        end -= 3;
+    }
+    let mut out = String::from(&val[..end]);
+    for group in groups.iter().rev() {
+        out.push('_');
+        out.push_str(group);
+    }
+    out
 }
 
 /// Throw `RangeError [ERR_OUT_OF_RANGE]`: `The value of "<name>" is out of

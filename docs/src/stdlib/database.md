@@ -20,6 +20,15 @@ Perry natively implements clients for MySQL, PostgreSQL, SQLite, MongoDB, and Re
 {{#include ../../examples/stdlib/database/snippets.ts:sqlite}}
 ```
 
+The CommonJS export of `better-sqlite3` is its database constructor. Its local
+binding does not need to be named `Database`:
+
+```js
+const Better = require("better-sqlite3");
+const db = new Better(":memory:");
+db.close();
+```
+
 ### better-sqlite3 statement reuse
 
 The stdlib better-sqlite3 provider uses the connection-owned rusqlite statement
@@ -44,6 +53,11 @@ statement such as `INSERT ... RETURNING` is stepped to completion, its rows are
 discarded, and the reported change count comes from the connection. A step
 error makes the call fail instead of reporting a completed run, and `get()` /
 `all()` fail rather than returning the rows read before the error.
+
+For a prepared statement, `reader` means the SQL has result columns, even if
+a query returns no rows. It is independent of `readonly`: an
+`INSERT ... RETURNING` statement has `reader === true` and `readonly === false`.
+Reading either property does not execute the statement.
 
 ## MongoDB
 

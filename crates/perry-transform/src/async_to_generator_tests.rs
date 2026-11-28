@@ -10,6 +10,7 @@ use super::*;
 // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
 fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),
@@ -170,6 +171,7 @@ fn await_(inner: Expr) -> Expr {
 /// An async arrow whose body is `stmts`, at `func_id`.
 fn async_closure_body(func_id: perry_hir::types::FuncId, stmts: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),
@@ -430,6 +432,7 @@ fn async_generator_class_methods_are_recorded_like_top_level() {
         is_static: false,
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
+        names_declaration: false,
     });
     module.classes.push(class);
 
@@ -920,6 +923,7 @@ fn async_generator_closure_expressions_linearize_awaits() {
     use crate::generator::transform_generators;
 
     let async_gen_closure = |id: perry_hir::types::FuncId, body: Vec<Stmt>| Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: id,
         params: Vec::new(),
@@ -1014,6 +1018,7 @@ fn async_closure_in_computed_member_body_is_collected() {
         is_static: false,
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
+        names_declaration: false,
     });
     module.classes.push(class);
 
@@ -1073,6 +1078,7 @@ fn computed_generator_receivers_match_named_methods() {
                     is_static,
                     kind: ClassComputedMemberKind::Method,
                     source_order: 0,
+                    names_declaration: false,
                 });
             } else if is_static {
                 class.static_methods.push(function);

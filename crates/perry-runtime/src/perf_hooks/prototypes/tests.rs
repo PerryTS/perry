@@ -182,3 +182,37 @@ fn mark_resource_timing_ignores_its_receiver() {
     );
     crate::perf_hooks::js_perf_clear_resource_timings();
 }
+
+/// #15223: `perf_hooks.PerformanceObserver.supportedEntryTypes` mints the
+/// constructor through its static export body before any `new`. That mint
+/// decorates it like `bound_native_callable_export_value` does, so the shared
+/// constructor's prototype carries the observer methods.
+#[test]
+fn a_constructor_minted_by_its_static_export_body_carries_its_prototype() {
+    extern "C" {
+        fn js_native_export_706572665f686f6f6b73_506572666f726d616e63654f62736572766572(
+            observe_writes: i32,
+        ) -> f64;
+    }
+    let _scope = TestScope::new();
+    crate::perf_hook_slots::install();
+    let constructor =
+        unsafe { js_native_export_706572665f686f6f6b73_506572666f726d616e63654f62736572766572(0) };
+    assert_eq!(
+        constructor.to_bits(),
+        crate::object::bound_native_callable_export_value("perf_hooks", "PerformanceObserver")
+            .to_bits(),
+        "both mints share one constructor"
+    );
+    let prototype =
+        unsafe { crate::value::js_get_property(constructor, b"prototype".as_ptr() as i64, 9) };
+    for name in ["observe", "disconnect", "takeRecords"] {
+        let method = unsafe {
+            crate::value::js_get_property(prototype, name.as_ptr() as i64, name.len() as i64)
+        };
+        assert!(
+            crate::value::JSValue::from_bits(method.to_bits()).is_pointer(),
+            "PerformanceObserver.prototype.{name} must be its method"
+        );
+    }
+}

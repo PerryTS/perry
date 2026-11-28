@@ -73,7 +73,9 @@ pub extern "C" fn js_object_get_field_by_name_boxed(
     key: *const crate::StringHeader,
 ) -> f64 {
     let value = crate::value::JSValue::from_bits(receiver.to_bits());
-    if !value.is_pointer() {
+    // A reference, not only a heap pointer: a native handle (`HANDLE_TAG`) is
+    // read through the handle property dispatch below.
+    if !value.is_reference() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let raw = crate::value::js_nanbox_get_pointer(receiver);

@@ -539,13 +539,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
 
         // Path operations
-        Expr::PathJoin(a, b) => Expr::PathJoin(
-            Box::new(substitute_expr(a, substitutions)),
-            Box::new(substitute_expr(b, substitutions)),
+        Expr::PathJoin(args) => Expr::PathJoin(
+            args.iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
-        Expr::PathWin32Join(a, b) => Expr::PathWin32Join(
-            Box::new(substitute_expr(a, substitutions)),
-            Box::new(substitute_expr(b, substitutions)),
+        Expr::PathWin32Join(args) => Expr::PathWin32Join(
+            args.iter()
+                .map(|e| substitute_expr(e, substitutions))
+                .collect(),
         ),
         Expr::PathWin32 { method, args } => Expr::PathWin32 {
             method: *method,
@@ -960,6 +962,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::Closure {
             func_id,
             params,
+            type_params,
             return_type,
             body,
             captures,
@@ -973,38 +976,43 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             is_strict,
             construct_only,
             byte_offset,
-        } => Expr::Closure {
-            byte_offset: *byte_offset,
-            func_id: *func_id,
-            params: params
-                .iter()
-                .map(|p| Param {
-                    byte_offset: p.byte_offset,
-                    id: p.id,
-                    name: p.name.clone(),
-                    ty: substitute_type(&p.ty, substitutions),
-                    default: p
-                        .default
-                        .as_ref()
-                        .map(|d| substitute_expr(d, substitutions)),
-                    decorators: p.decorators.clone(),
-                    is_rest: p.is_rest,
-                    arguments_object: p.arguments_object.clone(),
-                })
-                .collect(),
-            return_type: substitute_type(return_type, substitutions),
-            body: substitute_stmts(body, substitutions),
-            captures: captures.clone(),
-            mutable_captures: mutable_captures.clone(),
-            captures_this: *captures_this,
-            captures_new_target: *captures_new_target,
-            enclosing_class: enclosing_class.clone(),
-            is_arrow: *is_arrow,
-            is_async: *is_async,
-            is_generator: *is_generator,
-            is_strict: *is_strict,
-            construct_only: *construct_only,
-        },
+        } => {
+            let visible = without_own_type_params(substitutions, type_params);
+            let substitutions = &*visible;
+            Expr::Closure {
+                type_params: type_params.clone(),
+                byte_offset: *byte_offset,
+                func_id: *func_id,
+                params: params
+                    .iter()
+                    .map(|p| Param {
+                        byte_offset: p.byte_offset,
+                        id: p.id,
+                        name: p.name.clone(),
+                        ty: substitute_type(&p.ty, substitutions),
+                        default: p
+                            .default
+                            .as_ref()
+                            .map(|d| substitute_expr(d, substitutions)),
+                        decorators: p.decorators.clone(),
+                        is_rest: p.is_rest,
+                        arguments_object: p.arguments_object.clone(),
+                    })
+                    .collect(),
+                return_type: substitute_type(return_type, substitutions),
+                body: substitute_stmts(body, substitutions),
+                captures: captures.clone(),
+                mutable_captures: mutable_captures.clone(),
+                captures_this: *captures_this,
+                captures_new_target: *captures_new_target,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: *is_arrow,
+                is_async: *is_async,
+                is_generator: *is_generator,
+                is_strict: *is_strict,
+                construct_only: *construct_only,
+            }
+        }
 
         // RegExp operations
         Expr::RegExp { pattern, flags } => Expr::RegExp {
@@ -1258,5 +1266,22 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
         Stmt::PreallocateBoxes(ids) => Stmt::PreallocateBoxes(ids.clone()),
         Stmt::PreallocateTdzBoxes(ids) => Stmt::PreallocateTdzBoxes(ids.clone()),
         Stmt::ReleaseBoxes(ids) => Stmt::ReleaseBoxes(ids.clone()),
+    }
+}
+
+/// The substitutions a closure sees: a `<T>` it declares shadows the
+/// enclosing function's `T`, which still applies to every other name.
+fn without_own_type_params<'a>(
+    substitutions: &'a HashMap<String, Type>,
+    own: &[crate::types::TypeParam],
+) -> std::borrow::Cow<'a, HashMap<String, Type>> {
+    if own.iter().any(|p| substitutions.contains_key(&p.name)) {
+        let mut outer = substitutions.clone();
+        for p in own {
+            outer.remove(&p.name);
+        }
+        std::borrow::Cow::Owned(outer)
+    } else {
+        std::borrow::Cow::Borrowed(substitutions)
     }
 }

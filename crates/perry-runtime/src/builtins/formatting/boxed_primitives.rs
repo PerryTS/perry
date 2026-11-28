@@ -285,12 +285,12 @@ pub(crate) fn boxed_primitive_to_string_tag(value: f64) -> Option<&'static str> 
 #[no_mangle]
 pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
     let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_NUMBER, 0);
-    // `new Number()` (no args) is spec'd to box +0, not NaN. js_number_coerce
-    // would map undefined to NaN, so detect the missing-arg sentinel first.
+    // `new Number()` (no args) is spec'd to box +0, not NaN, but `Number(undefined)`
+    // is NaN, so detect the missing-arg sentinel first.
     let payload = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
         0.0
     } else {
-        js_number_coerce(value)
+        crate::builtins::js_number_from_value(value)
     };
     register_boxed_primitive_payload(obj, payload);
     attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_NUMBER);
@@ -336,6 +336,10 @@ pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     // keys and values are produced on demand; boxing never walks the string.
     install_string_wrapper_length(obj, ptr);
     obj_handle.with_mut_ptr(|obj| attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING));
+    // Those virtual indices are own keys the shape does not list, so a
+    // shape-keyed read must not answer an index from the prototype chain.
+    let obj = obj_handle.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| obj as usize);
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj) };
     obj_handle.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
         crate::value::js_nanbox_pointer(obj as i64)
     })
@@ -412,5 +416,15 @@ mod tests {
             boxed_primitive_payload(bare).expect("an owned bare wrapper is still a wrapper");
         assert_eq!(class_id, CLASS_ID_BOXED_NUMBER);
         assert_eq!(payload, 42.0);
+    }
+
+    /// A `String` wrapper's character indices are own keys its shape does not
+    /// list, so its reads must never be answered from its shape and chain.
+    #[test]
+    fn a_string_wrapper_is_an_exotic_read_receiver() {
+        let text = crate::string::js_string_from_bytes(b"abc".as_ptr(), 3);
+        let wrapper = js_boxed_string_new(crate::value::js_nanbox_string(text as i64), 1);
+        let addr = crate::value::js_nanbox_get_pointer(wrapper) as usize;
+        assert!(unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(addr) });
     }
 }

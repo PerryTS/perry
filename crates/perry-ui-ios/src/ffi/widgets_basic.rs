@@ -114,9 +114,42 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    perry_ui_widget_set_accessibility_label(field, text_ptr);
+    perry_ui_text_create(text_ptr)
+}
+
+/// Set the name a screen reader announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    widgets::set_accessibility_label(handle, text_ptr as *const u8);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)
+}
+
+/// A Link is its text; a click opens its URL.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    let href = unsafe { perry_ffi::copy_string_from_raw(href_ptr as *const u8) };
+    let handle = perry_ui_text_create(text_ptr);
+    let open = perry_ui::link::open_link_callback(href, super::system::perry_system_open_url);
+    widgets::set_on_click(handle, open);
+    handle
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 #[no_mangle]
@@ -419,6 +452,10 @@ pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, cb: f64) {
     crate::keyboard::set_on_key_up(handle, cb);
     crate::keyboard::make_first_responder();
 }
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(cb: f64) {
     crate::keyboard::set_on_key_down(0, cb);
@@ -800,6 +837,16 @@ pub extern "C" fn perry_ui_menu_add_standard_action(
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(callback: f64) {
     file_dialog::open_dialog(callback);
+}
+
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead. This backend opens no
+/// dialog and reports a cancelled one: `callback("", "")`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, callback: f64) {
+    // The inline empty string: nothing allocates between here and the call.
+    let empty = f64::from_bits(0x7FF9_0000_0000_0000);
+    unsafe { perry_ffi::call_value(callback, perry_ffi::JsThis::UNDEFINED, &[empty, empty]) };
 }
 
 #[no_mangle]

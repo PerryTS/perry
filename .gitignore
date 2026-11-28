@@ -38,10 +38,9 @@ docs/examples/_reports/
 /assets/
 benchmarks/suite/assets/
 
-# V2.2 per-module object cache (machine-local: keyed by opts + source hash,
-# but the cached .o files bake in host CPU features via clang -mcpu=native /
-# -march=native, so sharing across machines with different CPUs can produce
-# SIGILL at runtime. Always machine-local, always regenerable.)
+# V2.2 per-module object cache (keyed by opts + source hash + target CPU;
+# objects built with the explicit `--march native` opt-in bake in the build
+# machine's CPU features, so keep it machine-local. Always regenerable.)
 .perry-cache/
 .feature-matrix/
 

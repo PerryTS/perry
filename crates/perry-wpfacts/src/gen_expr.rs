@@ -1334,9 +1334,18 @@ impl<'a> Gen<'a> {
             }
             Expr::Sequence(es) => {
                 let mut last = self.prim_node(prim::UNDEF);
-                for x in es {
+                // A direct write in one element is what the later elements
+                // read (`narrow_assigned_expr`); the narrowings end with the
+                // sequence.
+                let mut pushed = 0;
+                for (k, x) in es.iter().enumerate() {
+                    self.last_local_set = None;
                     last = self.expr_zs(fx, x);
+                    if k + 1 < es.len() {
+                        pushed += self.narrow_assigned_expr(fx, x);
+                    }
                 }
+                self.narrow_pop(pushed);
                 last
             }
             Expr::InstanceOf { expr, ty, ty_expr } => {

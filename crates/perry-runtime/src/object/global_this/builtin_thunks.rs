@@ -95,7 +95,7 @@ pub(crate) extern "C" fn math_random_thunk(
 }
 
 fn math_number_arg(value: f64) -> f64 {
-    crate::math::js_math_to_number(value)
+    crate::builtins::js_number_coerce(value)
 }
 
 fn math_to_int32(value: f64) -> i32 {
@@ -407,7 +407,7 @@ pub(crate) extern "C" fn global_this_number_thunk(
         // we can't distinguish — match the common `Number()` → 0 case.
         return f64::from_bits(crate::value::JSValue::number(0.0).bits());
     }
-    crate::builtins::js_number_coerce(value)
+    crate::builtins::js_number_from_value(value)
 }
 
 pub(crate) extern "C" fn global_this_boolean_thunk(

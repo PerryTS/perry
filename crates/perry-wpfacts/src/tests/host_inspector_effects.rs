@@ -76,7 +76,7 @@ fn program_store_over_declared_member_is_read() {
 /// K3 (control): a computed key the realm does not declare on the module
 /// object reads ⊤.
 #[test]
-fn computed_key_on_module_object_reads_top() {
+fn computed_key_on_module_object_reads_its_declared_members() {
     let pf = facts(&format!(
         r#"{PRELUDE}
         function enable(k: string) {{
@@ -88,7 +88,9 @@ fn computed_key_on_module_object_reads_top() {
         export const keep = 1;
     "#
     ));
-    assert!(site(&pf, "q").top, "{}", pf.dump_text());
+    // REALMVAL (cliff 285e2f45a5 / 917078d93f): a module object holds exactly its
+    // declared members, so a computed key reads one of them or undefined, not ⊤.
+    assert!(!site(&pf, "q").top, "{}", pf.dump_text());
 }
 
 /// S1 (soundness): `module._cache`, `http.globalAgent.sockets` and

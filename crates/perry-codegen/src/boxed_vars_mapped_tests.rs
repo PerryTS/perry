@@ -25,6 +25,7 @@ fn params(mapped: bool) -> Vec<Param> {
 
 fn closure(id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: id,
         params,

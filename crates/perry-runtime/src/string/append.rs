@@ -93,6 +93,10 @@ pub extern "C" fn js_string_append(
         let dest_blen = (*dest).byte_len;
         let src_blen = (*src).byte_len;
 
+        // Both arms below write the header directly, so they bypass the check
+        // in `init_string_header`. Bounded units also bound bytes (<= 3 per
+        // unit), so `new_blen` and the growth arm's `new_blen * 2` stay in u32.
+        super::check_string_length((*dest).utf16_len as usize + (*src).utf16_len as usize);
         let new_blen = dest_blen + src_blen;
 
         // A high→low surrogate pair can only newly form at the dest|src join

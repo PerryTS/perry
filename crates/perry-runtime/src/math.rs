@@ -2,28 +2,10 @@
 
 use rand::RngExt;
 
-/// Math built-ins apply ECMAScript ToNumber, where Symbol and BigInt throw.
-/// `Number(1n)` is allowed in JavaScript, so this stays separate from the
-/// shared `js_number_coerce` helper used by the Number constructor.
-#[no_mangle]
-pub extern "C" fn js_math_to_number(value: f64) -> f64 {
-    let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    if jsval.is_bigint() {
-        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
-    }
-    if jsval.is_pointer() {
-        let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-        if crate::symbol::is_registered_symbol(ptr) {
-            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
-        }
-    }
-    crate::builtins::js_number_coerce(value)
-}
-
 /// Math.trunc(x) -> number
 #[no_mangle]
 pub extern "C" fn js_math_trunc(value: f64) -> f64 {
-    js_math_to_number(value).trunc()
+    crate::builtins::js_number_coerce(value).trunc()
 }
 
 /// Math.round(x) -> number. ECMA-262 21.3.2.28 round-half-toward-+∞ with -0
@@ -32,7 +14,7 @@ pub extern "C" fn js_math_trunc(value: f64) -> f64 {
 /// `js_math_round_value` (test262 Math/round/S15.8.2.15_A7).
 #[no_mangle]
 pub extern "C" fn js_math_round(value: f64) -> f64 {
-    let rounded = crate::object::js_math_round_value(js_math_to_number(value));
+    let rounded = crate::object::js_math_round_value(crate::builtins::js_number_coerce(value));
     // P3 B1 negative control (REVIEW-p3 D4): a runtime
     // built with `PERRY_FACTS_SABOTAGE=canonnum` returns an INT32-boxed word
     // from this declared-NUM builtin, so a consumer that trusts the NUM fact
@@ -50,7 +32,7 @@ pub extern "C" fn js_math_round(value: f64) -> f64 {
 /// Math.sign(x) -> number
 #[no_mangle]
 pub extern "C" fn js_math_sign(value: f64) -> f64 {
-    let n = js_math_to_number(value);
+    let n = crate::builtins::js_number_coerce(value);
     if n == 0.0 || n.is_nan() {
         n
     } else if n.is_sign_negative() {
@@ -61,7 +43,7 @@ pub extern "C" fn js_math_sign(value: f64) -> f64 {
 }
 
 fn js_math_to_int32(value: f64) -> i32 {
-    let n = js_math_to_number(value);
+    let n = crate::builtins::js_number_coerce(value);
     // ES ToInt32 without a floating-point remainder (#10511): one
     // truncating conversion for |n| < 2^63, the exponent rule beyond.
     crate::value::dyn_to_int32(n)
@@ -222,7 +204,7 @@ pub(crate) fn binary16_to_f64(bits: u16) -> f64 {
 /// Math.f16round(x) -> number — nearest IEEE-754 binary16 value
 #[no_mangle]
 pub extern "C" fn js_math_f16round(value: f64) -> f64 {
-    let x = js_math_to_number(value);
+    let x = crate::builtins::js_number_coerce(value);
     if x.is_nan() {
         return x;
     }
@@ -470,7 +452,7 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     let mut result = f64::INFINITY;
     let mut saw_nan = false;
     for i in 0..len {
-        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
+        let num = crate::builtins::js_number_coerce(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
             saw_nan = true;
         } else if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
@@ -503,7 +485,7 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
     let mut result = f64::NEG_INFINITY;
     let mut saw_nan = false;
     for i in 0..len {
-        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
+        let num = crate::builtins::js_number_coerce(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
             saw_nan = true;
         } else if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
@@ -544,7 +526,7 @@ unsafe fn math_minmax_n(args: *const f64, n: u32, is_min: bool) -> f64 {
     }
     let mut saw_nan = false;
     for i in 0..n {
-        let num = js_math_to_number(f64::from_bits(js_gc_temp_root_get(base + i)));
+        let num = crate::builtins::js_number_coerce(f64::from_bits(js_gc_temp_root_get(base + i)));
         if num.is_nan() {
             saw_nan = true;
         } else if is_min {

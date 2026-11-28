@@ -1,0 +1,1 @@
+Class instance layouts now see stores in minified comma statements (`this.a=…,this.b=…`), so instances stay on their layout instead of the overflow table; object spread copies spilled sources on the fast path.

@@ -1947,6 +1947,9 @@ impl Model {
             if let Some(&l) = self.str_index_len.get(t) {
                 self.str_index_len.insert(id, l);
             }
+            if self.code_unit_calls.contains(t) {
+                self.code_unit_calls.insert(id);
+            }
             kmap.push(id);
         }
         for &(i, g) in &s.expanded {

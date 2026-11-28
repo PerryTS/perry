@@ -152,28 +152,28 @@ fn a_program_namespace_store_keeps_its_value_with_the_realm_held() {
     }
 }
 
-/// KEEP: a named store into ⊤ once the global object was handed writes
-/// that global: `g` may hold the `B`, `Object` may be replaced.
+/// P-N1 (owner 2026-11-23): a value the analysis does not model is never
+/// the global object, so the store into ⊤ (the callback's `o`) writes no
+/// global, handed or not: `Object` stays the intrinsic, `g` the program's.
 #[test]
-fn a_named_top_store_still_writes_the_handed_global() {
+fn a_named_top_store_writes_no_handed_global() {
     let hand = "unknown.take2(globalThis); unknown.take(function (o: any) { o.g = new B(); o.Object = 1; });";
     for src in both_orders(hand, &format!("{READ_OBJECT}\n{READ_G}")) {
         let pf = facts(&src);
-        assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
-        assert!(g_sees_b(&pf), "{src}\n{}", pf.dump_text());
+        assert!(known(&pf), "{src}\n{}", pf.dump_text());
     }
 }
 
-/// KEEP: a computed store into ⊤ writes every global once the global
-/// object was handed.
+/// P-N1 (owner 2026-11-23): a value the analysis does not model is never
+/// the global object, so the store into ⊤ (the callback's `o`) writes no
+/// global, handed or not: `Object` stays the intrinsic, `g` the program's.
 #[test]
-fn a_computed_top_store_still_writes_every_handed_global() {
+fn a_computed_top_store_writes_no_handed_global() {
     let hand =
         "unknown.take2(globalThis); unknown.take(function (o: any, kk: any) { o[kk] = new B(); });";
     for src in both_orders(hand, &format!("{READ_OBJECT}\n{READ_G}")) {
         let pf = facts(&src);
-        assert!(!proven(&pf, "keys"), "{src}\n{}", pf.dump_text());
-        assert!(g_sees_b(&pf), "{src}\n{}", pf.dump_text());
+        assert!(known(&pf), "{src}\n{}", pf.dump_text());
     }
 }
 

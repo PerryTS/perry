@@ -1,0 +1,1 @@
+`util.format` reads its arguments and object spread reads its source layout through scoped rooted-pointer accessors instead of bare raw reads, and the GC root-holder inventory records why the fixed-cost nursery-ladder thread-locals hold no heap pointer. No behavior change.

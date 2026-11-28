@@ -2,6 +2,7 @@ use super::*;
 
 use sync_run::{CpRun, CpRunError, CpRunOptions};
 
+use crate::buffer::StringTooLong;
 use crate::object::js_object_set_field_by_name;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
@@ -50,38 +51,73 @@ pub(crate) fn cp_read_output_mode(opts_val: f64, default_text: bool) -> CpOutput
     }
 }
 
-/// Decode raw bytes to a `StringHeader` using a Node encoding name.
-fn cp_encode_text(bytes: &[u8], enc: &str) -> *mut StringHeader {
-    match enc.to_ascii_lowercase().as_str() {
-        "hex" => crate::buffer::hex_encode_into_string(bytes),
-        "base64" => crate::buffer::base64_encode_into_string(bytes),
-        "base64url" => crate::buffer::base64url_encode_into_string(bytes),
-        "latin1" | "binary" => {
-            // latin1: each byte maps to a code point in U+0000..U+00FF.
-            let s: String = bytes.iter().map(|&b| b as char).collect();
-            js_string_from_bytes(s.as_ptr(), s.len() as u32)
-        }
-        // utf8 / utf-8 / ascii / unknown — store as UTF-8 (lossy for invalid).
-        _ => {
-            let s = String::from_utf8_lossy(bytes);
-            js_string_from_bytes(s.as_ptr(), s.len() as u32)
-        }
-    }
+/// Decode raw bytes to a `StringHeader` using a Node encoding name, as
+/// `Buffer#toString` does; `Err` when the text would be longer than the
+/// maximum string length (nothing is thrown, so the caller can release its
+/// captured output first).
+fn cp_encode_text(bytes: &[u8], enc: &str) -> Result<*mut StringHeader, StringTooLong> {
+    let encoding = match enc.to_ascii_lowercase().as_str() {
+        "hex" => 1,
+        "base64" => 2,
+        "base64url" => 3,
+        // latin1: each byte maps to a code point in U+0000..U+00FF.
+        "latin1" | "binary" => 4,
+        // utf8 / utf-8 / ascii / unknown — UTF-8 (lossy for invalid).
+        _ => 0,
+    };
+    crate::buffer::decode_bytes_to_string(bytes, encoding)
 }
 
 /// Box captured bytes per the resolved output mode (Buffer or decoded string).
-pub(crate) fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
-    match mode {
+pub(crate) fn cp_try_box_output(bytes: &[u8], mode: &CpOutput) -> Result<f64, StringTooLong> {
+    Ok(match mode {
         CpOutput::Buffer => cp_make_buffer(bytes),
-        CpOutput::Text(enc) => crate::value::js_nanbox_string(cp_encode_text(bytes, enc) as i64),
+        CpOutput::Text(enc) => crate::value::js_nanbox_string(cp_encode_text(bytes, enc)? as i64),
+    })
+}
+
+/// [`cp_try_box_output`] for bytes the caller does not own (an empty output,
+/// one stream chunk): an over-long text throws `ERR_STRING_TOO_LONG` here.
+pub(crate) fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
+    cp_try_box_output(bytes, mode)
+        .unwrap_or_else(|StringTooLong| crate::string::throw_string_too_long())
+}
+
+pub(crate) fn cp_box_run_output(
+    bytes: &[u8],
+    piped: bool,
+    mode: &CpOutput,
+) -> Result<f64, StringTooLong> {
+    if piped {
+        cp_try_box_output(bytes, mode)
+    } else {
+        Ok(TAG_NULL_F64)
     }
 }
 
-pub(crate) fn cp_box_run_output(bytes: &[u8], piped: bool, mode: &CpOutput) -> f64 {
-    if piped {
-        cp_box_output(bytes, mode)
-    } else {
-        TAG_NULL_F64
+/// What a synchronous child_process call throws. The body returns it instead
+/// of throwing, so its captured output and other Rust-owned buffers are
+/// dropped before [`cp_sync_settle`] throws (a JS throw skips Rust drops).
+pub(crate) enum CpSyncThrow {
+    /// Output text longer than the maximum string length: node's
+    /// `Buffer#toString` error, `ERR_STRING_TOO_LONG`.
+    TooLong,
+    /// The error value a failed execSync/execFileSync throws.
+    Error(f64),
+}
+
+impl From<StringTooLong> for CpSyncThrow {
+    fn from(_: StringTooLong) -> Self {
+        CpSyncThrow::TooLong
+    }
+}
+
+/// Return the result of a synchronous call's body, or throw what it reported.
+pub(crate) fn cp_sync_settle<T>(result: Result<T, CpSyncThrow>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(CpSyncThrow::TooLong) => crate::string::throw_string_too_long(),
+        Err(CpSyncThrow::Error(err)) => crate::exception::throw_open(err),
     }
 }
 
@@ -317,21 +353,21 @@ pub(crate) fn cp_exec_callback_args(
     cmd: &str,
     file: &str,
     mode: &CpOutput,
-) -> (f64, f64, f64) {
+) -> Result<(f64, f64, f64), StringTooLong> {
     let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(run, options);
-    let stdout_box = cp_box_output(stdout_bytes, mode);
-    let stderr_box = cp_box_output(stderr_bytes, mode);
+    let stdout_box = cp_try_box_output(stdout_bytes, mode)?;
+    let stderr_box = cp_try_box_output(stderr_bytes, mode)?;
     let err_val = if run.success() {
         TAG_NULL_F64
     } else {
         cp_exec_callback_error(run, options, cmd, file)
     };
-    (err_val, stdout_box, stderr_box)
+    Ok((err_val, stdout_box, stderr_box))
 }
 
-/// Throw the error Node raises from a failed execSync/execFileSync — carries
-/// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd`. Diverges. #1938.
-pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f64) -> ! {
+/// The error Node throws from a failed execSync/execFileSync — carries
+/// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd`. #1938.
+pub(crate) fn cp_sync_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f64) -> f64 {
     let status = match run.code {
         Some(c) => c as f64,
         None => TAG_NULL_F64,
@@ -363,7 +399,7 @@ pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f
                 ("stderr", stderr),
             ],
         );
-        crate::exception::throw_open(err)
+        return err;
     }
     // Node's execSync/execFileSync error enumerates exactly
     // status/signal/output/pid/stdout/stderr (no `cmd` own prop — that is on the
@@ -385,8 +421,7 @@ pub(crate) fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f
     if let Some((code, _)) = &run.spawn_error {
         fields.push(("code", cp_box_string(code)));
     }
-    let err = cp_make_error(&message, &fields);
-    crate::exception::throw_open(err)
+    cp_make_error(&message, &fields)
 }
 
 /// `file arg1 arg2…` — the human-readable command string Node uses for the

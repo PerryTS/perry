@@ -26,24 +26,25 @@ cancelFrame(id);
   idiomatic `requestAnimationFrame` shape and avoids the "how do I stop a
   recurring callback" footgun).
 - **`timestampMs`** is monotonic time since app start, in milliseconds,
-  double precision.
+  double precision. On macOS it is the vsync time on the
+  `performance.now()` clock, as in `requestAnimationFrame`.
 - **`deltaMs`** is the time since the previous fire of *this* callback (0
   on the first call). Tracking is keyed off the callback identity so the
   idiomatic `onFrame(loop)` pattern gets accurate deltas without the app
   bookkeeping anything.
 - **Order.** Subscribers fire in registration order each frame.
 - **Pause when invisible.** The web backend uses `requestAnimationFrame`,
-  which is paused automatically when the tab is hidden. The native
-  backends drive frames from their main-loop pump; treat that as a soft
-  guarantee for now and a real per-platform display-link driver is a
-  follow-up.
+  which is paused automatically when the tab is hidden. macOS does not
+  pause: with no window on a display it keeps ticking on the main
+  screen's refresh. The other native backends drive frames from their
+  main-loop pump.
 
 ## Platform mapping
 
 | Platform | Driver |
 |---|---|
 | Web (WASM) | `requestAnimationFrame` |
-| macOS | Main-thread pump (CADisplayLink wiring TBD) |
+| macOS | Display link of the main window, or of the main screen while no window is on a display (`CVDisplayLink` before macOS 14) |
 | iOS / tvOS / visionOS | Main-thread pump (CADisplayLink wiring TBD) |
 | Android | Main-thread pump (Choreographer wiring TBD) |
 | GTK4 (Linux) | Main-loop pump (`gtk_widget_add_tick_callback` TBD) |

@@ -125,6 +125,7 @@ impl LoweringContext {
                     _ => unreachable!(),
                 };
                 return Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: ident.span.lo.0,
                     func_id,
                     params: vec![Param {
@@ -1909,6 +1910,7 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "NavigationStack"
             | "Picker"
             | "WheelPicker"
+            | "RadioGroup"
             | "Table"
             | "TabBar"
     )

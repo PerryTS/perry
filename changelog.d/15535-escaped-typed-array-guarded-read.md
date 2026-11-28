@@ -1,0 +1,1 @@
+A typed array passed to a call reads its elements through the guarded inline load again instead of `js_typed_array_get`: an exposure of its `.buffer` that is only possible no longer forces the plain call. A `.buffer` read lowered on the view still does.

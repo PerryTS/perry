@@ -391,6 +391,20 @@ impl<'a> Proof<'a> {
                 }
                 one(Origin::Function(*func_id))
             }
+            // A namespace pair exists only for a member no program write
+            // replaces (`patched_builtin_call.rs`); without dynamic code its
+            // generic arm calls the original builtin, which the intrinsic is.
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } if matches!(condition.as_ref(), Expr::NamespacePatched(ns)
+                if perry_hir::namespace_pairs::pair_callee(ns, then_expr).is_some())
+                && !perry_hir::has_deferred_dynamic_code_sites() =>
+            {
+                self.expr(else_expr, function)
+            }
             Expr::Conditional {
                 condition,
                 then_expr,
@@ -990,6 +1004,28 @@ mod tests {
             .replace("__importStar", "namespaceCopy")
             .replace("__setModuleDefault", "setDefault");
         assert_eq!(uses(&renamed), 0);
+    }
+    #[test]
+    fn namespace_pairs_prove_through_their_intrinsic_arm() {
+        let source = include_str!("../../../../tests/fixtures/cjs_closed_support/02-wc.cjs");
+        let mut pairs = perry_hir::PatchedBuiltins::new();
+        pairs.namespace_pairs = true;
+        perry_hir::set_patched_builtins(std::sync::Arc::new(pairs));
+        let mut module = lowered(source);
+        perry_hir::clear_patched_builtins();
+        let mut paired = false;
+        perry_hir::tdz_check::for_each_module_expr(&module, &mut |e| {
+            paired |= matches!(e, Expr::NamespacePatched(ns) if ns == "Object");
+        });
+        assert!(
+            paired,
+            "the fixture's descriptor call is not lowered as a pair"
+        );
+        refine(&mut module);
+        assert_eq!(
+            module.class_family_syntax.unwrap().module_capability_uses,
+            0
+        );
     }
     #[test]
     fn closed_wrappers_keep_commonjs_identity_without_the_loader_import() {

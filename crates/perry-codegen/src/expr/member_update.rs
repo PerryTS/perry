@@ -163,8 +163,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     });
                 }
             }
-            // Scalar replacement fast path: load → fadd/fsub 1.0 → store
-            // on the field's alloca, no heap traffic.
+            // Scalar replacement: the update happens on the field's alloca,
+            // with no heap traffic.
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(slot) = ctx
                     .scalar_replaced
@@ -172,15 +172,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .and_then(|fs| fs.get(property.as_str()))
                     .cloned()
                 {
-                    let blk = ctx.block();
-                    let old = blk.load(DOUBLE, &slot);
-                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-                    let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                        _ => blk.fadd(&old_num, "1.0"),
-                    };
-                    blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old_num });
+                    return Ok(update_scalar_slot(ctx, &slot, op, *prefix));
                 }
             }
             if let Expr::This = object.as_ref() {
@@ -191,15 +183,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .and_then(|fs| fs.get(property.as_str()))
                     .cloned()
                 {
-                    let blk = ctx.block();
-                    let old = blk.load(DOUBLE, &slot);
-                    let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-                    let new = match op {
-                        BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                        _ => blk.fadd(&old_num, "1.0"),
-                    };
-                    blk.store(DOUBLE, &new, &slot);
-                    return Ok(if *prefix { new } else { old_num });
+                    return Ok(update_scalar_slot(ctx, &slot, op, *prefix));
                 }
             }
             // Representation-selection Phase 3b: `o.f++` on a shape-proven
@@ -829,4 +813,69 @@ fn update_by_get_and_set(
         lower_expr(ctx, reads.last().expect("one value at least"))
     })?;
     Ok(out)
+}
+
+/// `++`/`--` on a scalar-replaced field slot. A plain double steps inline;
+/// anything else takes ToNumeric and the numeric step, so a BigInt field stays
+/// a BigInt instead of reaching ToNumber.
+fn update_scalar_slot(ctx: &mut FnCtx<'_>, slot: &str, op: &BinaryOp, prefix: bool) -> String {
+    let old = ctx.block().load(DOUBLE, slot);
+    let plain = crate::codegen::emit_plain_number_test(ctx.block(), &old);
+    let fast_idx = ctx.new_block("scalar_update.num.fast");
+    let slow_idx = ctx.new_block("scalar_update.num.slow");
+    let merge_idx = ctx.new_block("scalar_update.num.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&plain, &fast_label, &slow_label);
+
+    ctx.current_block = fast_idx;
+    let fast_new = match op {
+        BinaryOp::Sub => ctx.block().fsub(&old, "1.0"),
+        _ => ctx.block().fadd(&old, "1.0"),
+    };
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = slow_idx;
+    let slow_old = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+    let step = match op {
+        BinaryOp::Sub => "0",
+        _ => "1",
+    };
+    // A postfix BigInt result stays live across the allocating step, so it is
+    // held in a function-lifetime root and reloaded after the call.
+    let old_root = (!prefix).then(|| {
+        let root = ctx.func.alloca_entry(DOUBLE);
+        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &root);
+        super::root_entry_alloca(ctx, &root);
+        ctx.block().store(DOUBLE, &slow_old, &root);
+        root
+    });
+    let slow_new = ctx.block().call(
+        DOUBLE,
+        "js_numeric_step",
+        &[(DOUBLE, &slow_old), (I32, step)],
+    );
+    let slow_old = match &old_root {
+        Some(root) => ctx.block().load(DOUBLE, root),
+        None => slow_old,
+    };
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let old_num = ctx
+        .block()
+        .phi(DOUBLE, &[(&old, &fast_end), (&slow_old, &slow_end)]);
+    let new = ctx
+        .block()
+        .phi(DOUBLE, &[(&fast_new, &fast_end), (&slow_new, &slow_end)]);
+    ctx.block().store(DOUBLE, &new, slot);
+    if prefix {
+        new
+    } else {
+        old_num
+    }
 }

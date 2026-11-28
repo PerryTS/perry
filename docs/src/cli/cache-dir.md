@@ -59,7 +59,9 @@ used as-is.
   instead of an NFS-mounted project root), and read-only project roots
   (relocate the cache to a writable scratch dir).
 
-The object cache is machine-local — it bakes in `-mcpu=native` codegen —
-so sharing a cache directory across machines with different CPUs (rsync,
-NFS, a Docker bind-mount) can produce `SIGILL` at runtime. Scope a shared
-`--cache-dir` to a single CPU family.
+By default the cached objects target the triple's fixed CPU baseline
+(`x86-64-v3` on x86-64), so they do not depend on the machine that built
+them. Objects built with the explicit `--march native` opt-in bake in that
+machine's instruction set: never share such a cache directory across
+machines with different CPUs (rsync, NFS, a Docker bind-mount), or the
+result can crash with `SIGILL`.

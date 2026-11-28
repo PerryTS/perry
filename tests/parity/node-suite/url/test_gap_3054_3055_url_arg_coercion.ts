@@ -10,9 +10,8 @@
 // throwing. All lines compare byte-for-byte against
 // `node --experimental-strip-types`.
 //
-// NOTE: invalid-URL throws print only `err.name` (Perry's message is
-// "Invalid URL: <input>", Node's is "Invalid URL" — a separate, pre-existing
-// formatting gap unrelated to argument coercion).
+// NOTE: invalid-URL throws print only `err.name`; the error's own shape
+// (message, code, input, base) is test_gap_url_invalid_error_no_authority.ts.
 
 const base = "http://example.com/root/";
 const obj = { toString() { return "child"; } };

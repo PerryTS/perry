@@ -1079,42 +1079,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
-        // -------- path.join(a, b) -> string --------
-        // The HIR variant is binary; multi-arg path.join lowers to
-        // chained PathJoin in the HIR.
-        // #7621: both operands reach the runtime NaN-BOXED, so this arm emits
-        // NO unbox at all. Unboxing here would need two `js_path_arg_header`
-        // calls, and the first ALLOCATES for an SSO operand — a collection
-        // point with the second operand still in a bare register, i.e. exactly
-        // the window the #7615 migration exists to remove. Handing both
-        // NaN-boxed doubles to one runtime entry deletes the window from
-        // codegen rather than protecting it: `js_path_join_value` roots operand
-        // 1 across its own materialisation with `RuntimeHandle::across_const`.
-        // See perry-runtime/src/path/value_args.rs.
-        Expr::PathJoin(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
-            let blk = ctx.block();
-            let result = blk.call(
-                I64,
-                "js_path_join_value",
-                &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
-            );
-            Ok(nanbox_string_inline(blk, &result))
-        }),
-
-        // -------- path.win32.join(a, b) -> string (issue #810) --------
-        // Windows-style join with `\` separator, regardless of host
-        // platform. Multi-arg path.win32.join lowers to chained
-        // PathWin32Join in the HIR.
-        Expr::PathWin32Join(a, b) => rooting::with_operands_rooted(ctx, &[a, b], |ctx, vals| {
-            let blk = ctx.block();
-            // #7621: NaN-boxed pair, no unbox here — see `Expr::PathJoin`.
-            let result = blk.call(
-                I64,
-                "js_path_win32_join_value",
-                &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1])],
-            );
-            Ok(nanbox_string_inline(blk, &result))
-        }),
+        // -------- path.join(a, b, ...) / path.win32.join(a, b, ...) -> string --------
+        // One runtime call over every argument, as Node joins them: the
+        // NaN-boxed operands go into one stack buffer and the runtime reads
+        // their bytes (heap or inline) without unboxing or materialising any
+        // of them, validates each in order, joins and normalizes in one pass,
+        // and allocates only the result. No allocation happens between the
+        // operand reads, so no operand needs a root across the call (#7621).
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) => {
+            let entry = if matches!(expr, Expr::PathJoin(_)) {
+                "js_path_join_values"
+            } else {
+                "js_path_win32_join_values"
+            };
+            let n = args.len();
+            let operands: Vec<&Expr> = args.iter().collect();
+            rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, v) in vals.iter().enumerate() {
+                    let blk = ctx.block();
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, v, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf
+                ));
+                let blk = ctx.block();
+                let result = blk.call(I64, entry, &[(PTR, &ptr_reg), (I32, &n.to_string())]);
+                Ok(nanbox_string_inline(blk, &result))
+            })
+        }
 
         // -------- path.win32.<method>(...) (issue #1162) --------
         // One arm covers every win32 sub-namespace method other than

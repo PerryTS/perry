@@ -583,20 +583,14 @@ pub(super) fn dispatch_path_subnamespace(
             // returned `"a/b"` instead of `"a\b"`, `join("")` returned `""` instead
             // of `"."`, and `join("a/.")` returned `"a/."` instead of `"a"`. The
             // posix arm below already special-cased this (`PathNormalize`); mirror
-            // it with the win32 normalizer. (`PathWin32Join` is binary, so it can't
-            // express the single-segment case itself.)
+            // it with the win32 normalizer.
             if args.len() == 1 {
                 return Ok(Expr::PathWin32 {
                     method: crate::ir::PathWin32Method::Normalize,
                     args,
                 });
             }
-            let mut iter = args.into_iter();
-            let mut result = iter.next().unwrap();
-            for next_arg in iter {
-                result = Expr::PathWin32Join(Box::new(result), Box::new(next_arg));
-            }
-            return Ok(result);
+            return Ok(Expr::PathWin32Join(args));
         } else {
             // posix.join → existing PathJoin
             if args.len() == 1 {
@@ -604,12 +598,7 @@ pub(super) fn dispatch_path_subnamespace(
                     args.into_iter().next().unwrap(),
                 )));
             }
-            let mut iter = args.into_iter();
-            let mut result = iter.next().unwrap();
-            for next_arg in iter {
-                result = Expr::PathJoin(Box::new(result), Box::new(next_arg));
-            }
-            return Ok(result);
+            return Ok(Expr::PathJoin(args));
         }
     }
 

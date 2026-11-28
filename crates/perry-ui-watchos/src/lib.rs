@@ -62,12 +62,43 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     tree::register_node(node)
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    perry_ui_widget_set_accessibility_label(field, text_ptr);
+    perry_ui_text_create(text_ptr)
+}
+
+/// Set the name VoiceOver announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.accessibility_label = cstring_from_header(text_ptr as *const u8);
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     let mut node = NodeData::new(NodeKind::Button);
     node.text = cstring_from_header(label_ptr as *const u8);
     node.action_closure = Some(on_press);
     tree::register_node(node)
+}
+
+/// A Link is its text: `perry_system_open_url` does nothing on watchOS.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, _href_ptr: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 #[no_mangle]
@@ -183,6 +214,13 @@ pub extern "C" fn perry_ui_section_create(title_ptr: i64) -> i64 {
     tree::register_node(node)
 }
 
+/// The collapsible `<details>` exists on the web target only; here a Disclosure is a
+/// Section, always expanded.
+#[no_mangle]
+pub extern "C" fn perry_ui_disclosure_create(title_ptr: i64) -> i64 {
+    perry_ui_section_create(title_ptr)
+}
+
 // =============================================================================
 // TextArea
 // =============================================================================
@@ -289,6 +327,25 @@ pub extern "C" fn perry_ui_wheel_picker_set_selected(handle: i64, index: i64) {
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
+    perry_ui_picker_get_selected(handle)
+}
+
+/// RadioGroup shares Picker's API and index callback; the radio buttons exist on the
+/// web target only, so this backend shows a picker.
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_create(on_change: f64) -> i64 {
+    perry_ui_picker_create(on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_add_item(handle: i64, title_ptr: i64) {
+    perry_ui_picker_add_item(handle, title_ptr);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_set_selected(handle: i64, index: i64) {
+    perry_ui_picker_set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_get_selected(handle: i64) -> i64 {
     perry_ui_picker_get_selected(handle)
 }
 
@@ -764,6 +821,10 @@ pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f6
 pub extern "C" fn perry_ui_widget_set_on_key_down(_handle: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_key_up(_handle: i64, _cb: f64) {}
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(_cb: f64) {}
 #[no_mangle]
@@ -896,6 +957,16 @@ pub extern "C" fn perry_ui_menu_clear(_menu: i64) {}
 pub extern "C" fn perry_ui_menu_add_standard_action(_m: i64, _t: i64, _sel: i64, _s: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(_cb: f64) {}
+
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead. This backend opens no
+/// dialog and reports a cancelled one: `callback("", "")`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, callback: f64) {
+    // The inline empty string: nothing allocates between here and the call.
+    let empty = f64::from_bits(0x7FF9_0000_0000_0000);
+    unsafe { perry_ffi::call_value(callback, perry_ffi::JsThis::UNDEFINED, &[empty, empty]) };
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_min_size(_app: i64, _w: f64, _h: f64) {}
 #[no_mangle]

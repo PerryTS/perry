@@ -27,6 +27,7 @@ import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -129,6 +130,369 @@ object PerryBridge {
 
     @JvmStatic
     fun createSplitView(): View = PerrySplitView(activity)
+
+    // --- Stack layout (UIStackView semantics) ---
+    // Each view's sizing intent (fixed width/height, hugging, match-parent)
+    // and each stack's cross-axis alignment are recorded here, and the view's
+    // LayoutParams are recomputed from them whenever either changes or the
+    // view is added to a parent — so the order of widgetSetWidth /
+    // widgetSetHugging / widgetAddChild calls doesn't matter (it does for raw
+    // LayoutParams, which each call used to overwrite).
+    //
+    //   stack main axis:  fixed size > expand (hugging < 250, or
+    //                     match-parent along it → weight 1) > wrap content
+    //   stack cross axis: fixed size > match-parent > fill alignment →
+    //                     MATCH_PARENT; otherwise wrap content, placed by the
+    //                     alignment (leading / center / trailing)
+    //   ZStack / other FrameLayouts: fixed size, else fill
+    //   ScrollView content: full width, wrap-content height (unless fixed)
+    private const val UNSET = Int.MIN_VALUE
+
+    private class LayoutIntent {
+        var w = UNSET
+        var h = UNSET
+        var hug = -1f
+        var matchW = false
+        var matchH = false
+    }
+
+    private val layoutIntents = java.util.WeakHashMap<View, LayoutIntent>()
+    // 0 fill, 1 leading/top, 3 center, 4 trailing/bottom
+    private val stackAlignments = java.util.WeakHashMap<View, Int>()
+
+    /** kind: 0 width px, 1 height px, 2 hugging, 3 match width, 4 match height. */
+    @JvmStatic
+    fun layoutIntent(view: View, kind: Int, value: Float) {
+        val i = layoutIntents.getOrPut(view) { LayoutIntent() }
+        when (kind) {
+            0 -> i.w = value.toInt()
+            1 -> i.h = value.toInt()
+            2 -> i.hug = value
+            3 -> i.matchW = value != 0f
+            4 -> i.matchH = value != 0f
+        }
+        relayout(view)
+    }
+
+    @JvmStatic
+    fun setStackAlignment(stack: View, align: Int) {
+        stackAlignments[stack] = align
+        if (stack is ViewGroup) for (k in 0 until stack.childCount) relayout(stack.getChildAt(k))
+    }
+
+    // 1 = fillEqually (UIStackView): every child gets an equal share of the
+    // stack's main axis, ignoring its own size and hugging.
+    private val stackDistributions = java.util.WeakHashMap<View, Int>()
+
+    // ---- Borders (CALayer borderColor/borderWidth) ---------------------------
+    // GradientDrawable.setStroke takes width and colour together, so both are
+    // remembered per view; setting one keeps the other (it used to reset the
+    // colour to black when the width was set, and the width to 2 px when the
+    // colour was).
+    private val borderColors = java.util.WeakHashMap<View, Int>()
+    private val borderWidths = java.util.WeakHashMap<View, Int>()
+
+    private fun applyBorder(view: View) {
+        val color = borderColors[view] ?: 0xFF000000.toInt()
+        val width = borderWidths[view] ?: dpToPxInt(1f)
+        var gd = view.background as? android.graphics.drawable.GradientDrawable
+        if (gd == null) {
+            gd = android.graphics.drawable.GradientDrawable()
+            gd.setColor(0)
+            view.background = gd
+        }
+        gd.setStroke(width, color)
+    }
+
+    private fun dpToPxInt(dp: Float): Int =
+        Math.round(dp * activity.resources.displayMetrics.density)
+
+    @JvmStatic
+    fun setBorderColor(view: View, argb: Int) {
+        borderColors[view] = argb
+        applyBorder(view)
+    }
+
+    @JvmStatic
+    fun setBorderWidthPx(view: View, px: Int) {
+        borderWidths[view] = px
+        applyBorder(view)
+    }
+
+    @JvmStatic
+    fun setStackDistribution(stack: View, distribution: Int) {
+        stackDistributions[stack] = distribution
+        if (stack is ViewGroup) for (k in 0 until stack.childCount) relayout(stack.getChildAt(k))
+    }
+
+    @JvmStatic
+    fun relayout(view: View) {
+        val i = layoutIntents[view] ?: LayoutIntent()
+        val old = view.layoutParams
+        // Explicit pixel sizes set by a widget itself (e.g. imageSetSize).
+        val ow = if (old != null && old.width > 0) old.width else UNSET
+        val oh = if (old != null && old.height > 0) old.height else UNSET
+        val w = if (i.w != UNSET) i.w else ow
+        val h = if (i.h != UNSET) i.h else oh
+        val expand = i.hug >= 0f && i.hug < 250f
+        val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+        val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+        when (val p = view.parent) {
+            is LinearLayout -> {
+                // UIStackView never aligns by baseline (unless asked to with
+                // .firstBaseline); LinearLayout does by default, which pushed
+                // wrapped text below an icon's baseline and clipped it.
+                if (p.isBaselineAligned) p.isBaselineAligned = false
+                val align = stackAlignments[p] ?: 0
+                val equal = stackDistributions[p] == 1
+                val lp = LinearLayout.LayoutParams(WRAP, WRAP)
+                if (p.orientation == LinearLayout.HORIZONTAL) {
+                    val grows = equal || (w == UNSET && (expand || i.matchW))
+                    lp.width = if (equal) 0 else if (w != UNSET) w else if (grows) 0 else WRAP
+                    lp.weight = if (grows) 1f else 0f
+                    lp.height = if (h != UNSET) h else if (i.matchH || align == 0) MATCH else WRAP
+                    lp.gravity = when (align) {
+                        1 -> android.view.Gravity.TOP
+                        3 -> android.view.Gravity.CENTER_VERTICAL
+                        4 -> android.view.Gravity.BOTTOM
+                        else -> -1
+                    }
+                } else {
+                    val grows = equal || (h == UNSET && (expand || i.matchH))
+                    lp.height = if (equal) 0 else if (h != UNSET) h else if (grows) 0 else WRAP
+                    lp.weight = if (grows) 1f else 0f
+                    lp.width = if (w != UNSET) w else if (i.matchW || align == 0) MATCH else WRAP
+                    lp.gravity = when (align) {
+                        1 -> android.view.Gravity.START
+                        3 -> android.view.Gravity.CENTER_HORIZONTAL
+                        4 -> android.view.Gravity.END
+                        else -> -1
+                    }
+                }
+                view.layoutParams = lp
+            }
+            is ScrollView -> {
+                view.layoutParams = FrameLayout.LayoutParams(if (w != UNSET) w else MATCH, if (h != UNSET) h else WRAP)
+            }
+            is HorizontalScrollView -> {
+                view.layoutParams = FrameLayout.LayoutParams(if (w != UNSET) w else WRAP, if (h != UNSET) h else MATCH)
+            }
+            is FrameLayout -> {
+                view.layoutParams = FrameLayout.LayoutParams(if (w != UNSET) w else MATCH, if (h != UNSET) h else MATCH)
+            }
+            else -> {
+                // Not attached yet: keep the intent; relayout runs again on add.
+                if (old != null && (i.w != UNSET || i.h != UNSET)) {
+                    if (i.w != UNSET) old.width = i.w
+                    if (i.h != UNSET) old.height = i.h
+                    view.layoutParams = old
+                } else if (old == null && (i.w != UNSET || i.h != UNSET)) {
+                    view.layoutParams = ViewGroup.LayoutParams(if (i.w != UNSET) i.w else WRAP, if (i.h != UNSET) i.h else WRAP)
+                }
+            }
+        }
+    }
+
+    // --- Text styling (parity with iOS) ---
+
+    /** Apple weight (-1…1, as NSFont/UIFont take it) → CSS 100…900. */
+    private fun cssWeight(apple: Float): Int = when {
+        apple <= -0.7f -> 100
+        apple <= -0.5f -> 200
+        apple <= -0.2f -> 300
+        apple < 0.15f -> 400
+        apple < 0.27f -> 500
+        apple < 0.35f -> 600
+        apple < 0.5f -> 700
+        apple < 0.6f -> 800
+        else -> 900
+    }
+
+    /** textSetFontWeight(t, size, weight): size AND weight, like iOS. */
+    @JvmStatic
+    fun setFontWeight(view: View, sizeSp: Float, appleWeight: Float) {
+        val tv = view as? TextView ?: return
+        if (sizeSp > 0f) tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        val w = cssWeight(appleWeight)
+        val base = tv.typeface ?: android.graphics.Typeface.DEFAULT
+        tv.typeface = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            android.graphics.Typeface.create(base, w, base.isItalic)
+        } else {
+            android.graphics.Typeface.create(base, if (w >= 600) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+    }
+
+    /** TextField / SecureField styling ops: 0 borderless, 1 background, 2 font size (sp), 3 text colour. */
+    @JvmStatic
+    fun styleTextField(view: View, op: Int, value: Float, argb: Int) {
+        val et = view as? EditText ?: return
+        when (op) {
+            0 -> if (value != 0f) {
+                et.background = null
+                et.setPadding(0, 0, 0, 0)
+                et.gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START
+            }
+            1 -> if (et.background == null || argb ushr 24 == 0) {
+                if (argb ushr 24 == 0) et.background = null else et.setBackgroundColor(argb)
+            } else et.setBackgroundColor(argb)
+            2 -> et.setTextSize(TypedValue.COMPLEX_UNIT_SP, value)
+            3 -> {
+                et.setTextColor(argb)
+                // Placeholder: the text colour, faded (UIKit's placeholder grey).
+                et.setHintTextColor((argb and 0x00FFFFFF) or 0x66000000)
+                tintCaret(et, argb)
+            }
+        }
+    }
+
+    /** Cursor, selection highlight and selection handles in the field's text
+     *  colour instead of the theme's teal accent (UIKit: tintColor). */
+    @JvmStatic
+    fun tintCaret(et: EditText, argb: Int) {
+        val solid = argb or 0xFF000000.toInt()
+        et.highlightColor = (argb and 0x00FFFFFF) or 0x40000000
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val d = et.resources.displayMetrics.density
+            et.textCursorDrawable = android.graphics.drawable.GradientDrawable().apply {
+                setColor(solid)
+                setSize(Math.max(1, Math.round(2 * d)), 1)
+            }
+            et.textSelectHandle?.mutate()?.let { it.setTint(solid); et.setTextSelectHandle(it) }
+            et.textSelectHandleLeft?.mutate()?.let { it.setTint(solid); et.setTextSelectHandleLeft(it) }
+            et.textSelectHandleRight?.mutate()?.let { it.setTint(solid); et.setTextSelectHandleRight(it) }
+        }
+    }
+
+    /** TextArea defaults matching iOS/macOS (UITextView with a 12/10 inset
+     *  plus its 5 pt line-fragment padding, 16 pt system font, no border). */
+    @JvmStatic
+    fun styleTextArea(et: EditText) {
+        val d = et.resources.displayMetrics.density
+        et.background = null
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        et.typeface = android.graphics.Typeface.DEFAULT
+        et.setPadding(Math.round(15 * d), Math.round(12 * d), Math.round(15 * d), Math.round(12 * d))
+        et.setLineSpacing(0f, 1.1f)
+        tintCaret(et, et.currentTextColor)
+    }
+
+    /** Password fields: Android switches them to monospace; keep the app font. */
+    @JvmStatic
+    fun passwordFont(view: View) {
+        val et = view as? EditText ?: return
+        et.typeface = android.graphics.Typeface.DEFAULT
+        et.transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+    }
+
+    // --- Symbol icons (ImageSymbol) ---
+    // SF Symbol names map (in Rust) to Material Icons Round ligatures; the
+    // font ships in the APK's assets (Apache 2.0, see MaterialIcons-LICENSE).
+    private var symbolTypeface: android.graphics.Typeface? = null
+
+    @JvmStatic
+    fun createSymbolView(ligature: String): View {
+        val tf = symbolTypeface ?: try {
+            android.graphics.Typeface.createFromAsset(activity.assets, "perry/MaterialIconsRound-Regular.otf")
+        } catch (_: Exception) {
+            null
+        }.also { symbolTypeface = it }
+        return PerrySymbolView(activity, tf, ligature).apply {
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    }
+
+    // ---- Image(url): background fetch + decode, cached by URL ----------------
+    // Like the iOS backend: aspect-fill, clipped to the (rounded) background,
+    // downscaled to at most 1400 px, decoded off the UI thread, LRU-cached so
+    // a redraw doesn't refetch.
+    private val urlImageCache = object : android.util.LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 8).toInt().coerceAtLeast(8 shl 20)
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
+    private val urlImagePool = java.util.concurrent.Executors.newFixedThreadPool(4)
+    private val urlImageWaiting = HashMap<String, MutableList<java.lang.ref.WeakReference<ImageView>>>()
+
+    @JvmStatic
+    fun createUrlImage(url: String, alt: String): View {
+        val iv = ImageView(activity)
+        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+        iv.clipToOutline = true
+        iv.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+        if (alt.isNotEmpty()) iv.contentDescription = alt
+        else iv.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        if (url.isEmpty()) return iv
+        iv.tag = url
+        val hit = urlImageCache.get(url)
+        if (hit != null) {
+            iv.setImageBitmap(hit)
+            return iv
+        }
+        val waiting = urlImageWaiting[url]
+        if (waiting != null) {
+            waiting.add(java.lang.ref.WeakReference(iv))
+            return iv
+        }
+        urlImageWaiting[url] = mutableListOf(java.lang.ref.WeakReference(iv))
+        urlImagePool.execute {
+            val bmp = try { fetchBitmap(url, 1400) } catch (e: Throwable) {
+                Log.w("Perry", "Image(url) failed: $url: $e"); null
+            }
+            activity.runOnUiThread {
+                if (bmp != null) urlImageCache.put(url, bmp)
+                val views = urlImageWaiting.remove(url) ?: return@runOnUiThread
+                if (bmp == null) return@runOnUiThread
+                for (ref in views) {
+                    val v = ref.get() ?: continue
+                    if (v.tag == url) v.setImageBitmap(bmp)
+                }
+            }
+        }
+        return iv
+    }
+
+    private fun fetchBitmap(url: String, maxPx: Int): Bitmap? {
+        val bytes = if (url.startsWith("http://") || url.startsWith("https://")) {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 15000
+            c.readTimeout = 30000
+            c.instanceFollowRedirects = true
+            try {
+                if (c.responseCode !in 200..299) return null
+                c.inputStream.use { it.readBytes() }
+            } finally {
+                c.disconnect()
+            }
+        } else {
+            java.io.File(url.removePrefix("file://")).readBytes()
+        }
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPx || bounds.outHeight / (sample * 2) >= maxPx) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }
+
+    /** Size a symbol view's glyph to its box (the icon fills the em square). */
+    @JvmStatic
+    fun setSymbolSize(view: View, px: Int) {
+        when (view) {
+            is PerrySymbolView -> view.setGlyphPx(px.toFloat())
+            is TextView -> view.setTextSize(TypedValue.COMPLEX_UNIT_PX, px.toFloat())
+        }
+    }
+
+    @JvmStatic
+    fun setSymbolColor(view: View, argb: Int): Boolean {
+        when (view) {
+            is PerrySymbolView -> view.setColor(argb)
+            is TextView -> view.setTextColor(argb)
+            else -> return false
+        }
+        return true
+    }
 
     @JvmStatic
     fun splitViewAddChild(parent: View, child: View) {
@@ -411,12 +775,31 @@ object PerryBridge {
 
     // --- EditText text changed callback ---
 
+    /** Views whose text is being set from code right now (see setTextQuiet). */
+    private val quietText = java.util.Collections.newSetFromMap(java.util.WeakHashMap<View, Boolean>())
+
+    /** Set a field's text from code without firing its onChange, as UIKit's
+     *  `text =` doesn't. Keeps the caret at the end, like a fresh field. */
+    @JvmStatic
+    fun setTextQuiet(view: View, text: String) {
+        val tv = view as? TextView ?: return
+        if (tv.text.toString() == text) return
+        quietText.add(view)
+        try {
+            tv.text = text
+            if (tv is EditText) tv.setSelection(tv.text.length)
+        } finally {
+            quietText.remove(view)
+        }
+    }
+
     @JvmStatic
     fun setTextChangedCallback(editText: EditText, callbackKey: Long) {
         editText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
+                if (editText in quietText) return
                 val text = s?.toString() ?: ""
                 nativeInvokeCallback1WithString(callbackKey, text)
             }
@@ -1549,6 +1932,81 @@ object PerryBridge {
      * Toast.makeText runs on the main looper as required by the Android SDK.
      * Toast.LENGTH_SHORT = 0 (approx 2s), consistent with the macOS 2.5s hold.
      */
+    // ---- alert / alertWithButtons ---------------------------------------------
+    // UIAlertController equivalent. Several choices without a message become a
+    // menu list (Android's action sheet); otherwise dialog buttons. "Cancel"
+    // is the negative button and also what Back / tapping outside reports.
+    // Destructive verbs are drawn in red, as iOS does.
+    private fun isCancelLabel(l: String) = l == "Cancel" || l == "Abbrechen"
+    private fun isDestructiveLabel(l: String) = listOf(
+        "Delete", "Remove", "Discard", "Archive", "Sign out", "Suspend",
+        "Löschen", "Entfernen", "Verwerfen", "Abmelden", "Archivieren", "Sperren",
+    ).any { l.startsWith(it) }
+
+    @JvmStatic
+    fun showButtonsAlert(title: String, message: String, joinedLabels: String, callbackKey: Long) {
+        val labels = joinedLabels.split('\u001f')
+        activity.runOnUiThread {
+            val night = (activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val theme = if (night) android.R.style.Theme_DeviceDefault_Dialog_Alert
+                else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+            val red = if (night) 0xFFFF6961.toInt() else 0xFFD70015.toInt()
+            var answered = false
+            val answer = { i: Int ->
+                if (!answered) {
+                    answered = true
+                    if (callbackKey != 0L) nativeInvokeCallback1(callbackKey, i.toDouble())
+                }
+            }
+            val cancelIdx = labels.indexOfFirst { isCancelLabel(it) }
+            val b = android.app.AlertDialog.Builder(activity, theme)
+            if (title.isNotEmpty()) b.setTitle(title)
+            val options = labels.indices.filter { it != cancelIdx }
+            val asMenu = message.isEmpty() && options.size >= 2
+            if (asMenu) {
+                val items = options.map { i ->
+                    val l = labels[i]
+                    if (isDestructiveLabel(l)) android.text.SpannableString(l).apply {
+                        setSpan(android.text.style.ForegroundColorSpan(red), 0, l.length, 0)
+                    } else l
+                }.toTypedArray<CharSequence>()
+                b.setItems(items) { _, which -> answer(options[which]) }
+                if (cancelIdx >= 0) b.setNegativeButton(labels[cancelIdx]) { _, _ -> answer(cancelIdx) }
+            } else {
+                if (message.isNotEmpty()) b.setMessage(message)
+                // Up to three dialog buttons: cancel = negative, last option =
+                // positive, a middle one = neutral; more fall back to a list.
+                if (options.size > 2) {
+                    b.setItems(options.map { labels[it] }.toTypedArray<CharSequence>()) { _, w -> answer(options[w]) }
+                } else {
+                    if (options.isNotEmpty()) {
+                        val pos = options.last()
+                        b.setPositiveButton(labels[pos]) { _, _ -> answer(pos) }
+                    }
+                    if (options.size == 2) {
+                        val neu = options.first()
+                        b.setNeutralButton(labels[neu]) { _, _ -> answer(neu) }
+                    }
+                }
+                if (cancelIdx >= 0) b.setNegativeButton(labels[cancelIdx]) { _, _ -> answer(cancelIdx) }
+            }
+            b.setOnCancelListener { if (cancelIdx >= 0) answer(cancelIdx) }
+            val d = b.create()
+            d.setOnShowListener {
+                for (which in intArrayOf(
+                    android.content.DialogInterface.BUTTON_POSITIVE,
+                    android.content.DialogInterface.BUTTON_NEUTRAL,
+                )) {
+                    val btn = d.getButton(which) ?: continue
+                    if (isDestructiveLabel(btn.text.toString())) btn.setTextColor(red)
+                }
+            }
+            d.show()
+        }
+    }
+
     @JvmStatic
     fun showToast(msg: String) {
         val ctx = activity
@@ -1662,6 +2120,10 @@ object PerryBridge {
         metaState: Int,
         repeatCount: Int,
     )
+
+    // System Back: true when the app's onBackPressed handler handled it.
+    @JvmStatic
+    external fun nativeBackPressed(): Boolean
 
     // =====================================================================
     // MapView (issue #517) — Google Maps SDK for Android.
@@ -2694,4 +3156,47 @@ object PerryBridge {
     /** Background push payload as a JSON string. */
     @JvmStatic
     external fun nativeNotificationBackgroundReceive(payloadJson: String)
+}
+
+/**
+ * One Material Icons glyph drawn centred on its own ink bounds, like an SF
+ * Symbol in a UIImageView. A TextView placed the glyph by the icon font's line
+ * metrics instead, so in a box of the glyph's own size it sat low and to the
+ * right and was clipped.
+ */
+class PerrySymbolView(
+    context: android.content.Context,
+    typeface: android.graphics.Typeface?,
+    private val glyph: String,
+) : View(context) {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        if (typeface != null) this.typeface = typeface
+        color = 0xFF000000.toInt()
+    }
+    private val bounds = android.graphics.Rect()
+    private var glyphPx = 24f * context.resources.displayMetrics.density
+
+    fun setGlyphPx(px: Float) {
+        if (px > 0f && px != glyphPx) { glyphPx = px; requestLayout(); invalidate() }
+    }
+
+    fun setColor(argb: Int) {
+        paint.color = argb
+        invalidate()
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val s = Math.ceil(glyphPx.toDouble()).toInt()
+        setMeasuredDimension(resolveSize(s, widthMeasureSpec), resolveSize(s, heightMeasureSpec))
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        val avail = Math.min(width - paddingLeft - paddingRight, height - paddingTop - paddingBottom)
+        if (avail <= 0) return
+        paint.textSize = Math.min(glyphPx, avail.toFloat())
+        paint.getTextBounds(glyph, 0, glyph.length, bounds)
+        val cx = paddingLeft + (width - paddingLeft - paddingRight) / 2f
+        val cy = paddingTop + (height - paddingTop - paddingBottom) / 2f
+        canvas.drawText(glyph, cx - bounds.exactCenterX(), cy - bounds.exactCenterY(), paint)
+    }
 }

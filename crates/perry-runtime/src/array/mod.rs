@@ -189,7 +189,10 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
-pub(crate) use self::from_concat::{define_constructed_index, finish_constructed_length};
+pub(crate) use self::from_concat::{
+    array_like_length, array_like_length_f64, boxed_primitive_source, define_constructed_index,
+    finish_constructed_length,
+};
 pub use self::generic::array_proto_mutator;
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
@@ -259,13 +262,13 @@ pub(crate) use self::indexing_support::{
     ITERATION_NEXT_REACHABLE, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::is_array::js_array_is_array;
-pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach, js_array_map,
     js_array_map_discard, js_array_reduce, js_array_some, js_array_some_captureless,
     js_array_to_locale_string, js_validate_array_callback, js_validate_array_map_callback,
 };
+pub(crate) use self::iter_methods::{throw_reduce_of_empty, throw_value_not_a_function};
 pub(crate) use self::iter_object::dispatch_array_iterator_method_builtin;
 pub use self::iter_object::{
     arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
@@ -295,11 +298,12 @@ pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
     intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
-    note_realm_array_values, note_realm_intrinsic, note_realm_namespace,
-    note_realm_restricted_callee_pair, realm_namespace_value,
-    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
-    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
-    realm_array_values_addr, realm_restricted_callee_pair_addr, RealmIntrinsics,
+    note_realm_array_values, note_realm_instance_layout, note_realm_intrinsic,
+    note_realm_namespace, note_realm_restricted_callee_pair, object_prototype_addr,
+    object_prototype_addr_if_resolved, object_prototype_addr_matches, object_prototype_cell,
+    prime_prototype_addr_cache, primitive_wrapper_prototype_addr, realm_array_values_addr,
+    realm_instance_layout, realm_namespace_value, realm_restricted_callee_pair_addr,
+    RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{

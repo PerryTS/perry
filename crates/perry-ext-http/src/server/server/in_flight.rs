@@ -18,7 +18,8 @@ use crate::server::response::{is_legacy_response_handle, response_state};
 /// A request whose handler returned before finishing the response. It lives
 /// in its server's `in_flight`, whose scanner visits `response`.
 pub(crate) struct InFlightRequest {
-    pub(crate) request_handle: i64,
+    /// The request object word (a registry id boxes as a handle).
+    pub(crate) request: f64,
     /// The response object word.
     pub(crate) response: f64,
     /// Quarantine duration after a peer/force close with an unfinished
@@ -31,7 +32,7 @@ impl InFlightRequest {
     /// A parked exchange holding only its response word.
     pub(crate) fn parked_for_test(response: f64) -> Self {
         Self {
-            request_handle: 0,
+            request: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             response,
             retire_grace: Duration::ZERO,
         }
@@ -58,8 +59,8 @@ pub(crate) fn response_writable_ended(response_handle: i64) -> bool {
 /// Free the per-request request + response handles. Mirrors the tail of
 /// the synchronous-handler path in `process_pending`. The response is ended
 /// (or about to be, via synthesize), so its id takes the one-tick fast path.
-fn finalize_request_handles(request_handle: i64, response_handle: i64) {
-    finalize_request_handles_deferred(request_handle, response_handle, None);
+fn finalize_request_handles(request: f64, response: f64) {
+    finalize_request_handles_deferred(request, response, None);
 }
 
 /// Free the per-request handles. A heap response has no id: closing its
@@ -73,13 +74,18 @@ fn finalize_request_handles(request_handle: i64, response_handle: i64) {
 /// is closed here first, then retired: JS may keep reading it, and its payload
 /// lives until no value names it.
 pub(crate) fn finalize_request_handles_deferred(
-    request_handle: i64,
-    response_handle: i64,
+    request: f64,
+    response: f64,
     recycle_deadline: Option<Instant>,
 ) {
-    close_incoming_message(request_handle);
-    retire_incoming_message(request_handle);
-    retire_response(response_handle, recycle_deadline);
+    // Closing the request can run JS (its `'close'`, a heap request's dump):
+    // both words are re-read after it.
+    let roots = TransientRootScope::enter();
+    let request = roots.root_nanbox(request);
+    let response = roots.root_nanbox(response);
+    close_incoming_message(object_handle(request.get()));
+    retire_incoming_message(object_handle(request.get()));
+    retire_response(object_handle(response.get()), recycle_deadline);
 }
 
 /// Release a finished or abandoned response.
@@ -110,13 +116,14 @@ pub(crate) fn reap_in_flight_requests() {
     let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     let mut heap_drains = Vec::new();
     let mut to_close = Vec::new();
+    let mut aborted = Vec::new();
     for server in owned_server_handles() {
         let mut index = 0;
         loop {
             let Some((request, response, deadline)) = with_base_server(server, |s| {
                 s.in_flight
                     .get(index)
-                    .map(|e| (e.request_handle, e.response, e.recycle_deadline()))
+                    .map(|e| (e.request, e.response, e.recycle_deadline()))
             })
             .flatten() else {
                 break;
@@ -145,10 +152,22 @@ pub(crate) fn reap_in_flight_requests() {
             // Node retires the request after the response's `'close'`: an
             // ended response waits for it, and a dead connection closes its
             // response on this tick and retires the request on the next.
+            // node's `abortIncoming`: a heap request whose connection died
+            // before its response ended is aborted (once: `req.aborted`).
+            if peer_gone
+                && !ended
+                && crate::server::request_payload::is_request(object_handle(request))
+            {
+                aborted.push(roots.root_nanbox(request));
+            }
             let closed = crate::server::response::response_close_emitted(handle);
             if closed && (ended || peer_gone) {
                 let _ = with_base_server_mut(server, |s| s.in_flight.remove(index));
-                to_finalize.push((request, response, (!ended).then_some(deadline)));
+                to_finalize.push((
+                    roots.root_nanbox(request),
+                    response,
+                    (!ended).then_some(deadline),
+                ));
             } else {
                 if peer_gone && !closed {
                     to_close.push(roots.root_nanbox(response.get()));
@@ -156,6 +175,9 @@ pub(crate) fn reap_in_flight_requests() {
                 index += 1;
             }
         }
+    }
+    for req in aborted {
+        crate::server::request_payload::abort_incoming(object_handle(req.get()));
     }
     for ls in drain_listeners {
         crate::server::request::emit_no_arg_to_listeners(&ls);
@@ -168,7 +190,7 @@ pub(crate) fn reap_in_flight_requests() {
     }
     // Retire after the walk; teardown can deliver close callbacks.
     for (req, res, recycle_deadline) in to_finalize {
-        finalize_request_handles_deferred(req, object_handle(res.get()), recycle_deadline);
+        finalize_request_handles_deferred(req.get(), res.get(), recycle_deadline);
     }
 }
 
@@ -182,7 +204,7 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
     if response_writable_ended(response)
         && crate::server::response::response_close_emitted(response)
     {
-        finalize_request_handles(pending.request_handle, response);
+        finalize_request_handles(pending.request, pending.response);
         return;
     }
     // Keep the existing late-write retirement grace. Disabled receiving
@@ -193,7 +215,7 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
         .unwrap_or(300_000.0);
     let retire_grace = Duration::from_millis(grace_ms as u64);
     let entry = InFlightRequest {
-        request_handle: pending.request_handle,
+        request: pending.request,
         response: pending.response,
         retire_grace,
     };
@@ -208,6 +230,6 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
             );
         }
         let deadline = Instant::now().checked_add(retire_grace);
-        finalize_request_handles_deferred(pending.request_handle, response, deadline);
+        finalize_request_handles_deferred(pending.request, pending.response, deadline);
     }
 }

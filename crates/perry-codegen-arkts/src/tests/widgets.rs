@@ -10,6 +10,21 @@ fn emits_none_for_empty_module() {
 }
 
 #[test]
+fn link_is_its_text() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "Link",
+        vec![
+            Expr::String("Docs".into()),
+            Expr::String("https://a.test/".into()),
+        ],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("Text('Docs').fontSize(20)"));
+    assert!(!r.ets_source.contains("a.test"));
+}
+
+#[test]
 fn text_strips_app_call() {
     let mut m = empty_module();
     m.init
@@ -18,6 +33,27 @@ fn text_strips_app_call() {
     assert!(r.ets_source.contains("Text('hi').fontSize(20)"));
     assert!(matches!(m.init[0], Stmt::Expr(Expr::Number(_))));
     assert_eq!(r.callbacks.len(), 0);
+}
+
+#[test]
+fn label_is_its_text() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "VStack",
+        vec![Expr::Array(
+            vec![nmc(
+                "Label",
+                vec![
+                    Expr::String("Phone".into()),
+                    nmc("TextField", vec![Expr::String("0912".into())]),
+                ],
+            )],
+            None,
+        )],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("Text('Phone').fontSize(20)"));
+    assert!(!r.ets_source.contains("unsupported"));
 }
 
 #[test]
@@ -576,6 +612,7 @@ fn for_each_lowers_array_map_in_vstack() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],

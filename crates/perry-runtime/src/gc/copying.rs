@@ -1298,10 +1298,12 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
         diag.record(Phase::RememberedSetYoungLogs, remembered_phase_start);
     }
     let copy_phase_start = PhaseDiag::start(&phase_diag);
+    let drain_started = super::tenuring::thread_cpu_ns();
     unsafe {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
         collector.drain::<DIAGNOSTICS>();
     }
+    super::tenuring::note_fixed_cost_drain(drain_started);
     if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::CopyEvacuation, copy_phase_start);
     }
@@ -1910,6 +1912,11 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_live_bytes,
         collector.stats.survivor_first_round_live_bytes,
+    );
+    // F4: price this minor's fixed cost before the influx retune reads the cap.
+    super::tenuring::note_minor_fixed_cost(
+        entry_nursery_cap,
+        from_space_bytes != 0 && eden_allocated_bytes >= entry_eden_budget,
     );
     if from_space_bytes != 0 {
         retune_after_scavenge(

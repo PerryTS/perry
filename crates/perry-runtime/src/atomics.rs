@@ -244,13 +244,9 @@ fn atomics_to_index(index: f64, length: i32) -> i32 {
     // check. `js_number_coerce` is the full ToNumber — it runs an object's
     // `Symbol.toPrimitive`/`valueOf`/`toString` (so the harness's
     // `{ valueOf: () => 125 }` indices actually evaluate) and throws TypeError
-    // on a Symbol. A BigInt index is a ToNumber TypeError. The truncation must
+    // on a Symbol or a BigInt. The truncation must
     // happen BEFORE the negativity check so a fractional in-bounds index like
     // `-0.9` maps to +0 (ToIntegerOrInfinity) instead of wrongly throwing.
-    let js = JSValue::from_bits(index.to_bits());
-    if js.is_bigint() {
-        throw_type_error(b"Cannot convert a BigInt value to a number");
-    }
     let num = crate::builtins::js_number_coerce(index);
     let integer = if num.is_nan() { 0.0 } else { num.trunc() };
     if !(0.0..=9_007_199_254_740_991.0).contains(&integer) {
@@ -262,14 +258,8 @@ fn atomics_to_index(index: f64, length: i32) -> i32 {
     integer as i32
 }
 
+/// ToNumber for the integer-view value / count / timeout arguments.
 fn number_arg(value: f64) -> f64 {
-    // ToNumber for the integer-view value / count / timeout arguments. A BigInt
-    // is a ToNumber TypeError; everything else (objects with `valueOf`, strings,
-    // booleans, Symbols-throw) is handled by the shared ToNumber.
-    let js = JSValue::from_bits(value.to_bits());
-    if js.is_bigint() {
-        throw_type_error(b"Cannot convert a BigInt value to a number");
-    }
     crate::builtins::js_number_coerce(value)
 }
 

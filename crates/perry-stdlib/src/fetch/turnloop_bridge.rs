@@ -236,7 +236,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         turnloop_client::cancel_source,
     );
     let sink = Sink {
-        ctx: stream,
+        ctx: stream.link(),
         on_head: Some(response_head),
         capacity: Some(crate::streams::native_capacity),
         on_chunk: Some(response_chunk),
@@ -248,14 +248,13 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         let rejection = Rejection::for_declined(declined, &url, &method);
         queue_deferred_resolution(promise_ptr, false, move || rejection.into_js_bits());
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
-                stream,
-            ));
+            crate::streams::js_readable_stream_controller_close(stream.controller_value());
         }
     }
 }
 
-fn response_head(stream: usize, response: &ResponseOut) {
+fn response_head(link: usize, response: &ResponseOut) {
+    let stream = crate::streams::RsRef::from_link(link);
     let Some(promise) = crate::streams::take_native_promise(stream) else {
         return;
     };
@@ -282,21 +281,23 @@ fn response_head(stream: usize, response: &ResponseOut) {
             .into(),
             url: response.final_url.clone(),
             redirected: response.redirected,
-            cached_headers_id: None,
-            cached_body_stream_id: response.body_present.then_some(stream),
-            body_stream_id: response.body_present.then_some(stream),
+            cached_headers: 0,
+            cached_body_stream: response.body_present.then_some(stream),
+            body_stream: response.body_present.then_some(stream),
         },
     );
     queue_promise_resolution(promise as usize, true, handle_to_f64(id).to_bits());
 }
 
-fn response_chunk(stream: usize, bytes: &[u8]) {
+fn response_chunk(link: usize, bytes: &[u8]) {
+    let stream = crate::streams::RsRef::from_link(link);
     unsafe {
         crate::streams::native_enqueue(stream, bytes);
     }
 }
 
-fn response_done(stream: usize, outcome: Outcome) {
+fn response_done(link: usize, outcome: Outcome) {
+    let stream = crate::streams::RsRef::from_link(link);
     if let Some(promise) = crate::streams::take_native_promise(stream) {
         match outcome {
             Outcome::Err(error) if error.aborted => {
@@ -309,18 +310,14 @@ fn response_done(stream: usize, outcome: Outcome) {
             Outcome::Ok(_) => unreachable!("success requires a final head"),
         }
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
-                stream,
-            ));
+            crate::streams::js_readable_stream_controller_close(stream.controller_value());
         }
         return;
     }
     unsafe {
         match outcome {
             Outcome::Ok(_) => {
-                crate::streams::js_readable_stream_controller_close(
-                    crate::streams::controller_value(stream),
-                );
+                crate::streams::js_readable_stream_controller_close(stream.controller_value());
             }
             Outcome::Err(error) => {
                 let bits = if error.aborted {
@@ -329,7 +326,7 @@ fn response_done(stream: usize, outcome: Outcome) {
                     failure_for(error).into_body_error_bits()
                 };
                 crate::streams::js_readable_stream_controller_error(
-                    crate::streams::controller_value(stream),
+                    stream.controller_value(),
                     f64::from_bits(bits),
                 );
             }

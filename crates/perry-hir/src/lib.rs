@@ -89,9 +89,10 @@ pub use js_transform::{
 };
 pub use lockdown::{audit_module_lockdown, LockdownViolation};
 pub use lower::{
-    lower_module, lower_module_full, lower_module_full_with_platform_globals,
-    lower_module_with_class_id, lower_module_with_class_id_and_types,
-    lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
+    installs_reflect_metadata, lower_module, lower_module_full,
+    lower_module_full_with_platform_globals, lower_module_with_class_id,
+    lower_module_with_class_id_and_types, lower_module_with_class_id_types_and_seed,
+    lower_module_with_class_id_types_seed_and_entry, prepend_reflect_metadata_install,
 };
 pub use monomorph::{monomorphize_module, monomorphize_modules};
 pub use native_profile::exported_native_pod_abi;
@@ -100,8 +101,8 @@ pub use patched_builtins::proto_census::{
     ProtoCensus,
 };
 pub use patched_builtins::{
-    clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
-    set_patched_builtins, PatchedBuiltins,
+    clear_patched_builtins, patched_prototype_methods,
+    scan_module as scan_patched_builtins, set_patched_builtins, PatchedBuiltins,
 };
 pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTable};
 

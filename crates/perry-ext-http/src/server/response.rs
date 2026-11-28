@@ -460,14 +460,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::Error,
         );
     }
-    if !http_is_valid_token(&name) {
-        perry_ffi::throw_with_code(
-            &format!("Header name must be a valid HTTP token [\"{name}\"]"),
-            "ERR_INVALID_HTTP_TOKEN",
-            perry_ffi::ErrorKind::TypeError,
-        );
-    }
-
+    // `validate` checks the name first (node's order), then the value.
     header_values::validate(&name, value_root.get());
     header_values::set(response_root.get(), &name, value_root.get());
 }
@@ -739,9 +732,7 @@ pub extern "C" fn js_node_http_res_set_strict_content_length(handle: i64, value:
 pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    response_state(response_root.get())
-        .map(|sr| sr.req_handle)
-        .unwrap_or(0)
+    req_handle_of(response_root.get())
 }
 
 /// `res.headersSent` getter.
@@ -1242,9 +1233,20 @@ pub(crate) fn finalize_buffered_end(
     let has_explicit_length = original_headers.iter().any(|(n, _)| {
         n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
     });
+    let socket = response_socket(response_root.get());
+    let socket_destroyed = JsValue::from_bits(socket.to_bits()).is_pointer()
+        && heap::truthy(unsafe { perry_ffi::runtime_get(socket, b"destroyed") });
     let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
+    }
+    if socket_destroyed {
+        // node's `_writeRaw`: a destroyed socket takes nothing, and the write's
+        // callback (`onFinish`: the end callbacks, then `'finish'`) never runs.
+        // The response's `'close'` comes from its socket's.
+        sr.writable_ended = true;
+        heap::mark_ended(response_root.get());
+        return Some(EndOutcome::Deferred);
     }
 
     // P5 streaming: the head already went to the wire on this thread, so the
@@ -1308,7 +1310,6 @@ pub(crate) fn finalize_buffered_end(
         auto_content_length,
     };
     let turnloop = sr.turnloop;
-    let req_handle = sr.req_handle;
     store_encoded_head(response_root.get());
     // P5: the handler, the codec and the socket are on the same thread, so
     // the response is encoded and submitted here. A response with no
@@ -1330,7 +1331,7 @@ pub(crate) fn finalize_buffered_end(
         sr.writable_finished = true;
     }
     heap::mark_ended(response_root.get());
-    crate::server::request::mark_connection_written(req_handle);
+    crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
     Some(end_outcome(response_root.get(), deferred))
 }
 
@@ -1879,8 +1880,8 @@ pub(crate) fn _force_link_helpers(v: f64) -> bool {
 #[path = "response_turnloop.rs"]
 mod turnloop_shape;
 pub(crate) use turnloop_shape::{
-    alloc_http1_server_response_for_turnloop, alloc_server_response_for_turnloop, req_handle_of,
-    stream_receiver_gone,
+    alloc_http1_server_response_for_turnloop, alloc_server_response_for_turnloop,
+    exchange_response, req_handle_of, stream_receiver_gone,
 };
 
 #[cfg(test)]

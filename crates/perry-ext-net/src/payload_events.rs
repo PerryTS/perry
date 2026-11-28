@@ -31,6 +31,7 @@ extern "C" {
         args: *const f64,
         len: usize,
     ) -> f64;
+    fn js_perry_event_uncaught(error: f64) -> f64;
     fn js_node_stream_method_listener_count(owner: i64, event: f64) -> f64;
     fn js_queue_next_tick(callback: i64);
 }
@@ -196,6 +197,12 @@ pub(crate) fn queue_call(owner: f64, callback: f64, args: &[f64]) {
         perry_ffi::set_closure_capture_f64(job_ptr, 3, resource.get());
         js_queue_next_tick(job.get());
     }
+}
+
+/// Raise an `'error'` event that has no listener as an uncaught exception.
+pub(crate) fn uncaught(error: f64) {
+    // SAFETY: The runtime boundary roots the live value before any allocation.
+    unsafe { js_perry_event_uncaught(error) };
 }
 
 pub(crate) fn call(callback: f64, this: JsThis, args: &[f64]) -> f64 {

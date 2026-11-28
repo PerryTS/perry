@@ -40,8 +40,6 @@
 //! loops terminate: without it, a `setTimeout(f, 0)` scheduled from a timer
 //! callback could be due at the phase's own clock read.
 
-use std::time::Instant;
-
 use super::store::{self, Class, Entry};
 use super::{
     call_timer_callback_entry, enter_timer_callback_dispatch, in_timer_callback_dispatch,
@@ -63,7 +61,8 @@ pub(crate) fn run_timers_phase() -> i32 {
     // libuv reads the clock once per iteration and runs the timers that are due
     // at *that* instant; a callback that takes 25 ms does not drag later timers
     // into the same phase. Perry's interval re-arm depends on the same read.
-    let phase_now = Instant::now();
+    // On libuv's millisecond grid, like every timer's deadline (`loop_now`).
+    let phase_now = super::loop_now(super::ensure_initialized());
     let horizon = store::with_current(|timers| timers.seq_horizon());
 
     let mut fired = 0;
@@ -175,7 +174,10 @@ pub(crate) fn run_check_phase() -> i32 {
     // notifies on each keypress; this is a cheap empty-buffer check otherwise.
     crate::os_hook_slots::pump_process_stdin();
     #[cfg(not(target_arch = "wasm32"))]
-    crate::turnloop_net::check_phase_end();
+    {
+        crate::turnloop_net::check_phase_end();
+        crate::turnloop_net::close_phase();
+    }
     if fired != 0 && crate::promise::mt_profile_enabled() {
         use std::sync::atomic::Ordering;
         PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);

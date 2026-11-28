@@ -36,6 +36,7 @@ mod generator;
 mod generator_state;
 mod install_static;
 mod math_temporal;
+mod reflect_metadata;
 
 // Complete namespace construction, reached through feature hooks.
 mod builtin_namespace;
@@ -179,8 +180,8 @@ pub(crate) use populate::{
     ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_builtin_well_known_symbol_method, install_error_prototype_data_properties,
-    populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_builtin_well_known_symbol_value,
+    install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,

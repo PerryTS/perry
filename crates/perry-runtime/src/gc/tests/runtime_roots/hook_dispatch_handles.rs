@@ -166,6 +166,12 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
     crate::timer::clearTimeout(timer_id);
 }
 
+/// A `setTimeout(f, 0)` is a 1 ms timer (node's `Timeout` floor), due once
+/// the loop clock has moved past the millisecond it was scheduled in.
+fn wait_for_zero_delay_timers() {
+    std::thread::sleep(std::time::Duration::from_millis(2));
+}
+
 #[test]
 fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     let storage = crate::async_context::AsyncLocalStoragePayload::default();
@@ -204,6 +210,7 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     TEST_TIMER_ARG_BITS.with(|slot| slot.set(0));
     TEST_TIMER_CALLED.with(|slot| slot.set(false));
 
+    wait_for_zero_delay_timers();
     let before = gc_collection_count();
     assert_eq!(crate::timer::js_callback_timer_tick(), 1);
     drain_scheduled_minor_gc(
@@ -249,6 +256,7 @@ fn test_timer_tick_roots_the_complete_detached_expired_batch() {
     TEST_TIMER_CALLED.with(|slot| slot.set(false));
     TEST_TIMER_CALLBACK_PTR.with(|slot| slot.set(0));
 
+    wait_for_zero_delay_timers();
     assert_eq!(crate::timer::js_callback_timer_tick(), 2);
     assert!(TEST_TIMER_CALLED.with(|slot| slot.get()));
     let dispatched_callback = TEST_TIMER_CALLBACK_PTR.with(|slot| slot.get());

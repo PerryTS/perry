@@ -65,13 +65,6 @@ fn throw_bigint_syntax() -> ! {
 /// (`Infinity`/`NaN`/`1.3`/`undefined`→NaN) is a `RangeError` (`NumberToBigInt`
 /// requires an integral Number). `valueOf` is observed for objects.
 fn epoch_number_to_integer(raw: f64) -> i64 {
-    let jv = JSValue::from_bits(raw.to_bits());
-    if jv.is_bigint() {
-        crate::object::throw_object_type_error(b"Cannot convert a BigInt value to a number");
-    }
-    if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
-        crate::object::throw_object_type_error(b"Cannot convert a Symbol value to a number");
-    }
     let n = crate::builtins::js_number_coerce(raw);
     if !n.is_finite() || n.fract() != 0.0 {
         crate::fs::validate::throw_range_error_with_code(

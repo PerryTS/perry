@@ -20,3 +20,6 @@ pub const HTTP_PARSER: u32 = 0xFFFF_242E;
 pub const WS_CODEC: u32 = 0xFFFF_242F;
 pub const HTTP2_CODEC: u32 = 0xFFFF_2430;
 pub const HTTP_CLIENT_PARSER: u32 = 0xFFFF_2431;
+/// node:http's server-side `IncomingMessage`: an ordinary Readable carrying
+/// the parsed request as its payload (HTTP/1 server requests).
+pub const HTTP_SERVER_INCOMING_MESSAGE: u32 = 0xFFFF_2437;

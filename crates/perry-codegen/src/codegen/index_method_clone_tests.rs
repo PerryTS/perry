@@ -376,6 +376,8 @@ fn fixture() -> Module {
 
 fn emit() -> String {
     let opts = CompileOptions {
+        // Apple aarch64 inlines a thread-cache lookup with its own null tests.
+        target: Some("x86_64-unknown-linux-gnu".into()),
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
@@ -902,6 +904,7 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
     captured.body.insert(
         0,
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 901,
             params: Vec::new(),

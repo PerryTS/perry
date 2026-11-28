@@ -78,6 +78,7 @@ mod closed_marker_load;
 mod closed_methods;
 mod closed_world;
 mod closure_context;
+mod code_unit_lanes;
 mod computed_delete_absent;
 pub(crate) mod computed_key_members;
 mod computed_method_key;

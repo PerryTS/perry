@@ -95,7 +95,7 @@ pub(crate) fn has_pending_path_write(path: f64) -> bool {
 /// NaN-boxed `f64` copy held only in a Rust local names from-space the moment
 /// one runs — the same shape as the bare-pointer-across-allocation class the
 /// moving collector made live. The closure itself needs no handle here:
-/// `schedule_native_timeout` roots it for exactly this reason (see
+/// `schedule_native_turn` roots it for exactly this reason (see
 /// `schedule_callback_timer`'s own `RuntimeHandleScope`).
 /// `provider` is node's async_hooks type for the form: FSREQCALLBACK for a
 /// callback, FSREQPROMISE for a promise.
@@ -116,7 +116,7 @@ fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64, provider: &'st
     // A pending callback timer is a live event source, so a program that ends
     // by draining its loop still performs it; `process.exit()` never ticks the
     // timer queues, so an exit in the same tick drops it, as Node does.
-    let _ = crate::timer::schedule_native_timeout(closure as i64, 0.0, provider);
+    let _ = crate::timer::schedule_native_turn(closure as i64, provider);
     if is_write_mode(mode) {
         track_pending_path_write(path_handle.get_nanbox_f64());
     }

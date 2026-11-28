@@ -184,7 +184,9 @@ fn enqueue_payload(
         registry.pending.push_back(token_ptr as usize);
         publish_active_entries(&registry);
     }
-    crate::event_pump::js_notify_main_thread();
+    // Only the owner's pump settles it (`js_native_async_process_pending`):
+    // wake that agent (a broadcast when it has no loop route of its own).
+    crate::event_pump::notify_agent_work(token.owner_agent);
     return_status
 }
 
@@ -601,11 +603,29 @@ pub extern "C" fn js_native_async_completion_reject_promise_bits(
 pub extern "C" fn js_native_async_process_pending() -> i32 {
     let pending: Vec<usize> = {
         let mut registry = crate::gc::lock_gc_root_registry(registry());
+        // Only this agent's completions (#11433, as the stdlib queues do): a
+        // token's Promise and its reactions live in the heap of the agent that
+        // created it, so a Worker's pump settling the main program's token ran
+        // the main program's continuation on the Worker's thread (an Android
+        // app's Play Billing promise, settled by its chess-engine Worker, read
+        // the main module's globals there and crashed). Foreign tokens stay
+        // queued for their owner's pump.
         #[cfg(not(test))]
         {
-            let drained = registry.pending.drain(..).collect();
+            let agent = crate::agent::current_agent();
+            let mut owned = Vec::new();
+            let mut foreign = VecDeque::new();
+            while let Some(token_ptr) = registry.pending.pop_front() {
+                let token = unsafe { &*(token_ptr as *const NativeAsyncCompletion) };
+                if token.owner_agent == agent {
+                    owned.push(token_ptr);
+                } else {
+                    foreign.push_back(token_ptr);
+                }
+            }
+            registry.pending = foreign;
             publish_active_entries(&registry);
-            drained
+            owned
         }
         #[cfg(test)]
         {

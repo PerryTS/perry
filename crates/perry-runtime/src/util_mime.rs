@@ -283,6 +283,11 @@ fn serialize_params(entries: &[(String, String)]) -> String {
         .join(";")
 }
 
+/// A parameter name as the entries store it: every lookup and insert folds ASCII case.
+fn param_name(value: f64) -> String {
+    value_to_string(value).to_ascii_lowercase()
+}
+
 fn mime_type_parts(this: *mut ObjectHeader) -> (String, String, *mut ObjectHeader) {
     let type_name = value_to_string(js_object_get_field_f64(this, MIME_TYPE_TYPE));
     let subtype = value_to_string(js_object_get_field_f64(this, MIME_TYPE_SUBTYPE));
@@ -422,7 +427,7 @@ extern "C" fn mime_params_get_vtable(this: f64, name: f64) -> f64 {
     let Some(obj) = object_ptr_from_value(this) else {
         return null();
     };
-    let name = value_to_string(name);
+    let name = param_name(name);
     for (key, value) in get_mime_params_entries(obj) {
         if key == name {
             return string_value(&value);
@@ -435,7 +440,7 @@ extern "C" fn mime_params_has_vtable(this: f64, name: f64) -> f64 {
     let Some(obj) = object_ptr_from_value(this) else {
         return bool_value(false);
     };
-    let name = value_to_string(name);
+    let name = param_name(name);
     bool_value(
         get_mime_params_entries(obj)
             .iter()
@@ -447,7 +452,7 @@ extern "C" fn mime_params_set_vtable(this: f64, name: f64, value: f64) -> f64 {
     let Some(obj) = object_ptr_from_value(this) else {
         return undefined();
     };
-    let name = value_to_string(name);
+    let name = param_name(name);
     let value = value_to_string(value);
     validate_token("parameter name", &name, &name);
     validate_param_value(&value, &value);
@@ -465,7 +470,7 @@ extern "C" fn mime_params_delete_vtable(this: f64, name: f64) -> f64 {
     let Some(obj) = object_ptr_from_value(this) else {
         return undefined();
     };
-    let name = value_to_string(name);
+    let name = param_name(name);
     let mut entries = get_mime_params_entries(obj);
     entries.retain(|(key, _)| key != &name);
     set_mime_params_entries(obj, entries);
@@ -525,7 +530,7 @@ static MIME_TYPE_MEMBERS: [ClassMemberDecl; 8] = [
 static MIME_TYPE_DECLARATION: ClassDeclaration = ClassDeclaration::native(&MIME_TYPE_MEMBERS);
 
 /// `util.MIMEParams`'s ClassBody members.
-static MIME_PARAMS_MEMBERS: [ClassMemberDecl; 8] = [
+static MIME_PARAMS_MEMBERS: [ClassMemberDecl; 9] = [
     ClassMemberDecl::native_method("get", mime_params_get_vtable as *const u8, 1),
     ClassMemberDecl::native_method("has", mime_params_has_vtable as *const u8, 1),
     ClassMemberDecl::native_method("set", mime_params_set_vtable as *const u8, 2),
@@ -534,6 +539,7 @@ static MIME_PARAMS_MEMBERS: [ClassMemberDecl; 8] = [
     ClassMemberDecl::native_method("keys", mime_params_keys_vtable as *const u8, 0),
     ClassMemberDecl::native_method("values", mime_params_values_vtable as *const u8, 0),
     ClassMemberDecl::native_method("toString", mime_params_to_string_vtable as *const u8, 0),
+    ClassMemberDecl::native_method("toJSON", mime_params_to_string_vtable as *const u8, 0),
 ];
 static MIME_PARAMS_DECLARATION: ClassDeclaration = ClassDeclaration::native(&MIME_PARAMS_MEMBERS);
 

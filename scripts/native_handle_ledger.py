@@ -273,6 +273,10 @@ LEDGER_PATH_MOVES = {
     # the module that owns the write_file_input submodule.
     "crates/perry-runtime/src/fs/stream/write_file_input/deferred.rs":
         "crates/perry-runtime/src/fs/mod.rs",
+    # The five Web Streams record registries moved from streams.rs into its
+    # access-layer submodule streams/state.rs; they keep the streams.rs budget.
+    "crates/perry-stdlib/src/streams/state.rs":
+        "crates/perry-stdlib/src/streams.rs",
 }
 
 

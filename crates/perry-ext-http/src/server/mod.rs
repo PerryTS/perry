@@ -53,6 +53,7 @@ use std::sync::Once;
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod bun_server;
+mod client_error;
 mod cluster_bind;
 mod dispatch_ext;
 mod handle_dispatch;
@@ -64,6 +65,7 @@ mod https_server;
 // #10428: runtime callback for http/https/http2 exports used as values.
 mod native_dispatch;
 mod request;
+pub(crate) mod request_payload;
 mod response;
 mod response_cork;
 mod response_end;
@@ -166,11 +168,18 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
             // reachable from the server, so this walk is their only root.
             if !exchange_slot_sabotage() {
                 for pending in server.pending.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut pending.request);
                     visitor.visit_nanbox_f64_slot(&mut pending.response);
                 }
                 for parked in server.in_flight.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut parked.request);
                     visitor.visit_nanbox_f64_slot(&mut parked.response);
                 }
+            }
+            visitor.visit_nanbox_f64_slot(&mut server.response_class);
+            visitor.visit_nanbox_f64_slot(&mut server.request_class);
+            for error in server.pending_client_errors.iter_mut() {
+                visitor.visit_nanbox_f64_slot(&mut error.socket);
             }
             for promise in server.bun_promises.iter_mut() {
                 promise.scan(visitor);
@@ -280,6 +289,9 @@ extern "C" fn retire_transport_edges(agent: u64) {
             server.transport_listener = undefined;
             server.pending.clear();
             server.in_flight.clear();
+            server.response_class = undefined;
+            server.request_class = undefined;
+            server.with_client_errors(|errors| errors.clear());
             server.bun_promises.clear();
         }
     };
@@ -534,7 +546,7 @@ mod tests {
         let mut http = http_server(http_handler, listener_map("request", http_listener));
         http.once_listeners = listener_map("connection", http_once_listener);
         server::register_listen_callback(&mut http, http_listen_callback);
-        server::queue_deferred_close_emit(&mut http, http_close_callback);
+        server::deferred_events::register_close_callback(&mut http, http_close_callback);
         let http_handle = register_handle(http);
 
         let https_handler = young_gc_root();
@@ -732,7 +744,7 @@ mod tests {
         let mut http = HttpServer::with_handler(0);
         http.pending.push_back(server::HttpPendingRequest {
             server_handle: 0,
-            request_handle: 0,
+            request: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             response: pending_response,
             skip_default_response: false,
             h2_stream_handle: 0,
@@ -749,6 +761,33 @@ mod tests {
             let http = get_handle::<HttpServer>(handle).expect("http server");
             assert_nanbox_rewritten(pending_response, http.pending[0].response);
             assert_nanbox_rewritten(parked_response, http.in_flight[0].response);
+        }
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn gc_mutable_scanner_rewrites_the_response_class_and_queued_client_errors() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
+        let class = young_gc_value();
+        let socket = young_gc_value();
+        let mut http = HttpServer::with_handler(0);
+        http.response_class = class;
+        http.pending_client_errors
+            .push_back(client_error::ClientError {
+                socket,
+                code: "HPE_INVALID_METHOD".into(),
+                kind: client_error::ClientErrorKind::Timeout,
+                read_ended: false,
+            });
+        let handle = register_handle(http);
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let http = get_handle::<HttpServer>(handle).expect("http server");
+            assert_nanbox_rewritten(class, http.response_class);
+            assert_nanbox_rewritten(socket, http.pending_client_errors[0].socket);
         }
         drop_handle(handle);
     }

@@ -735,24 +735,6 @@ pub(crate) fn get_field_by_name_object_tail(
                         );
                         return JSValue::from_bits(v.to_bits());
                     }
-                    b"code" => {
-                        // Errors thrown by runtime validation paths (e.g.
-                        // diagnostics_channel argument checks) register
-                        // their `ERR_*` code in a diagnostic record owned by
-                        // the ErrorHeader. This avoids the
-                        // earlier substring-match shim that incorrectly
-                        // applied `ERR_INVALID_ARG_TYPE` to any user
-                        // TypeError whose `.message` happened to equal
-                        // the placeholder text.
-                        if let Some(code) = crate::node_submodules::error_code_for_error(err_ptr) {
-                            let s = crate::string::js_string_from_bytes(
-                                code.as_ptr(),
-                                code.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                        return JSValue::undefined();
-                    }
                     b"errors" => {
                         // AggregateError.errors — return the errors array
                         // NaN-boxed with POINTER_TAG so callers can index
@@ -764,65 +746,6 @@ pub(crate) fn get_field_by_name_object_tail(
                             return JSValue::undefined();
                         }
                         return JSValue::from_bits(crate::js_nanbox_pointer(errs as i64).to_bits());
-                    }
-                    b"syscall" => {
-                        // Node attaches `syscall` to system-call errors
-                        // (open/stat/access/…). Perry's fs helpers register
-                        // the value in the Error's diagnostic record
-                        // (parallel to the `.code` path).
-                        if let Some(syscall) =
-                            crate::node_submodules::error_syscall_for_error(err_ptr)
-                        {
-                            let s = crate::string::js_string_from_bytes(
-                                syscall.as_ptr(),
-                                syscall.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                        return JSValue::undefined();
-                    }
-                    b"errno" => {
-                        if let Some(errno) = crate::node_submodules::error_errno_for_error(err_ptr)
-                        {
-                            return JSValue::number(errno as f64);
-                        }
-                        return JSValue::undefined();
-                    }
-                    b"path" => {
-                        if let Some(path) = crate::node_submodules::error_path_for_error(err_ptr) {
-                            let s = crate::string::js_string_from_bytes(
-                                path.as_ptr(),
-                                path.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                        return JSValue::undefined();
-                    }
-                    b"hostname" => {
-                        // Node attaches `hostname` to c-ares dns errors
-                        // (`dns.resolve*`/`dns.reverse`). Mirrors `.path`.
-                        if let Some(hostname) =
-                            crate::node_submodules::error_hostname_for_error(err_ptr)
-                        {
-                            let s = crate::string::js_string_from_bytes(
-                                hostname.as_ptr(),
-                                hostname.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                        return JSValue::undefined();
-                    }
-                    b"dest" => {
-                        // Node attaches `dest` to two-path fs errors
-                        // (rename/copyFile/link/symlink). Mirrors `.path`.
-                        if let Some(dest) = crate::node_submodules::error_dest_for_error(err_ptr) {
-                            let s = crate::string::js_string_from_bytes(
-                                dest.as_ptr(),
-                                dest.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                        return JSValue::undefined();
                     }
                     _ => {
                         // Inherited members: user-defined props/accessors on

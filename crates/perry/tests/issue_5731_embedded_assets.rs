@@ -143,6 +143,20 @@ const assetEntry = fs.readdirSync("$perryfs/dist", { withFileTypes: true })[0];
 console.log("dirent:", assetEntry.name, assetEntry.isDirectory(), assetEntry.parentPath);
 try { readEmbedded("nope.txt"); console.log("throwMissing: no"); }
 catch (e) { console.log("throwMissing: yes"); }
+const fd = fs.openSync("$perryfs/dist/index.html", "r");
+const chunk = Buffer.alloc(5);
+console.log("openSync:", fs.readSync(fd, chunk, 0, 5, 6), chunk.toString(), fs.fstatSync(fd).size);
+fs.closeSync(fd);
+try { fs.openSync("$perryfs/nope.txt", "r"); } catch (e) { console.log("openMissing:", e.code); }
+try { fs.openSync("$perryfs/dist/index.html", "w"); } catch (e) { console.log("openWrite:", e.code); }
+const handle = await fs.promises.open("$perryfs/dist/index.html", "r");
+console.log("promises.open:", await handle.readFile("utf8"));
+await handle.close();
+let streamed = "";
+for await (const part of fs.createReadStream("$perryfs/dist/index.html", { encoding: "utf8", start: 6, highWaterMark: 2 })) {
+  streamed += part + "|";
+}
+console.log("createReadStream:", streamed);
 "#,
     )
     .expect("write entry");
@@ -194,7 +208,12 @@ catch (e) { console.log("throwMissing: yes"); }
          rootEntries: dist\n\
          distEntries: assets,index.html\n\
          dirent: assets true $perryfs/dist\n\
-         throwMissing: yes\n",
+         throwMissing: yes\n\
+         openSync: 5 EMBED 11\n\
+         openMissing: ENOENT\n\
+         openWrite: ENOENT\n\
+         promises.open: HELLO_EMBED\n\
+         createReadStream: EM|BE|D|\n",
         "unexpected runtime output"
     );
 }

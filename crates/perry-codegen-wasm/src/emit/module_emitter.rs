@@ -33,6 +33,9 @@ pub(super) struct WasmModuleEmitter {
     /// stored in WASM globals so cross-function references work, and so module-init
     /// LocalIds don't collide with other modules' identical LocalIds.
     pub(super) module_let_globals: BTreeMap<(usize, LocalId), u32>,
+    /// The source name of each binding a `PreallocateTdzBoxes` names, as (mod_idx, LocalId),
+    /// for the ReferenceError a read in its dead zone throws.
+    pub(super) tdz_names: BTreeMap<(usize, LocalId), String>,
     /// Locals a closure captures and someone mutates, as (mod_idx, LocalId). Each
     /// holds a runtime cell, so the closures and the enclosing function share one
     /// value; a plain local would give every closure its own snapshot.
@@ -85,8 +88,20 @@ pub(super) struct WasmModuleEmitter {
     pub(super) module_func_maps: Vec<BTreeMap<FuncId, u32>>,
     /// The intrinsic prototype of each function's value, by wasm function index.
     pub(super) fn_proto_kinds: BTreeMap<u32, FnProtoKind>,
-    /// The string id of each function declaration's `name`, by wasm function index.
+    /// The string id of each function's `name`, by wasm function index: a declaration,
+    /// a closure, a class constructor or method.
     pub(super) fn_names: BTreeMap<u32, u32>,
+    /// Each function's `length` (parameters before the first default or rest), by wasm
+    /// function index, for the same functions as `fn_names`.
+    pub(super) fn_lengths: BTreeMap<u32, u32>,
+    /// The wasm global holding the `__FnInfo` record (name, length, prototype kind) of
+    /// each function a closure or function value is made of, by wasm function index.
+    /// The start function fills each once (`fn_info`); `closure_new` and
+    /// `function_value` pass the record.
+    pub(super) fn_info_globals: BTreeMap<u32, u32>,
+    /// The declarations and closures `new` may call (`__FnInfo.constructible`): neither
+    /// an arrow nor an async or generator function.
+    pub(super) fn_constructors: std::collections::BTreeSet<u32>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
     pub(super) void_funcs: std::collections::BTreeSet<u32>,
@@ -123,6 +138,8 @@ pub(super) struct WasmModuleEmitter {
     /// serializer helper `vec3(v): string` must not capture the math
     /// library's `vec3(x,y,z)` for every caller in the program).
     pub(super) imported_func_indices: BTreeMap<(usize, String), u32>,
+    /// `import * as <local>` per consumer: `(consumer_module_idx, local)`.
+    pub(super) namespace_imports: BTreeMap<(usize, String), NamespaceImport>,
 }
 
 impl WasmModuleEmitter {
@@ -150,6 +167,7 @@ impl WasmModuleEmitter {
             global_map: BTreeMap::new(),
             num_globals: 0,
             module_let_globals: BTreeMap::new(),
+            tdz_names: BTreeMap::new(),
             boxed_locals: Default::default(),
             current_mod_idx: 0,
             class_ctor_map: BTreeMap::new(),
@@ -170,6 +188,9 @@ impl WasmModuleEmitter {
             module_func_maps: Vec::new(),
             fn_proto_kinds: BTreeMap::new(),
             fn_names: BTreeMap::new(),
+            fn_lengths: BTreeMap::new(),
+            fn_info_globals: BTreeMap::new(),
+            fn_constructors: std::collections::BTreeSet::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),
@@ -178,6 +199,7 @@ impl WasmModuleEmitter {
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
             imported_func_indices: BTreeMap::new(),
+            namespace_imports: BTreeMap::new(),
         }
     }
 

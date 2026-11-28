@@ -34,6 +34,7 @@ func js_gc_step_us(_ budgetUs: UInt64, _ out: UnsafeMutablePointer<UInt8>?) -> U
 @_silgen_name("perry_watchos_tree_version") func perry_watchos_tree_version() -> UInt64
 @_silgen_name("perry_watchos_node_kind") func perry_watchos_node_kind(_ id: Int64) -> Int32
 @_silgen_name("perry_watchos_node_text") func perry_watchos_node_text(_ id: Int64) -> UnsafePointer<CChar>?
+@_silgen_name("perry_watchos_node_accessibility_label") func perry_watchos_node_accessibility_label(_ id: Int64) -> UnsafePointer<CChar>?
 @_silgen_name("perry_watchos_node_child_count") func perry_watchos_node_child_count(_ id: Int64) -> Int32
 @_silgen_name("perry_watchos_node_child") func perry_watchos_node_child(_ id: Int64, _ idx: Int32) -> Int64
 @_silgen_name("perry_watchos_node_hidden") func perry_watchos_node_hidden(_ id: Int64) -> Bool
@@ -546,6 +547,11 @@ struct CommonModifiers: ViewModifier {
         // Disabled
         if !perry_watchos_node_enabled(nodeId) {
             view = AnyView(view.disabled(true))
+        }
+
+        // Accessible name
+        if let label = perry_watchos_node_accessibility_label(nodeId) {
+            view = AnyView(view.accessibilityLabel(String(cString: label)))
         }
 
         return view

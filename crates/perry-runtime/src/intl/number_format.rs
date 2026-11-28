@@ -1415,7 +1415,7 @@ pub(crate) extern "C" fn number_format_bound_format_thunk(
 /// (large/high-precision operands lose precision), which is adequate for the
 /// formatter's rendering path.
 pub(crate) fn nf_coerce_number(value: f64) -> f64 {
-    crate::builtins::js_number_coerce(value)
+    crate::builtins::js_number_from_value(value)
 }
 
 pub(crate) fn number_format_format_object(obj: *const ObjectHeader, value: f64) -> f64 {

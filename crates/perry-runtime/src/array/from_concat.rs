@@ -105,7 +105,7 @@ fn array_from_family_not_pristine(value: f64) -> bool {
 /// small integers, #6454). #13486: `Array.from` must GetMethod these through
 /// the wrapper's prototype chain instead of reinterpreting the primitive's
 /// raw bits as a heap address.
-fn boxed_primitive_source(value: f64, bits: u64) -> bool {
+pub(crate) fn boxed_primitive_source(value: f64, bits: u64) -> bool {
     let jsv = JSValue::from_bits(bits);
     if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
         return true;
@@ -674,9 +674,18 @@ fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
 }
 
 /// `ToLength(? Get(arrayLike, "length"))` for the array-like branch.
-fn array_like_length(items: f64) -> usize {
+pub(crate) fn array_like_length(items: f64) -> usize {
+    // usize can't represent 2^53 - 1 on 32-bit targets (arm64_32 watchOS,
+    // wasm32), so it saturates to usize::MAX there.
+    let n = array_like_length_f64(items);
+    usize::try_from(n as u64).unwrap_or(usize::MAX)
+}
+
+/// [`array_like_length`] before the `usize` conversion, for a caller that
+/// must compare it against a limit above `u32::MAX`.
+pub(crate) fn array_like_length_f64(items: f64) -> f64 {
     if crate::value::js_nanbox_get_pointer(items) == 0 {
-        return 0;
+        return 0.0;
     }
     // The key allocation can collect: derive the receiver address after it.
     let scope = RuntimeHandleScope::new();
@@ -689,16 +698,9 @@ fn array_like_length(items: f64) -> usize {
     );
     let n = crate::builtins::js_number_coerce(length_val);
     if n.is_nan() || n <= 0.0 {
-        return 0;
+        return 0.0;
     }
-    let n = n.floor();
-    let max = (1u64 << 53) as f64 - 1.0;
-    if n > max {
-        // 2^53 - 1 (JS max safe integer). usize can't represent this on 32-bit
-        // targets (arm64_32 watchOS, wasm32), so saturate to usize::MAX there.
-        return usize::try_from((1u64 << 53) - 1).unwrap_or(usize::MAX);
-    }
-    n as usize
+    n.floor().min((1u64 << 53) as f64 - 1.0)
 }
 
 enum IterSourceKind {

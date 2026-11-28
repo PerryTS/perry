@@ -67,22 +67,28 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
         .iter()
         .map(|bits| scope.root_nanbox_f64(f64::from_bits(*bits)))
         .collect();
+    // Each listener and callback is its own turn of the pump (`cp_loop_turn`):
+    // a throw is the uncaught exception, and the rest still run.
     if emit_drain {
-        cp_emit(stream.get_nanbox_f64(), "drain", &[]);
+        cp_loop_turn(|| {
+            cp_emit(stream.get_nanbox_f64(), "drain", &[]);
+        });
     }
     for callback in &handles {
-        let args: [f64; 0] = [];
-        unsafe {
-            let _ = crate::closure::js_native_call_value(
-                callback.get_nanbox_f64(),
-                crate::closure::plain_call_receiver(),
-                args.as_ptr(),
-                0,
-            );
-        }
+        cp_loop_turn(|| {
+            let args: [f64; 0] = [];
+            unsafe {
+                let _ = crate::closure::js_native_call_value(
+                    callback.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    0,
+                );
+            }
+        });
     }
     if finish_now {
-        cp_stdin_finish(stream.get_nanbox_f64());
+        cp_loop_turn(|| cp_stdin_finish(stream.get_nanbox_f64()));
     }
 }
 

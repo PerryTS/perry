@@ -1158,11 +1158,12 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
         return if SITE {
             site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
         } else {
-            absent_from::<ABSENT>(
+            own_miss::<ABSENT>(
                 dir,
                 obj,
                 key_bits,
                 site_key_hash::<LAZY_HASH>(key_bits, hash),
+                r,
             )
         };
     }
@@ -1183,11 +1184,12 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
             return if SITE {
                 site_memo::miss_absent::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo)
             } else {
-                absent_from::<ABSENT>(
+                own_miss::<ABSENT>(
                     dir,
                     obj,
                     key_bits,
                     site_key_hash::<LAZY_HASH>(key_bits, hash),
+                    r,
                 )
             };
         }
@@ -1423,6 +1425,8 @@ use own_store::probe_get_underived;
 pub(crate) use own_store::store_own_derived;
 pub(crate) use own_store::OwnStore;
 
+#[path = "layout_probe/chain_glue.rs"]
+pub(crate) mod chain_glue;
 #[path = "layout_probe/inherited.rs"]
 mod inherited;
 use inherited::absent_from;
@@ -1432,6 +1436,7 @@ use inherited::link_of;
 use inherited::list_position;
 use inherited::listed;
 use inherited::object_prototype;
+use inherited::own_miss;
 use inherited::prototype_of;
 use inherited::realm_default_link;
 use inherited::walks_from;

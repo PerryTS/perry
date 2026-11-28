@@ -352,7 +352,7 @@ extern "C" fn ns_readable_end_microtask(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_readable_resume_microtask(
+extern "C" fn ns_readable_resume_tick(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
@@ -691,11 +691,31 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_null() || jsval.is_undefined() {
         flush_readable_decoder(stream);
-        mark_stream_ended(stream);
+        // node's `onEofChunk`: `state.ended` only. The stream stays
+        // `readable` until `'end'` is emitted, and `'end'` waits for a
+        // reader: a stream nobody has asked for data (`flowing` still null,
+        // nothing delivered) ends on its first `read()` / `resume()`.
+        mark_readable_eof(stream);
         refresh_readable_aborted_flag(stream);
-        // node's `onEofChunk`: a reader waiting in `readable` learns of EOF
-        // while data it has not drained is still buffered.
-        schedule_readable_event(stream);
+        // node's `onEofChunk` -> `emitReadable_`: `'readable'` fires for the
+        // EOF itself (`state.length || state.ended`), so a reader waiting in
+        // `readable` learns of it with or without data still buffered; its
+        // `read()` then finds the end.
+        queue_readable_event(stream);
+        if JSValue::from_bits(readable_flowing_value(stream).to_bits()).is_null()
+            && !has_truthy_hidden(stream, hidden_disturbed_key())
+        {
+            return f64::from_bits(TAG_FALSE);
+        }
+        // node's `endReadable` runs from the `read()` that finds the buffer
+        // empty after EOF. With chunks still waiting for the flow, that is
+        // the flow that drains them (`flush_pending_readable_chunks`), not
+        // this push: `r.push(x); r.push(null)` before the first `resume_`
+        // ends in that `resume_`, after an earlier stream's tick that pushed
+        // its own EOF to an empty buffer.
+        if pending_readable_chunk_count(stream) > 0 {
+            return f64::from_bits(TAG_FALSE);
+        }
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
@@ -1416,7 +1436,11 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
     let pair_peer = get_hidden_value(stream, Slot::DuplexPairPeer);
-    if pair_peer.is_none() {
+    // Ending the writable side ends the readable side only for Perry's echo
+    // fallback, whose readable output IS the writes (`emit_writable_chunk`).
+    // A Duplex with its own sink (`write` option, `fromWeb`) or a pair peer
+    // ends its readable side when that side pushes EOF, as node does.
+    if pair_peer.is_none() && !has_truthy_hidden(stream, Slot::WritableCustomSink) {
         mark_stream_ended(stream);
         refresh_readable_aborted_flag(stream);
     }
@@ -1676,7 +1700,7 @@ pub extern "C" fn js_node_stream_method_writable(stream_handle: i64) -> f64 {
     if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let unavailable = stream_hidden_ended(stream) || readable_hidden_error(stream).is_some();
+    let unavailable = writable_side_ended(stream) || readable_hidden_error(stream).is_some();
     f64::from_bits(if unavailable { TAG_FALSE } else { TAG_TRUE })
 }
 
@@ -1687,7 +1711,7 @@ pub extern "C" fn js_node_stream_method_writable_ended(stream_handle: i64) -> f6
     if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    f64::from_bits(if stream_hidden_ended(stream) {
+    f64::from_bits(if writable_side_ended(stream) {
         TAG_TRUE
     } else {
         TAG_FALSE
@@ -1889,7 +1913,8 @@ pub(crate) use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;
-pub(crate) use constructors::note_birth_carriers;
+pub(crate) use constructors::{init_readable_native, note_birth_carriers};
+pub(crate) mod http_incoming;
 pub use constructors::*;
 
 #[path = "node_stream_keepalive.rs"]

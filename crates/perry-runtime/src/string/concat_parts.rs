@@ -330,6 +330,9 @@ fn concat_parts_simple<const M: usize, const UNROLL: bool>(
 ) -> Option<*mut StringHeader> {
     let mut st = SimpleParts::<M>::new();
     drive_parts!(UNROLL, n, st.classify(parts, ?));
+    // An over-long result throws before any storage is reserved (the rooted
+    // copy this arm falls back to included).
+    super::check_string_length(st.total_u16 as usize);
     if st.total_blen > u32::MAX as u64 || st.total_u16 > u32::MAX as u64 {
         return None;
     }
@@ -483,6 +486,7 @@ fn concat_parts_general<const M: usize>(
         }
     }
 
+    super::check_string_length(total_u16 as usize);
     let (result, mut cursor) = string_storage_alloc(total_blen);
     unsafe {
         init_string_header(result, total_u16, total_blen, total_blen, 0, flags);
@@ -598,6 +602,7 @@ fn concat_literal_formatted_number(
     }
     // Prefer the open nursery block; a refusal needs no root because the
     // prefix is rodata and the digits are on the stack.
+    super::check_string_length(total_blen);
     let (result, data) = match string_storage_alloc_no_collect(total_blen as u32) {
         Some(allocated) => allocated,
         None => string_storage_alloc(total_blen as u32),

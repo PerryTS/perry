@@ -187,6 +187,20 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
     }
 }
 
+/// The NSTextView of a TextArea, whose widget is the enclosing NSScrollView.
+pub(crate) fn text_view(view: &NSView) -> Option<Retained<NSView>> {
+    unsafe {
+        let scroll_cls = AnyClass::get(c"NSScrollView").unwrap();
+        let text_cls = AnyClass::get(c"NSTextView").unwrap();
+        let is_scroll: bool = msg_send![view, isKindOfClass: scroll_cls];
+        if !is_scroll {
+            return None;
+        }
+        let document: Option<Retained<NSView>> = msg_send![view, documentView];
+        document.filter(|doc| msg_send![&**doc, isKindOfClass: text_cls])
+    }
+}
+
 /// Get the text of a TextArea.
 pub fn get_string(handle: i64) -> *const u8 {
     if let Some(view) = super::get_widget(handle) {

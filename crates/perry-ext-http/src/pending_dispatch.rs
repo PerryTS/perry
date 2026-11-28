@@ -128,12 +128,14 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 code,
                 syscall,
                 errno,
+                peer,
             } => client_events::handle_transport_error_event(
                 request_handle,
                 &message,
                 &code,
                 &syscall,
                 errno,
+                peer.as_ref().map(|(host, port)| (host.as_str(), *port)),
             ),
             PendingHttpEvent::Timeout { request_handle } => {
                 client_events::handle_timeout_event(request_handle);

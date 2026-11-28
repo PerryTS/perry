@@ -57,6 +57,9 @@ struct DeferState {
     fed_phase: u64,
     fed: HashSet<Key>,
     parked: VecDeque<Parked>,
+    /// The generated event loop delivers parked EOFs in its poll phase
+    /// (`deliver_due_eof`), so the check phase's end no longer does.
+    poll_delivers: bool,
 }
 
 crate::perry_thread_local! {
@@ -138,6 +141,14 @@ pub(crate) fn check_phase_begin() {
 /// arrival order. One taken at a time, with no borrow held, because delivery
 /// runs the binding's sink (JS), which may read, close or park more.
 pub(crate) fn check_phase_end() {
+    // Under the generated event loop the EOF waits for the next POLL phase
+    // instead (`deliver_due_eof`): that is where libuv reads it, so its
+    // `'end'` callback's immediates run in that iteration's check phase,
+    // before the next timers phase. Hosts without a poll phase of their own
+    // (the native-UI timer pumps) keep the delivery here.
+    if DEFER.with(|d| d.borrow().poll_delivers) {
+        return;
+    }
     let now = DEFER.with(|d| d.borrow().phase);
     while let Some(parked) = DEFER.with(|d| {
         let mut d = d.borrow_mut();
@@ -145,6 +156,26 @@ pub(crate) fn check_phase_end() {
         due.then(|| d.parked.pop_front()).flatten()
     }) {
         deliver(parked);
+    }
+}
+
+/// The generated loop's poll phase begins: deliver ONE EOF parked before the
+/// last check phase began (arrival order). Returns whether one was delivered,
+/// so the caller can run the checkpoint after it, as after any I/O callback.
+pub(crate) fn deliver_due_eof() -> bool {
+    let parked = DEFER.with(|d| {
+        let mut d = d.borrow_mut();
+        d.poll_delivers = true;
+        let now = d.phase;
+        let due = d.parked.front().is_some_and(|p| p.phase < now);
+        due.then(|| d.parked.pop_front()).flatten()
+    });
+    match parked {
+        Some(parked) => {
+            deliver(parked);
+            true
+        }
+        None => false,
     }
 }
 

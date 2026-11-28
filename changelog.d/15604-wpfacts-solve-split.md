@@ -1,0 +1,1 @@
+Whole-program facts' solver file `crates/perry-wpfacts/src/solve.rs` is split into `solve/profile.rs`, `solve/fixpoint.rs`, `solve/markers.rs` and `solve/implicit.rs` by responsibility (work profile and diagnostics, the fixpoint and solve lifecycle, argument markers and sinks, implicit protocol touches), with no behavior change.

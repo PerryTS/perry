@@ -39,7 +39,9 @@ pub(crate) mod service_errors;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod service_hooks;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use agent_loop::component_turn_and_take;
+pub(crate) use agent_loop::{component_turn_and_take, take_closed_completions};
+#[cfg(test)]
+pub(crate) use agent_loop::{stage_for_test, staged_for_test};
 #[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
 #[cfg(not(target_arch = "wasm32"))]
@@ -274,6 +276,76 @@ pub fn js_loop_turn_bounded(budget_ms: u64) {
 #[no_mangle]
 pub extern "C" fn js_loop_turn_nonblocking() {
     js_loop_turn_bounded(0);
+}
+
+// The generated event loop's poll phase (NXH13).
+//
+// libuv's poll phase runs between timers and check. While the immediate queue
+// is non-empty its timeout is zero, otherwise it blocks until the next timer
+// deadline; either way it dispatches every ready I/O callback, and Node runs
+// the nextTick + microtask checkpoint after EACH of them. The generated loop
+// calls one of these two entries between `js_run_stdlib_pump` and
+// `js_event_loop_poll_callbacks`; they are the only callers that ask for the
+// per-callback checkpoint (`POLL_CHECKPOINT`), because every other turn of the
+// loop (a native API waiting on its own completion, the `await` busy-wait)
+// runs with a JS frame on the stack, where running jobs would be wrong.
+crate::perry_thread_local! {
+    static POLL_CHECKPOINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Take the poll phase's checkpoint request, clearing it so that a turn nested
+/// inside one of the callbacks it dispatches does not inherit it. The caller
+/// hands it back with [`restore_poll_checkpoint`].
+pub(crate) fn take_poll_checkpoint() -> bool {
+    POLL_CHECKPOINT.with(|c| c.replace(false))
+}
+
+pub(crate) fn restore_poll_checkpoint(on: bool) {
+    POLL_CHECKPOINT.with(|c| c.set(on));
+}
+
+fn event_loop_poll(may_block: bool) {
+    // A socket's EOF read behind data in an earlier poll is delivered here,
+    // the poll after the check phase that ran that data's immediates: libuv
+    // stops reading after a short read, so the EOF reaches Node one poll
+    // later (`turnloop_net::defer_eof`).
+    #[cfg(not(target_arch = "wasm32"))]
+    while crate::turnloop_net::deliver_due_eof() {
+        crate::promise::microtasks::run_poll_callback_checkpoint();
+    }
+    let previous = POLL_CHECKPOINT.with(|c| c.replace(true));
+    if may_block {
+        js_wait_for_event();
+    } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        loop_hooks::fast();
+    }
+    POLL_CHECKPOINT.with(|c| c.set(previous));
+}
+
+/// The poll phase with a timeout: park until the next deadline or a wake, then
+/// dispatch the ready I/O callbacks, each followed by its checkpoint.
+#[no_mangle]
+pub extern "C" fn js_event_loop_poll_wait() {
+    event_loop_poll(true);
+}
+
+/// The zero-timeout poll phase (an immediate is queued, or nothing is live):
+/// one nonblocking turn of this thread's loop plus dispatch. No loop is
+/// created, an idle loop with no due deadline is not turned (`fast_turn`), and it
+/// is not the #1114 spin: the caller runs the check phase next.
+#[no_mangle]
+pub extern "C" fn js_event_loop_poll_nowait() {
+    event_loop_poll(false);
+}
+
+/// The generated loop's close phase, after check: the `'close'` callbacks of
+/// the handles whose close the poll phase received (libuv's
+/// `uv__run_closing_handles`), each followed by its checkpoint.
+#[no_mangle]
+pub extern "C" fn js_event_loop_close_phase() {
+    #[cfg(not(target_arch = "wasm32"))]
+    agent_loop::run_close_phase();
 }
 
 /// Test-only: install an unrouted net-profile loop on this thread.

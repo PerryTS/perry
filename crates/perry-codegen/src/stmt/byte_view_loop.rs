@@ -383,6 +383,7 @@ pub(super) fn lower(
             native_owned: None,
             pointer_state: BufferViewPointerState::Stable,
             storage_inline_proven: false,
+            inline_until_exposed: false,
             // No call, allocation or coercion runs in the fast copy.
             length_fixed: true,
         },

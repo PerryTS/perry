@@ -30,29 +30,18 @@ fn stub_warn(name: &CStr, reason: &CStr, issue: Option<&CStr>) {
     }
 }
 
-/// #917 — system share sheet (text). MVP stub on iOS: emits a
-/// first-call warning. The native implementation (issue follow-up)
-/// will wrap `UIActivityViewController` with the text in
-/// `activityItems`, anchored to the key window's root view
-/// controller. Kept stub-shaped so the symbol exists on every
-/// platform — apps can compile-test against the API.
+/// #917 — system share sheet (text): `UIActivityViewController`.
 #[no_mangle]
-pub extern "C" fn perry_system_share_text(_text_ptr: i64, _title_ptr: i64) {
-    stub_warn(
-        c"perry_system_share_text",
-        c"iOS UIActivityViewController not yet implemented (#917 follow-up)",
-        Some(c"#917"),
-    );
+pub extern "C" fn perry_system_share_text(text_ptr: i64, _title_ptr: i64) {
+    let text = unsafe { perry_ffi::copy_string_from_raw(text_ptr as *const u8) }.to_string();
+    crate::share::share(text, false);
 }
 
-/// #917 — system share sheet (URL). MVP stub on iOS.
+/// #917 — system share sheet (URL): `UIActivityViewController`.
 #[no_mangle]
-pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
-    stub_warn(
-        c"perry_system_share_url",
-        c"iOS UIActivityViewController not yet implemented (#917 follow-up)",
-        Some(c"#917"),
-    );
+pub extern "C" fn perry_system_share_url(url_ptr: i64, _title_ptr: i64) {
+    let url = unsafe { perry_ffi::copy_string_from_raw(url_ptr as *const u8) }.to_string();
+    crate::share::share(url, true);
 }
 
 // #675 + #1178 — App Group / cross-process shared storage on iOS.
@@ -193,7 +182,17 @@ pub extern "C" fn perry_system_open_url(url_ptr: i64) {
         if !url.is_null() {
             let app_cls = objc2::runtime::AnyClass::get(c"UIApplication").unwrap();
             let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
-            let _: () = objc2::msg_send![app, openURL: url];
+            // `openURL:` without options returns NO for apps linked against a current SDK.
+            let options = objc2_foundation::NSDictionary::<
+                objc2::runtime::AnyObject,
+                objc2::runtime::AnyObject,
+            >::new();
+            let _: () = objc2::msg_send![
+                app,
+                openURL: url,
+                options: &*options,
+                completionHandler: None::<&block2::DynBlock<dyn Fn(objc2::runtime::Bool)>>
+            ];
         }
     }
 }

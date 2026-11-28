@@ -169,6 +169,9 @@ pub(super) fn start_on_socket(
                 net::flow(socket.value());
             }
         }
+    } else if let Some(options) = connect_options(request) {
+        let options = scope.root_nanbox(options);
+        net::connect_with_options(socket.value(), options.get(), port, &host);
     } else {
         let host = scope.root_nanbox(f64::from_bits(
             JsValue::from_string_ptr(perry_ffi::alloc_string(&host).as_raw()).bits(),
@@ -189,6 +192,14 @@ pub(super) fn start_on_socket(
         }
     }
     Ok(())
+}
+
+/// The request's options object, for the resolution options a dial passes on.
+fn connect_options(request: Handle) -> Option<f64> {
+    perry_ffi::get_handle::<ClientRequestHandle>(request)
+        .map(|req| req.connect_options_bits)
+        .filter(|&bits| bits != 0)
+        .map(f64::from_bits)
 }
 
 fn remember_capability(request: Handle, socket: &RootedSocket) {
@@ -631,7 +642,12 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 protocol::on_error(conn, code, syscall, event.errno as i64)
             })
             .unwrap_or_default();
-            net::destroy_error(socket.value(), code, &format!("{syscall} {code}"));
+            let message = format!("{syscall} {code}");
+            if syscall == "getaddrinfo" {
+                net::destroy_lookup_error(socket.value(), code, &message);
+            } else {
+                net::destroy_error(socket.value(), code, &message);
+            }
             run(&socket, effects);
         }
         tl::NET_CLOSED => {

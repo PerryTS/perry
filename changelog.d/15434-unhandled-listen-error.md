@@ -1,0 +1,1 @@
+A failed `listen()` on an `http`, `https` or `http2` server with no `'error'` listener is uncaught, as in Node, instead of being dropped: `uncaughtException` sees it, and the process exits 1 without one. The error a failed `listen()` emits on `http` and `net` servers is an `Error` carrying Node's message, `code`, `errno`, `syscall`, `address` and `port`.

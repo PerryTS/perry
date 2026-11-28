@@ -263,6 +263,10 @@ pub(in crate::child_process) fn cp_failed_count_close(cp: f64) {
     cp_set_field(cp.get_nanbox_f64(), b"_closesGot", got);
     if got == number(b"_closesNeeded") {
         let code = cp_get_field(cp.get_nanbox_f64(), b"exitCode");
-        cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
+        // Reached from a pipe socket's `close` inside the pump's socket
+        // settle: a throwing listener must not unwind the pump.
+        cp_loop_turn(|| {
+            cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
+        });
     }
 }

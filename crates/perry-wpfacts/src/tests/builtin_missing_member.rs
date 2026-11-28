@@ -86,7 +86,10 @@ fn namespace_inherited_program_store_is_called() {
 #[test]
 fn namespace_unknown_key_store_is_called() {
     check("Object[process.argv[2]] = g; N.zap(o);", false);
-    check("unknown()[process.argv[2]] = g; N.zap(o);", false);
+    // A store into ⊤ writes a built-in object only once that object, or the
+    // global object, was handed to unknown code (`native_protocol::written_by`,
+    // `top_store_handed_builtins`): `Object` was not, `N.zap` stays absent.
+    check("unknown()[process.argv[2]] = g; N.zap(o);", true);
 }
 
 #[test]
@@ -191,7 +194,21 @@ fn native_accessors_are_called() {
 #[test]
 fn native_unknown_key_stores_are_called() {
     natives("f[process.argv[2]] = g; f.zap(o);", false);
-    natives("unknown()[process.argv[2]] = g; f.zap(o);", false);
+    // A store into ⊤ writes a built-in object only once that object, or the
+    // global object, was handed to unknown code (`native_protocol::written_by`):
+    // `hasOwnProperty` was not, `f.zap` stays absent.
+    check(
+        "const f: any = Object.prototype.hasOwnProperty; unknown()[process.argv[2]] = g; f.zap(o);",
+        true,
+    );
+    // TODO(imprecise, sound): the `[1].map` arm still escapes `o` ("passed to
+    // foreign code"): the opaque-member replay of a native function's missing
+    // key (`replay_native_missing`) does not take the `written_by` rule the
+    // `hasOwnProperty` arm takes. Kept unproven until it does.
+    check(
+        "const f: any = [1].map; unknown()[process.argv[2]] = g; f.zap(o);",
+        false,
+    );
 }
 
 #[test]
@@ -292,7 +309,6 @@ fn namespace_symbol_iterator_program_added_is_called() {
     for setup in [
         format!("(Object as any)[Symbol.iterator] = {gen};"),
         format!("(Object as any)[process.argv[3]] = {gen};"),
-        format!("unknown()[Symbol.iterator] = {gen};"),
         format!("Object.defineProperty(Object, Symbol.iterator, {{ get() {{ return {gen}; }} }});"),
         format!("Object.setPrototypeOf(Object, {{ [Symbol.iterator]: {gen} }});"),
         "external(N);".to_string(),
@@ -300,6 +316,10 @@ fn namespace_symbol_iterator_program_added_is_called() {
     ] {
         sym_iter(&setup, "N", false);
     }
+    // A store into ⊤ writes a built-in object only once that object, or the
+    // global object, was handed to unknown code (`native_protocol::written_by`):
+    // `Object` was not, so it gains no @@iterator.
+    sym_iter(&format!("unknown()[Symbol.iterator] = {gen};"), "N", true);
 }
 
 /// The `RegExp` constructor owns its realm declaration only (`length`,

@@ -133,7 +133,13 @@ pub extern "C" fn js_sea_get_asset(key: f64, encoding: f64) -> f64 {
             "ERR_ENCODING_NOT_SUPPORTED",
         );
     };
-    crate::value::js_nanbox_string(decoded)
+    // A JS throw skips Rust drops: release the label before an over-long
+    // decode throws.
+    drop(encoding);
+    match decoded {
+        Ok(decoded) => crate::value::js_nanbox_string(decoded),
+        Err(_) => crate::string::throw_string_too_long(),
+    }
 }
 
 #[no_mangle]
@@ -185,7 +191,10 @@ pub extern "C" fn js_sea_get_asset_as_blob(key: f64, options: f64) -> f64 {
 mod tests {
     #[test]
     fn encodings_accept_only_labels_known_to_text_decoder() {
-        assert!(crate::text::decode_bytes_with_label(b"hi", "utf-8").is_some());
+        assert!(matches!(
+            crate::text::decode_bytes_with_label(b"hi", "utf-8"),
+            Some(Ok(_))
+        ));
         assert!(crate::text::decode_bytes_with_label(b"hi", "this-is-not-an-encoding").is_none());
     }
 }

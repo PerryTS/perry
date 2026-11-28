@@ -20,53 +20,15 @@
 // pull-sources driving `byobRequest.respond(n)` — observe Node-shaped
 // results either way.
 
-use super::gc::visit_stream_value_slot;
 use super::*;
-use std::collections::HashMap;
 
 /// One outstanding `read(view)` — the read promise plus the caller's view.
-struct ByobPending {
-    promise: *mut Promise,
-    view_bits: u64,
+pub(super) struct ByobPending {
+    pub(super) promise: *mut Promise,
+    pub(super) view_bits: u64,
 }
 
 unsafe impl Send for ByobPending {}
-
-static BYOB_PENDING: std::sync::LazyLock<Mutex<HashMap<usize, VecDeque<ByobPending>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// #6602: eviction hook — drop the (drained) BYOB queue slot of an evicted id.
-pub(super) fn evict_ids(batch: &[usize]) {
-    // Poison-tolerant: also runs from the #11471 thread-exit hook, where a
-    // skipped removal would leave a dead thread's promise/view rooted.
-    let mut map = BYOB_PENDING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for id in batch {
-        map.remove(id);
-    }
-}
-
-/// #11471: the BYOB part of `release_web_streams_in_freed_ranges`
-/// (streams.rs). A parked `read(view)` whose promise or view lies in the
-/// exiting thread's freed blocks marks its stream dead; the whole queue then
-/// goes with the stream's other records via [`evict_ids`].
-pub(super) fn dead_ids_in_freed_ranges(
-    freed: &perry_runtime::arena::thread_exit::FreedRanges,
-    dead: &mut std::collections::HashSet<usize>,
-) {
-    let map = BYOB_PENDING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (&id, queue) in map.iter() {
-        if queue
-            .iter()
-            .any(|p| freed.contains(p.promise as usize) || freed.holds_bits(p.view_bits))
-        {
-            dead.insert(id);
-        }
-    }
-}
 
 /// #11471 test probe: is a BYOB read parked on `stream_id`?
 #[cfg(test)]
@@ -77,21 +39,7 @@ pub(crate) fn byob_pending_for_test(stream_id: usize) -> bool {
 /// True while at least one `read(view)` is parked on this stream — feeds
 /// the ShouldCallPull check in `maybe_pull`.
 pub(super) fn has_pending(stream_id: usize) -> bool {
-    BYOB_PENDING
-        .lock()
-        .map(|m| m.get(&stream_id).map(|q| !q.is_empty()).unwrap_or(false))
-        .unwrap_or(false)
-}
-
-pub(super) fn scan_byob_roots<V: super::gc::StreamRootVisitor>(visitor: &mut V) {
-    if let Ok(mut map) = BYOB_PENDING.lock() {
-        for queue in map.values_mut() {
-            for pending in queue.iter_mut() {
-                visitor.visit_raw_mut_ptr_slot(&mut pending.promise);
-                visit_stream_value_slot(visitor, &mut pending.view_bits);
-            }
-        }
-    }
+    with_rs(RsRef(stream_id), |s| !s.byob_pending.is_empty()).unwrap_or(false)
 }
 
 /// What a caller-supplied view IS, so the fulfilled value is a view of the
@@ -203,8 +151,7 @@ unsafe fn fill_view_from_queue(stream_id: usize, view: &ViewInfo) -> usize {
     let cap = (view.byte_len / view.elem_size) * view.elem_size;
     while filled < cap {
         let chunk = {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            match g.get_mut(&stream_id) {
+            match rs_rec(RsRef(stream_id)).as_deref_mut() {
                 Some(s) => match s.pop_chunk() {
                     Some(c) => c,
                     None => break,
@@ -221,8 +168,7 @@ unsafe fn fill_view_from_queue(stream_id: usize, view: &ViewInfo) -> usize {
         filled += take;
         if take < bytes.len() {
             let remainder = alloc_uint8array_from_bytes(&bytes[take..]);
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            if let Some(s) = g.get_mut(&stream_id) {
+            if let Some(s) = rs_rec(RsRef(stream_id)).as_deref_mut() {
                 let size = (bytes.len() - take) as f64;
                 s.chunks.push_front(remainder);
                 s.chunk_sizes.push_front(size);
@@ -246,8 +192,7 @@ pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) 
     let stream_handle = js_stream_unwrap_handle(stream_handle);
     let id = stream_id(stream_handle);
     let is_byte_stream = {
-        let g = READABLE_STREAMS.lock().unwrap();
-        match g.get(&id) {
+        match rs_rec(RsRef(id)).as_deref() {
             Some(s) => s.is_byte_stream,
             None => {
                 throw_type_error_with_code(
@@ -273,13 +218,12 @@ pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) 
 /// (via the byob_requested flag) and the BYOB constructor above.
 pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> usize {
     ensure_gc_registered();
-    let mut g = READABLE_STREAMS.lock().unwrap();
-    let s = match g.get_mut(&stream_id) {
-        Some(s) => s,
-        None => return 0,
+    let Some(mut rec) = rs_rec(RsRef(stream_id)) else {
+        return 0;
     };
+    let s = &mut *rec;
     if s.reader_handle.is_some() {
-        drop(g);
+        drop(rec);
         throw_type_error_with_code(
             "Invalid state: ReadableStream is locked",
             "ERR_INVALID_STATE",
@@ -293,16 +237,10 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
         js_promise_reject(closed_p, f64::from_bits(s.error_value));
     }
     s.reader_handle = Some(reader_id);
-    drop(g);
-    READERS.lock().unwrap().insert(
-        reader_id,
-        ReaderData {
-            props: Default::default(),
-            stream_handle: stream_id,
-            locked: true,
-            closed_promise: closed_p,
-            is_byob,
-        },
+    drop(rec);
+    insert_reader(
+        ReaderRef(reader_id),
+        ReaderData::new(stream_id, closed_p, is_byob),
     );
     reader_id
 }
@@ -313,7 +251,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
 pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64) -> *mut Promise {
     let unwrapped = js_stream_unwrap_handle(reader_handle);
     let reader_id = stream_id(unwrapped);
-    let (stream_id, is_byob) = match READERS.lock().unwrap().get(&reader_id) {
+    let (stream_id, is_byob) = match reader_rec(ReaderRef(reader_id)).as_deref() {
         Some(r) if r.locked => (r.stream_handle, r.is_byob),
         Some(_) => {
             let promise = js_promise_new();
@@ -352,8 +290,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
         TryFill,
     }
     let outcome = {
-        let g = READABLE_STREAMS.lock().unwrap();
-        match g.get(&stream_id) {
+        match rs_rec(RsRef(stream_id)).as_deref() {
             Some(s) => match s.state {
                 ReadableState::Errored => Outcome::Errored(s.error_value),
                 ReadableState::Closed if s.chunks.is_empty() => Outcome::Closed,
@@ -385,8 +322,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
         let bytes = std::slice::from_raw_parts(info.data, filled);
         let value = alloc_view_of_kind(info.class, info.elem_size, bytes);
         let (closed_now, reader) = {
-            let g = READABLE_STREAMS.lock().unwrap();
-            match g.get(&stream_id) {
+            match rs_rec(RsRef(stream_id)).as_deref() {
                 Some(s) => (
                     s.state == ReadableState::Closed && s.chunks.is_empty(),
                     s.reader_handle,
@@ -398,7 +334,9 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
         js_promise_resolve(promise, f64::from_bits(result));
         if closed_now {
             if let Some(rid) = reader {
-                let p = READERS.lock().unwrap().get(&rid).map(|r| r.closed_promise);
+                let p = reader_rec(ReaderRef(rid))
+                    .as_deref()
+                    .map(|r| r.closed_promise);
                 if let Some(p) = p {
                     js_promise_resolve(p, f64::from_bits(TAG_UNDEFINED));
                 }
@@ -410,12 +348,9 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
 
     // Nothing buffered: park the read so the controller's byobRequest /
     // enqueue can service it, then ask the source to pull.
-    BYOB_PENDING
-        .lock()
-        .unwrap()
-        .entry(stream_id)
-        .or_default()
-        .push_back(ByobPending { promise, view_bits });
+    with_rs(RsRef(stream_id), |s| {
+        s.byob_pending.push_back(ByobPending { promise, view_bits })
+    });
     maybe_pull(stream_id);
     promise
 }
@@ -433,12 +368,10 @@ pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handl
 
 /// The view of the read parked on byte stream `stream_id`, if any.
 fn parked_view(stream_id: usize) -> Option<u64> {
-    BYOB_PENDING
-        .lock()
-        .unwrap()
-        .get(&stream_id)
-        .and_then(|q| q.front())
-        .map(|p| p.view_bits)
+    with_rs(RsRef(stream_id), |s| {
+        s.byob_pending.front().map(|p| p.view_bits)
+    })
+    .flatten()
 }
 
 /// `ReadableStreamBYOBRequest.prototype.view`: the parked read's view, else null.
@@ -457,12 +390,7 @@ pub(super) fn byob_request_respond(stream_id: usize, bytes_written: f64) -> f64 
                 "ERR_OUT_OF_RANGE",
             );
         }
-        let pending = match BYOB_PENDING
-            .lock()
-            .unwrap()
-            .get_mut(&stream_id)
-            .and_then(|q| q.pop_front())
-        {
+        let pending = match with_rs(RsRef(stream_id), |s| s.byob_pending.pop_front()).flatten() {
             Some(p) => p,
             None => {
                 throw_type_error("There is no pending BYOB request to respond to");
@@ -478,31 +406,21 @@ pub(super) fn byob_request_respond(stream_id: usize, bytes_written: f64) -> f64 
         let n = n as usize;
         if n > info.byte_len {
             // Put the request back so the source can retry with a valid count.
-            BYOB_PENDING
-                .lock()
-                .unwrap()
-                .entry(stream_id)
-                .or_default()
-                .push_front(pending);
+            with_rs(RsRef(stream_id), |s| s.byob_pending.push_front(pending));
             throw_range_error_with_code(
                 "bytesWritten exceeds the BYOB view's byteLength",
                 "ERR_OUT_OF_RANGE",
             );
         }
         let stream_closed = {
-            let g = READABLE_STREAMS.lock().unwrap();
-            g.get(&stream_id)
+            rs_rec(RsRef(stream_id))
+                .as_deref()
                 .map(|s| s.state != ReadableState::Readable)
                 .unwrap_or(true)
         };
         if n == 0 {
             if !stream_closed {
-                BYOB_PENDING
-                    .lock()
-                    .unwrap()
-                    .entry(stream_id)
-                    .or_default()
-                    .push_front(pending);
+                with_rs(RsRef(stream_id), |s| s.byob_pending.push_front(pending));
                 throw_type_error("bytesWritten must be positive while the stream is readable");
             }
             let empty = alloc_view_of_kind(info.class, info.elem_size, &[]);
@@ -528,31 +446,21 @@ pub(super) fn byob_request_respond_with_new_view(stream_id: usize, view: f64) ->
                 throw_type_error("respondWithNewView requires a TypedArray or DataView argument");
             }
         };
-        let pending = match BYOB_PENDING
-            .lock()
-            .unwrap()
-            .get_mut(&stream_id)
-            .and_then(|q| q.pop_front())
-        {
+        let pending = match with_rs(RsRef(stream_id), |s| s.byob_pending.pop_front()).flatten() {
             Some(p) => p,
             None => {
                 throw_type_error("There is no pending BYOB request to respond to");
             }
         };
         let stream_closed = {
-            let g = READABLE_STREAMS.lock().unwrap();
-            g.get(&stream_id)
+            rs_rec(RsRef(stream_id))
+                .as_deref()
                 .map(|s| s.state != ReadableState::Readable)
                 .unwrap_or(true)
         };
         let done = info.byte_len == 0;
         if done && !stream_closed {
-            BYOB_PENDING
-                .lock()
-                .unwrap()
-                .entry(stream_id)
-                .or_default()
-                .push_front(pending);
+            with_rs(RsRef(stream_id), |s| s.byob_pending.push_front(pending));
             throw_type_error(
                 "respondWithNewView requires a non-empty view while the stream is readable",
             );
@@ -567,12 +475,7 @@ pub(super) fn byob_request_respond_with_new_view(stream_id: usize, view: f64) ->
 /// parked: copy the chunk straight into the caller's view (overflow goes
 /// back on the queue). Returns true when the chunk was consumed.
 pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u64) -> bool {
-    let pending = match BYOB_PENDING
-        .lock()
-        .unwrap()
-        .get_mut(&stream_id)
-        .and_then(|q| q.pop_front())
-    {
+    let pending = match with_rs(RsRef(stream_id), |s| s.byob_pending.pop_front()).flatten() {
         Some(p) => p,
         None => return false,
     };
@@ -587,12 +490,7 @@ pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u6
         Some(b) => b,
         None => {
             // Shouldn't happen (enqueue validated the chunk); requeue the read.
-            BYOB_PENDING
-                .lock()
-                .unwrap()
-                .entry(stream_id)
-                .or_default()
-                .push_front(pending);
+            with_rs(RsRef(stream_id), |s| s.byob_pending.push_front(pending));
             return false;
         }
     };
@@ -601,8 +499,7 @@ pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u6
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), info.data, take);
     if take < bytes.len() {
         let remainder = alloc_uint8array_from_bytes(&bytes[take..]);
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&stream_id) {
+        if let Some(s) = rs_rec(RsRef(stream_id)).as_deref_mut() {
             if s.state == ReadableState::Readable {
                 s.push_chunk(remainder, (bytes.len() - take) as f64);
             }
@@ -618,10 +515,11 @@ pub(super) unsafe fn service_pending_with_chunk(stream_id: usize, chunk_bits: u6
 /// Stream closed: outstanding BYOB reads settle `{ value: <empty view>,
 /// done: true }`.
 pub(super) unsafe fn close_pending_byob(stream_id: usize) {
-    let drained: Vec<ByobPending> = match BYOB_PENDING.lock().unwrap().get_mut(&stream_id) {
-        Some(q) => q.drain(..).collect(),
-        None => return,
-    };
+    let drained: Vec<ByobPending> =
+        match with_rs(RsRef(stream_id), |s| s.byob_pending.drain(..).collect()) {
+            Some(drained) => drained,
+            None => return,
+        };
     for pending in drained {
         let (class, elem_size) = match view_info(pending.view_bits) {
             Some(info) => (info.class, info.elem_size),
@@ -638,10 +536,11 @@ pub(super) unsafe fn close_pending_byob(stream_id: usize) {
 
 /// Stream errored: outstanding BYOB reads reject with the stored reason.
 pub(super) unsafe fn error_pending_byob(stream_id: usize, reason_bits: u64) {
-    let drained: Vec<ByobPending> = match BYOB_PENDING.lock().unwrap().get_mut(&stream_id) {
-        Some(q) => q.drain(..).collect(),
-        None => return,
-    };
+    let drained: Vec<ByobPending> =
+        match with_rs(RsRef(stream_id), |s| s.byob_pending.drain(..).collect()) {
+            Some(drained) => drained,
+            None => return,
+        };
     for pending in drained {
         js_promise_reject(pending.promise, f64::from_bits(reason_bits));
     }

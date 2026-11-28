@@ -192,14 +192,18 @@ mod macos_bundle_tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(bundle.join("Contents/Info.plist"),
             "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>engine</string></dict></plist>").unwrap();
-        let thread = std::thread::current();
+        let module = module_path!()
+            .split_once("::")
+            .map_or("", |(_crate, module)| module);
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                thread.name().unwrap(),
-                "--nocapture",
-                "--test-threads=1",
-            ])
+            // Enters libtest's per-test process (`panic-abort-tests`) directly:
+            // its runner would replace stdin and hide the body's exit status.
+            .env(
+                "__RUST_TEST_INVOKE",
+                format!(
+                    "{module}::launch_bundle_preserves_arguments_terminal_streams_and_exit_status"
+                ),
+            )
             .env(CHILD, &bundle)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

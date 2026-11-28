@@ -36,9 +36,14 @@ pub extern "C" fn js_response_body_init_reset() -> f64 {
 /// must be DRAINED from the stream's buffered chunks instead. Any non-stream
 /// value falls back to the normal coercion, so plain string bodies
 /// (`c.json`/`c.text`) are unaffected.
+///
+/// A binary body (Buffer / typed array / ArrayBuffer / Blob / IncomingMessage)
+/// returns null and leaves its bytes in `PENDING_FETCH_BODY_BYTES` for the
+/// constructor, so a body over the maximum string length is still accepted.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     let _fetch_roots = lifecycle::pin_handles(&[value]);
+    set_pending_fetch_body_bytes(None);
     set_pending_fetch_body_content_type(
         JSValue::from_bits(value.to_bits())
             .is_any_string()
@@ -48,10 +53,12 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // copy its RAW bytes. Such a value is a BufferHeader/TypedArrayHeader
     // pointer, NOT a StringHeader; passing it straight to `string_from_header`
     // read the byte length but data at the wrong offset (zero-fill), so the
-    // payload came back all zeroes (#5435). Materialize the bytes into a heap
-    // StringHeader so `js_response_new`'s lossless byte read recovers them.
+    // payload came back all zeroes (#5435). The copied bytes go to the
+    // constructor out of band (null pointer here), never as a StringHeader: a
+    // binary body may exceed the maximum string length.
     if let Some(bytes) = unsafe { body_value_buffer_bytes(value) } {
-        return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+        set_pending_fetch_body_bytes(Some(bytes));
+        return 0;
     }
     // A Blob / File body contributes its raw bytes. Blob handles are handle-band
     // ids (>= FETCH_HANDLE_BAND_START, 0x40000), NOT real pointers, so they must
@@ -64,7 +71,8 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             let addr = jsval.as_handle();
             {
                 if let Some(bytes) = crate::fetch::blob_bytes_clone(addr) {
-                    return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+                    set_pending_fetch_body_bytes(Some(bytes));
+                    return 0;
                 }
             }
         }
@@ -76,7 +84,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         // requested the body-init conversion: Request drains it to bytes, while
         // Response preserves it lazily because transformed SSR streams often
         // produce data only when the downstream consumer pulls.
-        if crate::streams::js_stream_handle_kind(id) == 1 {
+        if crate::streams::is_readable_stream(crate::streams::RsRef(id)) {
             PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(id));
             return 0;
         }
@@ -88,7 +96,8 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         let jsval = JSValue::from_bits(value.to_bits());
         if jsval.is_handle() {
             if let Some(bytes) = unsafe { incoming_message_raw_body_bytes(jsval.as_handle()) } {
-                return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+                set_pending_fetch_body_bytes(Some(bytes));
+                return 0;
             }
         }
     }
@@ -262,7 +271,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
         fn js_write_barrier_root_nanbox(value_bits: u64);
     }
 
-    // Register before allocating — see `headers_bound_method_value`.
+    // Register before allocating: the collection that allocation can run
+    // scans the cache.
     super::gc::ensure_gc_registered();
     let closure =
         perry_runtime::closure::js_closure_alloc(&perry_runtime::closure::BOUND_METHOD_INFO, 3);
@@ -283,7 +293,8 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
 
 /// `instanceof` kind-probe for fetch handles (registered with the runtime at
 /// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
-/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob, 5 = File, 6 = FormData.
+/// 1 = Response, 2 = Request, 4 = Blob, 5 = File, 6 = FormData (3 was the
+/// Headers handle; a Headers is an ordinary object now).
 /// Lets `x instanceof Response` (etc.) resolve for the pointer-tagged
 /// small-integer handles these types use instead of heap objects. #10555
 /// additionally reuses this for `Object.prototype.toString` /
@@ -298,9 +309,6 @@ pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     }
     if REQUEST_REGISTRY.lock().unwrap().contains_key(&id) {
         return 2;
-    }
-    if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
-        return 3;
     }
     if let Some(blob) = BLOB_REGISTRY.lock().unwrap().get(&id) {
         return if blob.file_name.is_some() { 5 } else { 4 };
@@ -388,6 +396,10 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
         /// An answer that needed no allocation.
         Ready(f64),
     }
+    if prop == "body" {
+        REQUEST_REGISTRY.lock().unwrap().get(&req_id)?;
+        return Some(request_body_value(req_id));
+    }
     let snapshot = {
         let guard = REQUEST_REGISTRY.lock().unwrap();
         let req = guard.get(&req_id)?;
@@ -403,10 +415,6 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             "redirect" => RequestProp::Bytes(req.redirect.as_bytes().to_vec()),
             "integrity" => RequestProp::Bytes(req.integrity.as_bytes().to_vec()),
             "duplex" => RequestProp::Bytes(req.duplex.as_bytes().to_vec()),
-            "body" => match &req.body {
-                Some(b) => RequestProp::Bytes(b.clone()),
-                None => RequestProp::Ready(f64::from_bits(TAG_NULL)),
-            },
             "bodyUsed" => RequestProp::Ready(tagged_bool(req.body_used)),
             "keepalive" => RequestProp::Ready(tagged_bool(req.keepalive)),
             "signal" => RequestProp::Ready(req.signal),
@@ -553,36 +561,6 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
     };
     let p = js_string_from_bytes(text.as_ptr(), text.len() as u32);
     Some(f64::from_bits(JSValue::string_ptr(p).bits()))
-}
-
-/// Try to read a property off a Headers handle by registry id.
-/// Headers exposes prototype methods as function-valued properties, so method
-/// feature checks such as `typeof headers.getSetCookie === "function"` work
-/// while call sites still route through `HANDLE_METHOD_DISPATCH`.
-#[doc(hidden)]
-pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
-    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
-    {
-        let guard = HEADERS_REGISTRY.lock().unwrap();
-        guard.get(&headers_id)?;
-    }
-    let method_name: &'static str = match prop {
-        "append" => "append",
-        "delete" => "delete",
-        // WHATWG aliases `Headers.prototype[Symbol.iterator]` to `entries`.
-        // The property value must be identical to `headers.entries`, so both
-        // names return the same cached bound-method closure.
-        "entries" | "Symbol.iterator" | "@@iterator" => "entries",
-        "forEach" => "forEach",
-        "get" => "get",
-        "getSetCookie" => "getSetCookie",
-        "has" => "has",
-        "keys" => "keys",
-        "set" => "set",
-        "values" => "values",
-        _ => return None,
-    };
-    Some(headers_bound_method_value(headers_id, method_name))
 }
 
 /// Try to read a property off a FormData handle by registry id. FormData
@@ -746,62 +724,6 @@ pub fn dispatch_blob_method(blob_id: usize, method: &str, args: &[f64]) -> Optio
                 let end = args.get(1).copied().unwrap_or(f64::NAN);
                 Some(js_blob_slice(blob_f64, start, end, std::ptr::null()))
             }
-            _ => None,
-        }
-    }
-}
-
-/// Try to dispatch a method call on a Headers handle. Returns `None` for
-/// unknown ids or methods.
-#[doc(hidden)]
-pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) -> Option<f64> {
-    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
-    {
-        let guard = HEADERS_REGISTRY.lock().unwrap();
-        guard.get(&headers_id)?;
-    }
-    let h_f64 = handle_to_f64(headers_id);
-    // String args can arrive as heap strings or SSO/short-string values; use
-    // the runtime's unified coercion helper before passing a StringHeader to
-    // the FFI helpers.
-    let str_arg = |i: usize| -> *const StringHeader {
-        if i < args.len() {
-            js_get_string_pointer_unified(args[i]) as *const StringHeader
-        } else {
-            std::ptr::null()
-        }
-    };
-    unsafe {
-        match method {
-            // WHATWG `Headers.get` returns `null` for an absent header, not the
-            // empty string. `js_headers_get` signals absence with a null
-            // `StringHeader` pointer; wrapping that in `string_ptr` would render
-            // as `""` and break `headers.get(x) === null` checks (the Hono
-            // adapter path behind #4004).
-            "get" => {
-                let p = js_headers_get(h_f64, str_arg(0));
-                if p.is_null() {
-                    Some(f64::from_bits(TAG_NULL))
-                } else {
-                    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
-                }
-            }
-            "set" => Some(js_headers_set(h_f64, str_arg(0), str_arg(1))),
-            "append" => Some(js_headers_append(h_f64, str_arg(0), str_arg(1))),
-            "has" => Some(js_headers_has(h_f64, str_arg(0))),
-            "delete" => Some(js_headers_delete(h_f64, str_arg(0))),
-            "getSetCookie" => Some(js_headers_get_set_cookie(h_f64)),
-            "forEach" => {
-                let cb = args.first().copied().unwrap_or(f64::NAN);
-                Some(js_headers_for_each(h_f64, cb))
-            }
-            // The iterator helpers each return a (sorted) JS array, which is
-            // itself iterable — `for (const [k,v] of req.headers.entries())`
-            // and `[...req.headers.keys()]` both work off the untyped path
-            // Hono's type-stripped JS takes (#1649).
-            "keys" => Some(js_headers_keys(h_f64)),
-            "values" => Some(js_headers_values(h_f64)),
-            "entries" | "Symbol.iterator" | "@@iterator" => Some(js_headers_entries(h_f64)),
             _ => None,
         }
     }

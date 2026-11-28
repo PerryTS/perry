@@ -38,9 +38,11 @@ extern "C" fn ns_destroy_option_done(
         return f64::from_bits(TAG_UNDEFINED);
     }
     let stream = js_closure_get_capture_f64(closure, 0);
-    let original_err = js_closure_get_capture_f64(closure, 1);
-    let destroy_err = if err.to_bits() == TAG_UNDEFINED || err.to_bits() == TAG_NULL {
-        original_err
+    // node's `onDestroy(err)`: the error `_destroy` hands its callback is
+    // the outcome; `cb()` destroys without an error, whatever `destroy(err)`
+    // was given (IncomingMessage's `onError` relies on it).
+    let destroy_err = if err.to_bits() == TAG_NULL {
+        f64::from_bits(TAG_UNDEFINED)
     } else {
         err
     };

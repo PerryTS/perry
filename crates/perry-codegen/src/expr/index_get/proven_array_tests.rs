@@ -467,12 +467,13 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
         index_arg: 0,
         default: Some(0f64.to_bits()),
         element_offset: at("this.board[sq]"),
-        field_offset: at("this.board[sq]"),
+        field_offset: at("board[sq]"),
         in_floor: None,
         rest: None,
     };
-    let inside = at("this.at(5)");
-    let outside = at("this.at(200)");
+    // A method call's site is its member token.
+    let inside = at("at(5)");
+    let outside = at("at(200)");
     elision.field_read_calls.insert(
         inside,
         FactsFieldReadCall {

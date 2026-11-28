@@ -174,6 +174,7 @@ mod builtin_method;
 pub(crate) mod builtin_namespace;
 pub mod builtin_proto;
 mod builtin_proto_entries;
+pub(crate) mod chain_desc;
 pub mod handle_expando;
 pub(crate) mod http_handle_prototype;
 pub(crate) mod owned_state_bag;

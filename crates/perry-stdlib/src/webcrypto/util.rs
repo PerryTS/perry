@@ -1,6 +1,7 @@
 pub(super) use std::collections::HashMap;
 pub(super) use std::sync::Mutex;
 
+pub(super) use crate::crypto::util::{rsa_public_key, rsa_public_key_from_spki_der};
 pub(super) use aes::cipher::{
     generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit as AesBlockKeyInit,
 };
@@ -41,7 +42,7 @@ pub(super) use rsa::pkcs1v15::{
     Signature as RsaPkcs1v15Signature, SigningKey as RsaPkcs1v15SigningKey,
     VerifyingKey as RsaPkcs1v15VerifyingKey,
 };
-pub(super) use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+pub(super) use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 pub(super) use rsa::pss::{
     Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
     VerifyingKey as RsaPssVerifyingKey,

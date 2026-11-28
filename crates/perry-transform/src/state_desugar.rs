@@ -675,6 +675,7 @@ fn try_rewrite_foreach(
 
     let func_id = fresh.fresh_func();
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: call_offset,
         func_id,
         params: Vec::<Param>::new(),
@@ -888,6 +889,7 @@ fn try_rewrite_navstack(
 
     let func_id = fresh.fresh_func();
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: call_offset,
         func_id,
         params: Vec::<Param>::new(),
@@ -1160,6 +1162,7 @@ mod tests {
             args: vec![
                 Expr::LocalGet(state_id),
                 Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 100,
                     params: vec![],

@@ -80,10 +80,9 @@
 0 2 crates/perry-stdlib/src/sqlite/better.rs
 0 2 crates/perry-stdlib/src/sqlite/node_db.rs
 5 3 crates/perry-stdlib/src/streams.rs
-1 1 crates/perry-stdlib/src/streams/byob.rs
-1 0 crates/perry-stdlib/src/streams/expando.rs
-4 2 crates/perry-stdlib/src/streams/tee.rs
-5 2 crates/perry-stdlib/src/streams/transform.rs
+0 1 crates/perry-stdlib/src/streams/byob.rs
+0 2 crates/perry-stdlib/src/streams/tee.rs
+0 2 crates/perry-stdlib/src/streams/transform.rs
 0 1 crates/perry-stdlib/src/streams/writable.rs
 0 1 crates/perry-stdlib/src/string_decoder.rs
 4 3 crates/perry-stdlib/src/tls.rs

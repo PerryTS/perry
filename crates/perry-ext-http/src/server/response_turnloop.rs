@@ -92,6 +92,9 @@ impl ResponseShape {
 /// The `IncomingMessage` handle a response answers, read back after the
 /// response's own borrow has ended.
 pub(crate) fn req_handle_of(handle: i64) -> i64 {
+    if let Some(req) = crate::server::response_payload::field(handle, b"req") {
+        return crate::server::server::object_handle(req);
+    }
     response_state(handle).map(|sr| sr.req_handle).unwrap_or(0)
 }
 
@@ -123,21 +126,23 @@ pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_han
 pub(crate) fn alloc_http1_server_response_for_turnloop(
     socket: f64,
     seq: u64,
-    req_handle: i64,
+    req: f64,
     max_requests_per_socket: f64,
 ) -> f64 {
     let scope = perry_ffi::TransientRootScope::enter();
     let socket = scope.root_nanbox(socket);
+    let req = scope.root_nanbox(req);
+    // The request is the response's own `req` field (node's), read back by
+    // [`req_handle_of`]: an object address the collector moves is never
+    // kept in the native state.
     let mut state = ResponseState::new();
-    state.req_handle = req_handle;
     state.turnloop = perry_ext_net::native_transport::snapshot(socket.get()).map(|incarnation| {
         (
             crate::server::turnloop_route::ResponseConnection::Socket { incarnation },
             seq,
         )
     });
-    let req = crate::server::request::handle_to_pointer_f64(req_handle);
-    let handle = unsafe { crate::server::response_payload::alloc(state, req) };
+    let handle = unsafe { crate::server::response_payload::alloc(state, req.get()) };
     if handle == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -149,6 +154,56 @@ pub(crate) fn alloc_http1_server_response_for_turnloop(
         max_requests_per_socket,
     );
     crate::server::request::handle_to_pointer_f64(owner.get())
+}
+
+/// The response an exchange hands to its listeners: `response`, or an instance
+/// of the server's `ServerResponse` option taking over its connection (node's
+/// `new server[kServerResponse](req, options)`).
+pub(crate) fn exchange_response(server_handle: i64, req: f64, response: f64) -> f64 {
+    extern "C-unwind" {
+        fn js_new_function_construct(class: f64, args: *const f64, len: usize) -> f64;
+    }
+    let class = crate::server::server::with_base_server(server_handle, |s| s.response_class)
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    if class.to_bits() == TAG_UNDEFINED {
+        return response;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let class = scope.root_nanbox(class);
+    let response = scope.root_nanbox(response);
+    let handle_of = |value: f64| (value.to_bits() & PTR_MASK) as i64;
+    let args = [req, f64::from_bits(perry_ffi::alloc_object().bits())];
+    let custom = scope
+        .root_nanbox(unsafe { js_new_function_construct(class.get(), args.as_ptr(), args.len()) });
+    if !JsValue::from_bits(custom.get().to_bits()).is_pointer()
+        || !crate::server::response_payload::is_response(handle_of(custom.get()))
+    {
+        return response.get();
+    }
+    let Some(exchange) = response_state_mut(handle_of(response.get()))
+        .map(|state| (state.turnloop.take(), state.req_handle))
+    else {
+        return response.get();
+    };
+    if let Some(state) = response_state_mut(handle_of(custom.get())) {
+        (state.turnloop, state.req_handle) = exchange;
+        state.standalone = false;
+        state.standalone_req_method = None;
+        state.send_date = true;
+    }
+    let socket = response_socket(handle_of(response.get()));
+    crate::server::response_payload::set(handle_of(custom.get()), ResponseKey::Socket, socket);
+    let max_requests =
+        crate::server::response_payload::field(handle_of(response.get()), b"_maxRequestsPerSocket");
+    if let Some(max_requests) = max_requests {
+        crate::server::response_payload::set_field(
+            handle_of(custom.get()),
+            b"_maxRequestsPerSocket",
+            max_requests,
+        );
+    }
+    crate::server::response_payload::close(handle_of(response.get()));
+    custom.get()
 }
 
 /// True when a response's connection died under it (client disconnect /

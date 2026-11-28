@@ -192,6 +192,10 @@ pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, callback: f64) {
     widgets::keyboard::set_on_key_up(handle, callback);
 }
 
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 /// App-level key-down fallback. Fires when no widget owns focus.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(callback: f64) {
@@ -243,6 +247,16 @@ pub extern "C" fn perry_ui_current_modifiers() -> i32 {
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(callback: f64) {
     file_dialog::open_dialog(callback);
+}
+
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead. This backend opens no
+/// dialog and reports a cancelled one: `callback("", "")`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, callback: f64) {
+    // The inline empty string: nothing allocates between here and the call.
+    let empty = f64::from_bits(0x7FF9_0000_0000_0000);
+    unsafe { perry_ffi::call_value(callback, perry_ffi::JsThis::UNDEFINED, &[empty, empty]) };
 }
 
 /// Open a folder dialog. Calls callback with selected directory path or undefined.

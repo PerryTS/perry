@@ -128,6 +128,7 @@ fn a_jump_into_a_later_switch_case_can_skip_the_source() {
 #[test]
 fn a_captured_copy_stays() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 9,
         params: vec![],
@@ -155,6 +156,7 @@ fn a_captured_copy_stays() {
 fn a_copy_inside_a_closure_folds_only_against_the_closure_body() {
     let closure = |body| {
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 9,
             params: vec![],

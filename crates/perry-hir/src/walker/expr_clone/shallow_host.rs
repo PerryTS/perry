@@ -80,7 +80,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
         }
         Expr::FsReadFileBinary(a0) => Expr::FsReadFileBinary(Shallow::shallow(a0, n)),
         Expr::FsRmRecursive(a0) => Expr::FsRmRecursive(Shallow::shallow(a0, n)),
-        Expr::PathJoin(a0, a1) => Expr::PathJoin(Shallow::shallow(a0, n), Shallow::shallow(a1, n)),
+        Expr::PathJoin(a0) => Expr::PathJoin(Shallow::shallow(a0, n)),
         Expr::PathDirname(a0) => Expr::PathDirname(Shallow::shallow(a0, n)),
         Expr::PathBasename(a0) => Expr::PathBasename(Shallow::shallow(a0, n)),
         Expr::PathBasenameExt(a0, a1) => {
@@ -104,9 +104,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::PathResolveJoin(a0, a1) => {
             Expr::PathResolveJoin(Shallow::shallow(a0, n), Shallow::shallow(a1, n))
         }
-        Expr::PathWin32Join(a0, a1) => {
-            Expr::PathWin32Join(Shallow::shallow(a0, n), Shallow::shallow(a1, n))
-        }
+        Expr::PathWin32Join(a0) => Expr::PathWin32Join(Shallow::shallow(a0, n)),
         Expr::PathWin32 { method, args } => Expr::PathWin32 {
             method: method.clone(),
             args: Shallow::shallow(args, n),

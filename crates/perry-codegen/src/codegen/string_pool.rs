@@ -915,6 +915,8 @@ pub(super) fn emit_string_pool(
             .computed_members
             .iter()
             .filter(|m| m.is_static && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method))
+            // A plain-named one registers its declaration's entry (above).
+            .filter(|m| m.declared_static_method().is_none())
         {
             let f = &member.function;
             let mut spec_length = 0u32;

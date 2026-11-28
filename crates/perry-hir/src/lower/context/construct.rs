@@ -59,34 +59,35 @@ impl LoweringContext {
     /// monomorphization or downstream native-instance tagging still has
     /// the chance to substitute a concrete type).
     ///
-    /// Innermost scope wins (shadowing).
+    /// The nearest scope that declares `name` owns it, constrained or not:
+    /// an unconstrained inner `<T>` shadows an outer `<T extends number>`.
     pub(crate) fn resolve_type_param_constraint(&self, name: &str) -> Option<crate::types::Type> {
-        for scope in self.type_param_constraints.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                // Only return constraints whose runtime shape is
-                // narrower than `Any`. `String`/`Number`/`Boolean`/
-                // `BigInt` are primitives; `Array<elem>` lets
-                // `<T extends string[]>` propagate to the array fast
-                // path. Anything else (e.g., `T extends SomeClass`,
-                // `T extends "literal"`, intersections) falls back to
-                // the `TypeVar`/`Named` path so existing native-
-                // instance tagging / class-id propagation still work.
-                let useful = matches!(
+        let (_, constraints) = self
+            .type_param_scopes
+            .iter()
+            .zip(&self.type_param_constraints)
+            .rev()
+            .find(|(scope, _)| scope.contains(name))?;
+        // Only return constraints whose runtime shape is narrower than
+        // `Any`. `String`/`Number`/`Boolean`/`BigInt` are primitives;
+        // `Array<elem>` lets `<T extends string[]>` propagate to the array
+        // fast path. Anything else (e.g., `T extends SomeClass`,
+        // `T extends "literal"`, intersections) falls back to the
+        // `TypeVar`/`Named` path so existing native-instance tagging /
+        // class-id propagation still work.
+        constraints
+            .get(name)
+            .filter(|ty| {
+                matches!(
                     ty,
                     crate::types::Type::String
                         | crate::types::Type::Number
                         | crate::types::Type::Boolean
                         | crate::types::Type::BigInt
                         | crate::types::Type::Array(_)
-                );
-                if useful {
-                    return Some(ty.clone());
-                } else {
-                    return None;
-                }
-            }
-        }
-        None
+                )
+            })
+            .cloned()
     }
 
     /// Look up a type alias by name and return its resolved type (if found).

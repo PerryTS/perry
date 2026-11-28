@@ -247,6 +247,7 @@ fn c3_store_into_other_parameter_keeps_both() {
 #[test]
 fn c4_capture_keeps() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![],
@@ -441,6 +442,7 @@ fn this_why(f: &Fates, id: FuncId) -> String {
 
 fn closure(body: Vec<Stmt>, captures_this: bool) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![],

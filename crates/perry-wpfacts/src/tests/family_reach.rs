@@ -72,8 +72,10 @@ fn the_dump_has_one_line_per_family() {
 
 #[test]
 fn l1_an_unknown_value_makes_every_family_live() {
-    // A member of `process` the realm does not declare: an unknown value.
-    let r = reach("const h = (process as any).noSuchMember;\nconsole.log(typeof h);\n");
+    // The result of a body-less `declare function`: an unknown value. (A
+    // member of `process` the realm does not declare reads undefined under
+    // REALMVAL, cliff 285e2f45a5.)
+    let r = reach("declare function hostValue(): any;\nconst h = hostValue();\nconsole.log(typeof h);\n");
     assert_eq!(r.never(), 0, "{:?}", r.dump_lines());
     assert!(
         reason(&r, "regex_engine").starts_with("L1:"),

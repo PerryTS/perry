@@ -201,10 +201,40 @@ pub extern "C" fn js_net_validate_default_auto_select_family(value: f64) -> i32 
 /// in `[1, 2147483647]`, then applies Node's effective 10ms minimum.
 #[no_mangle]
 pub extern "C" fn js_net_validate_default_auto_select_family_attempt_timeout(value: f64) -> i32 {
+    validate_attempt_timeout(value, "\"value\" argument", "value")
+}
+
+/// `options.autoSelectFamilyAttemptTimeout` of `socket.connect()`: Node's
+/// `validateInt32(value, name, 1)`, then the same 10ms minimum.
+#[no_mangle]
+pub extern "C" fn js_net_validate_connect_attempt_timeout(value: f64) -> i32 {
+    let name = "options.autoSelectFamilyAttemptTimeout";
+    validate_attempt_timeout(value, &format!("\"{name}\" property"), name)
+}
+
+/// `ERR_OUT_OF_RANGE`'s `Received` clause: an integer beyond 2^32 is
+/// grouped with `_`, as Node's `addNumericalSeparator` writes it.
+fn out_of_range_received(n: f64) -> String {
+    let text = format_received_number(n);
+    if n.fract() != 0.0 || n.abs() <= 4_294_967_296.0 || !n.is_finite() {
+        return text;
+    }
+    let (sign, digits) = text.split_at(usize::from(n < 0.0));
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push('_');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}{grouped}")
+}
+
+fn validate_attempt_timeout(value: f64, subject: &str, name: &str) -> i32 {
     let jv = JSValue::from_bits(value.to_bits());
     if !is_numeric(jv) {
         let message = format!(
-            "The \"value\" argument must be of type number. Received {}",
+            "The {subject} must be of type number. Received {}",
             describe_received(value)
         );
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
@@ -212,15 +242,15 @@ pub extern "C" fn js_net_validate_default_auto_select_family_attempt_timeout(val
     let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
-            "The value of \"value\" is out of range. It must be an integer. Received {}",
-            format_received_number(n)
+            "The value of \"{name}\" is out of range. It must be an integer. Received {}",
+            out_of_range_received(n)
         );
         throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
     }
     if !(1.0..=2147483647.0).contains(&n) {
         let message = format!(
-            "The value of \"value\" is out of range. It must be >= 1 && <= 2147483647. Received {}",
-            format_received_number(n)
+            "The value of \"{name}\" is out of range. It must be >= 1 && <= 2147483647. Received {}",
+            out_of_range_received(n)
         );
         throw_range_error_named(&message, "ERR_OUT_OF_RANGE");
     }

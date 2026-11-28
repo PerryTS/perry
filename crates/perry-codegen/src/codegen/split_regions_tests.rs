@@ -56,7 +56,7 @@ fn body_has_call_to(body: &[Stmt], id: u32) -> bool {
     for s in body {
         perry_hir::walker::stmt_any_expr(s, &mut |e| {
             fn walk(e: &Expr, id: u32, found: &mut bool) {
-                if let Expr::Call { callee, .. } = e {
+                if let Expr::RegionCall { callee, .. } = e {
                     if matches!(callee.as_ref(), Expr::FuncRef(f) if *f == id) {
                         *found = true;
                     }

@@ -22,6 +22,7 @@ accessor	%ReadableStatePrototype%	flowing	%ReadableStatePrototype%.flowing.<get>
 accessor	%ReadableStatePrototype%	objectMode	%ReadableStatePrototype%.objectMode.<get>	%ReadableStatePrototype%.objectMode.<set>
 accessor	%ReadableStatePrototype%	pipesCount	%ReadableStatePrototype%.pipesCount.<get>	%ReadableStatePrototype%.pipesCount.<set>
 accessor	%ReadableStatePrototype%	readableListening	%ReadableStatePrototype%.readableListening.<get>	%ReadableStatePrototype%.readableListening.<set>
+accessor	%ReadableStatePrototype%	readingMore	%ReadableStatePrototype%.readingMore.<get>	%ReadableStatePrototype%.readingMore.<set>
 accessor	%ReadableStatePrototype%	resumeScheduled	%ReadableStatePrototype%.resumeScheduled.<get>	%ReadableStatePrototype%.resumeScheduled.<set>
 accessor	%TypedArray%	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	%TypedArray%	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
@@ -3182,6 +3183,7 @@ native	Symbol	propertyIsEnumerable	Object.prototype.propertyIsEnumerable
 native	Symbol	toLocaleString	Object.prototype.toLocaleString
 native	Symbol	toString	Function.prototype.toString
 native	Symbol	valueOf	Object.prototype.valueOf
+native	Symbol.prototype	@@toPrimitive	Symbol.prototype["@@toPrimitive"]
 native	Symbol.prototype	constructor	Symbol
 native	Symbol.prototype	toString	Symbol.prototype.toString
 native	Symbol.prototype	valueOf	Symbol.prototype.valueOf
@@ -13057,6 +13059,7 @@ object	node:test.mock	timers	node:test.mock.timers
 object	node:test/reporters	default	node:test/reporters.default
 object	node:timers	default	node:timers.default
 object	node:timers	promises	node:timers.promises
+object	node:timers.default	promises	node:timers.promises
 object	node:timers.promises	scheduler	node:timers/promises.scheduler
 object	node:timers/promises	default	node:timers.promises
 object	node:timers/promises	scheduler	node:timers/promises.scheduler

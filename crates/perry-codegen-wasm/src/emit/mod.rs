@@ -33,6 +33,7 @@ mod locals;
 mod memcall;
 mod method_call;
 mod module_emitter;
+mod module_namespace;
 mod runtime_imports;
 mod scoped_js;
 mod stmt;
@@ -60,6 +61,7 @@ use closures::{
 // `#[allow(dead_code)]` annotation on its original definition).
 use constants::{
     f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    WEB_PLATFORM_ID,
 };
 use func_emit_ctx::{FinallyTarget, FuncEmitCtx};
 use function::{constructor_of, declares_no_constructor};
@@ -68,6 +70,7 @@ use locals::{
     collect_param_locals, resolve_export_to_func, resolve_export_to_let, resolve_source_module_idx,
 };
 use module_emitter::{accessor_code, WasmModuleEmitter};
+use module_namespace::{resolve_export_to_class, NamespaceImport};
 use runtime_imports::RuntimeImports;
 use stmt::has_return;
 use ui_method_map::map_ui_method;

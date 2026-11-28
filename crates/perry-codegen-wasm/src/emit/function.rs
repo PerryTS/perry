@@ -526,11 +526,24 @@ impl<'a> FuncEmitCtx<'a> {
         } else if let Some(&idx) = self.local_map.get(id) {
             func.instruction(&Instruction::LocalGet(idx));
             if self.is_boxed(id) {
-                self.emit_box_call(func, "box_get");
+                let bridge = if self.tdz_suppressed {
+                    "box_peek"
+                } else {
+                    "box_get"
+                };
+                self.emit_box_call(func, bridge);
             }
         } else {
             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
         }
+    }
+
+    /// Runs `emit` for reads of the compiler's own, not the program's: a class environment
+    /// snapshots the bindings it captures while one may still be in its dead zone.
+    pub(super) fn with_tdz_suppressed(&mut self, emit: impl FnOnce(&mut Self)) {
+        let outer = std::mem::replace(&mut self.tdz_suppressed, true);
+        emit(self);
+        self.tdz_suppressed = outer;
     }
 
     pub(super) fn is_boxed(&self, id: &LocalId) -> bool {
@@ -556,6 +569,15 @@ impl<'a> FuncEmitCtx<'a> {
 
     /// Stores the value on the stack into the cell local `idx` holds, leaving the value.
     pub(super) fn emit_box_set(&mut self, func: &mut Function, idx: u32) {
+        self.emit_box_store(func, idx, "box_set");
+    }
+
+    /// `emit_box_set` for the declaration that fills a preallocated cell.
+    pub(super) fn emit_box_init(&mut self, func: &mut Function, idx: u32) {
+        self.emit_box_store(func, idx, "box_init");
+    }
+
+    fn emit_box_store(&mut self, func: &mut Function, idx: u32, bridge: &str) {
         func.instruction(&Instruction::LocalSet(self.temp_store_local));
         self.emit_frame_begin(func, 2);
         for (slot, local) in [(0, idx), (1, self.temp_store_local)] {
@@ -567,7 +589,7 @@ impl<'a> FuncEmitCtx<'a> {
                 memory_index: 0,
             }));
         }
-        self.emit_memcall(func, "box_set", 2);
+        self.emit_memcall(func, bridge, 2);
     }
 
     /// Moves each boxed parameter's incoming value into a fresh cell.

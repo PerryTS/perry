@@ -43,9 +43,8 @@ pub(crate) use crypto_keys::{
 };
 pub(crate) use crypto_misc::{
     arm_crypto_create_cipheriv, arm_crypto_create_hmac, arm_crypto_create_secret_key,
-    arm_crypto_create_sign_verify, arm_crypto_generate_key_async,
-    arm_crypto_generate_key_pair_sync, arm_crypto_generate_key_sync, arm_crypto_get_cipher_info,
-    arm_crypto_get_fips, arm_crypto_get_inventory, arm_crypto_prime,
+    arm_crypto_create_sign_verify, arm_crypto_generate_key_async, arm_crypto_generate_key_sync,
+    arm_crypto_get_cipher_info, arm_crypto_get_fips, arm_crypto_get_inventory, arm_crypto_prime,
     arm_crypto_public_private_crypt, arm_crypto_random_bytes, arm_crypto_random_bytes_async,
     arm_crypto_random_fill, arm_crypto_random_int, arm_crypto_random_uuid,
     arm_crypto_random_uuidv7, arm_crypto_secure_heap_used, arm_crypto_set_fips, arm_crypto_sign,
@@ -788,22 +787,6 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ) =>
         {
             arm_crypto_hkdf_sync(ctx, callee.as_ref(), args)
-        }
-
-        // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
-        // The runtime builds the object (PEM strings) and returns it already
-        // NaN-boxed; `.publicKey` / `.privateKey` reads go through the generic
-        // object property dispatch (the object carries a keys array).
-        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
-            if matches!(
-                callee.as_ref(),
-                Expr::PropertyGet { object, property, .. } if property == "generateKeyPairSync" && matches!(
-                    object.as_ref(),
-                    Expr::NativeModuleRef(n) if n == "crypto"
-                )
-            ) =>
-        {
-            arm_crypto_generate_key_pair_sync(ctx, callee.as_ref(), args)
         }
 
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a

@@ -147,6 +147,12 @@ unsafe fn copy_positional_source(
         PositionalPlan::NoKeys => return true,
         PositionalPlan::Keys(keys, count, hide) => (keys, count, hide),
     };
+    // A spread into a literal that held no key when the copy began: the
+    // source's list names each key once, so every key is a creation and the
+    // target is never searched for it.
+    let target_keyless = define
+        && !target_is_array
+        && tgt_h.with_const_ptr::<ObjectHeader, _>(|t| target_holds_no_key(t));
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys_h = scope.root_raw_mut_ptr(keys);
     for i in 0..key_count {
@@ -166,11 +172,12 @@ unsafe fn copy_positional_source(
         if define
             && !target_is_array
             && tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
-                super::define_own_data::define_own_data_from_shape(
-                    crate::value::js_nanbox_pointer(target as i64),
-                    key_f64,
-                    value,
-                )
+                let target = crate::value::js_nanbox_pointer(target as i64);
+                if target_keyless {
+                    super::define_own_data::define_own_data_absent(target, key_f64, value)
+                } else {
+                    super::define_own_data::define_own_data_from_shape(target, key_f64, value)
+                }
                 .is_some()
             })
         {
@@ -198,6 +205,13 @@ unsafe fn copy_positional_source(
         });
     }
     true
+}
+
+/// Does `target`, an ordinary object, hold no own key: a shape with an empty
+/// key list and no overflow table?
+unsafe fn target_holds_no_key(target: *const ObjectHeader) -> bool {
+    !super::overflow::has_overflow(target)
+        && super::shapes::object_shape_record(target).is_some_and(|r| r.logical_key_count() == 0)
 }
 
 /// What [`positional_source_plan`] proves about a source.
@@ -1178,15 +1192,33 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         }
     }
 
-    // 2) Copy own symbol-keyed enumerable properties from source to target,
-    //    in `[[OwnPropertyKeys]]` symbol order (after the string keys). Use the
-    //    full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
-    //    surfaces symbols with a stored *value*, missing accessor-only symbols
-    //    (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
-    //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
-    //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
-    //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
-    let sym_keys: Vec<usize> = if source_has_no_symbols {
+    let symbols = symbol_key_snapshot(&source_h, source_has_no_symbols);
+    copy_symbol_keys(define, &tgt_h, &src_h, &source_h, symbols, getter_ran);
+
+    // The target may have moved under any of the getters above; hand the caller
+    // the post-collection address, not the `target_f64` captured on entry. The
+    // native-module arm already does this; the main path did not, so `acc` in a
+    // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
+    // next link.
+    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+}
+
+/// The source's own symbol keys, in `[[OwnPropertyKeys]]` symbol order: the
+/// symbol part of CopyDataProperties' key list (ECMA-262 7.3.25 step 3).
+/// Use the full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
+/// surfaces symbols with a stored *value*, missing accessor-only symbols
+/// (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
+/// ran during assign (test262 assign/strings-and-symbol-order). The snapshot
+/// holds the symbol pointers: the inner `[[Get]]` / set re-acquire
+/// SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
+///
+/// # Safety
+/// `source_h` roots a live source object.
+pub(super) unsafe fn symbol_key_snapshot(
+    source_h: &crate::gc::RuntimeHandle<'_>,
+    source_has_no_symbols: bool,
+) -> Vec<usize> {
+    if source_has_no_symbols {
         Vec::new()
     } else {
         let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_h.get_nanbox_f64());
@@ -1205,7 +1237,26 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             }
         }
         v
-    };
+    }
+}
+
+/// CopyDataProperties' symbol part (ECMA-262 7.3.25, `[[OwnPropertyKeys]]`
+/// symbol order, after the string keys) from the source `source_h` (its raw
+/// object `src_h`) onto the target `tgt_h`, over `sym_keys`, the source's
+/// symbol keys as [`symbol_key_snapshot`] took them. `getter_ran`: a getter
+/// already ran during the string part, so each symbol is re-checked for own
+/// presence.
+///
+/// # Safety
+/// The handles root a live target and source object.
+pub(super) unsafe fn copy_symbol_keys(
+    define: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    source_h: &crate::gc::RuntimeHandle<'_>,
+    sym_keys: Vec<usize>,
+    mut getter_ran: bool,
+) {
     for sym_ptr in sym_keys {
         // #7200: `js_object_get_symbol_property` below is a symbol-keyed
         // `[[Get]]` — an accessor there runs user code with the same reach as
@@ -1250,13 +1301,48 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             );
         }
     }
+}
 
-    // The target may have moved under any of the getters above; hand the caller
-    // the post-collection address, not the `target_f64` captured on entry. The
-    // native-module arm already does this; the main path did not, so `acc` in a
-    // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
-    // next link.
-    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+/// CopyDataProperties step 4 for one string key of an ordinary source, by
+/// name: the key's own presence ([[GetOwnProperty]], step 4.c), its
+/// enumerability, then `[[Get]]`. `None` when the key is skipped. The step a
+/// spread source takes once a getter may have changed it (`copy_string_key`'s
+/// re-check; `spread::accessor_spread` after its layout word moved).
+///
+/// # Safety
+/// `src` is a live ordinary object; `key_bits` a string key. Runs user code.
+pub(super) unsafe fn own_enumerable_value_by_name(
+    src: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
+    let key_f64 = f64::from_bits(key_bits);
+    if crate::value::js_is_truthy(js_object_has_own(
+        crate::value::js_nanbox_pointer(src as i64),
+        key_f64,
+    )) == 0
+    {
+        return None;
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some(name_bytes) =
+        crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut sso_buf)
+    {
+        if let Ok(name) = std::str::from_utf8(name_bytes) {
+            if let Some(attrs) = get_property_attrs(src as usize, name) {
+                if !attrs.enumerable() {
+                    return None;
+                }
+            }
+        }
+    }
+    let key_ptr =
+        crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return None;
+    }
+    Some(f64::from_bits(
+        js_object_get_field_by_name(src, key_ptr).bits(),
+    ))
 }
 
 /// One own string key `i` of an ordinary-object spread/assign source:

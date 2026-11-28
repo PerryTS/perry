@@ -152,6 +152,7 @@ fn capture_store_ir() -> String {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 3,
                 params: vec![],

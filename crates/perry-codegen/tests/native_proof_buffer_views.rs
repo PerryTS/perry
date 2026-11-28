@@ -1773,6 +1773,7 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
                 ty: closure_type(Type::Number),
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 90,
                     params: Vec::new(),

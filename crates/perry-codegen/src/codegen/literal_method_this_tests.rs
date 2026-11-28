@@ -117,6 +117,7 @@ fn this_a() -> Expr {
 /// closure clones, so the public symbol is the ordinary body.
 fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),
@@ -259,6 +260,20 @@ fn literal_method_reads_its_receiver_once_at_entry_into_a_rooted_slot() {
         body.lines().any(|l| l.contains("@js_shadow_slot_bind(")
             && l.trim_end().ends_with(&format!("ptr {slot})"))),
         "`this` slot {slot} must be shadow-bound:\n{body}"
+    );
+}
+
+#[test]
+fn sloppy_prologue_sends_a_symbol_receiver_to_the_coercion() {
+    // A Symbol is POINTER_TAG'd like an object, so the object edge itself
+    // must tell them apart by the payload's first word.
+    let ir = compile_ir(&literal_module(method(METHOD, false, false)));
+    let body = closure_body(&ir, METHOD);
+    let magic = format!(", {}", crate::runtime_abi::SYMBOL_HEADER_MAGIC as i32);
+    assert!(
+        body.lines()
+            .any(|l| l.contains("icmp eq i32 ") && l.trim_end().ends_with(&magic)),
+        "{body}"
     );
 }
 

@@ -383,7 +383,19 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
             }
         }
         words.young = young;
+        unsafe {
+            crate::object::layout_probe::chain_glue::for_each_node_obj(|slot| {
+                if bits_minor_collectible(*slot) {
+                    visitor.visit_nanbox_u64_slot(&mut *slot);
+                }
+            });
+        }
     } else if visitor.is_metadata_rewrite_phase() {
+        unsafe {
+            crate::object::layout_probe::chain_glue::for_each_node_obj(|slot| {
+                visitor.visit_nanbox_u64_slot(&mut *slot);
+            });
+        }
         let mut young = Vec::new();
         words.for_each_word(|slot| {
             // SAFETY: a stable word of this agent's pages.
@@ -427,6 +439,7 @@ pub(crate) fn prune_dead_shape_prototypes(is_dead_owner: &dyn Fn(usize) -> bool)
         }
     });
     words.young.retain(|&slot| unsafe { *slot } != 0);
+    unsafe { crate::object::layout_probe::chain_glue::prune(is_dead_owner) };
 }
 
 #[cfg(test)]

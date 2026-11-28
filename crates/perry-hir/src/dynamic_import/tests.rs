@@ -669,16 +669,16 @@ fn resolve_path_join_over_replaced_dirname() {
     // `__dirname` is already lowered to a string by the parser; the path
     // resolver still needs to fold the replace + join chain to a single
     // deterministic worker module.
-    let expr = Expr::PathJoin(
-        Box::new(Expr::StringReplace {
+    let expr = Expr::PathJoin(vec![
+        Expr::StringReplace {
             string: Box::new(Expr::String(
                 "D:/tmp/probe/node_modules/node-pty/lib".to_string(),
             )),
             pattern: Box::new(Expr::String("node_modules.asar".to_string())),
             replacement: Box::new(Expr::String("node_modules.asar.unpacked".to_string())),
-        }),
-        Box::new(Expr::String("worker/conoutSocketWorker.js".to_string())),
-    );
+        },
+        Expr::String("worker/conoutSocketWorker.js".to_string()),
+    ]);
 
     let mut visiting = HashSet::new();
     match resolve_import_path_with_context(
@@ -760,10 +760,10 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
 
 #[test]
 fn resolve_path_join_normalizes_relative_segments() {
-    let expr = Expr::PathJoin(
-        Box::new(Expr::String("/project/src/lib".to_string())),
-        Box::new(Expr::String("../worker.js".to_string())),
-    );
+    let expr = Expr::PathJoin(vec![
+        Expr::String("/project/src/lib".to_string()),
+        Expr::String("../worker.js".to_string()),
+    ]);
 
     let mut visiting = HashSet::new();
     match resolve_import_path_with_context(
@@ -782,6 +782,7 @@ fn resolve_path_join_normalizes_relative_segments() {
 fn worker_new_visitor_descends_into_closure_bodies() {
     let mut module = Module::new("worker-closure");
     module.init.push(Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params: vec![],
@@ -836,6 +837,7 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
 
     let mut module = Module::new("dynamic-import-order");
     module.init.push(Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params: vec![],
@@ -928,6 +930,7 @@ fn resolve_closure_local_const_specifier() {
     // specifier resolves instead of erroring "not a module-level const".
     let mut m = Module::new("t");
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0,
         params: vec![],
@@ -980,6 +983,7 @@ fn collect_consts_invalidates_closure_mutation() {
         init: Some(Expr::String("./a.ts".into())),
     });
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0,
         params: vec![],
@@ -1445,6 +1449,7 @@ fn tla_skips_await_inside_closure() {
     // Build a closure body containing an Await — the module-level
     // detector must NOT descend into the closure.
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0,
         params: vec![],

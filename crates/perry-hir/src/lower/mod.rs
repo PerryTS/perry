@@ -91,6 +91,7 @@ pub(crate) mod unrebound_params;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;
+pub use decorators::{installs_reflect_metadata, prepend_reflect_metadata_install};
 mod template;
 pub(crate) use template::*;
 mod widget_decl;
@@ -161,6 +162,8 @@ mod for_multi_decl_tests;
 mod for_of_counter_tests;
 #[cfg(test)]
 mod proxy_binding_tests;
+#[cfg(test)]
+mod reflect_metadata_install_tests;
 #[cfg(test)]
 mod tests;
 mod this_field_loop_tests;

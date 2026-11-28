@@ -129,91 +129,6 @@ pub(crate) fn resolve_posix_str(path_str: &str) -> String {
     resolved
 }
 
-/// Join two path segments. Node's `path.join` concatenates with `/` and
-/// normalizes — it does NOT reset on an absolute segment (that's
-/// `path.resolve`'s job). We can't use Rust's `Path::join` because it
-/// resets on absolute segments.
-pub(crate) fn js_path_join_unchecked(
-    a_ptr: *const StringHeader,
-    b_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    unsafe {
-        let a = string_from_header(a_ptr).unwrap_or_default();
-        let b = string_from_header(b_ptr).unwrap_or_default();
-
-        let joined = if a.is_empty() {
-            b
-        } else if b.is_empty() {
-            a
-        } else {
-            format!("{}/{}", a, b)
-        };
-        let normalized = normalize_str(&joined);
-        string_to_js(&normalized)
-    }
-}
-
-/// Default `path.join(a, b)` — platform-dispatching (win32 on Windows
-/// targets, POSIX elsewhere), matching Node where `path === path.win32`
-/// on win32.
-#[no_mangle]
-pub extern "C" fn js_path_join(
-    a_ptr: *const StringHeader,
-    b_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    if cfg!(windows) {
-        return js_path_win32_join(a_ptr, b_ptr);
-    }
-    js_path_posix_join(a_ptr, b_ptr)
-}
-
-/// Pinned `path.posix.join(a, b)` — the pre-dispatch POSIX body of
-/// [`js_path_join`], kept callable so explicit `path.posix.*` keeps `/`
-/// semantics on Windows targets.
-pub(crate) fn js_path_posix_join(
-    a_ptr: *const StringHeader,
-    b_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    let _ = string_from_header_or_throw(a_ptr);
-    let _ = string_from_header_or_throw(b_ptr);
-    js_path_join_unchecked(a_ptr, b_ptr)
-}
-
-/// `path.win32.join(a, b)` — Windows-style join. Always emits backslash
-/// separators regardless of host platform. Treats both `/` and `\` as
-/// segment separators in normalization (Node's win32 implementation does
-/// the same) and collapses repeated separators.
-pub(crate) fn js_path_win32_join_unchecked(
-    a_ptr: *const StringHeader,
-    b_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    unsafe {
-        let a = string_from_header(a_ptr).unwrap_or_default();
-        let b = string_from_header(b_ptr).unwrap_or_default();
-
-        let joined = if a.is_empty() {
-            b
-        } else if b.is_empty() {
-            a
-        } else if a.ends_with('\\') || a.ends_with('/') {
-            format!("{}{}", a, b)
-        } else {
-            format!("{}\\{}", a, b)
-        };
-        string_to_js(&normalize_win32_str(&joined))
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_path_win32_join(
-    a_ptr: *const StringHeader,
-    b_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    let _ = string_from_header_or_throw(a_ptr);
-    let _ = string_from_header_or_throw(b_ptr);
-    js_path_win32_join_unchecked(a_ptr, b_ptr)
-}
-
 /// Result of splitting a win32 path into its root and remainder.
 ///
 /// The `prefix` is the "root" portion in Node's sense:
@@ -1796,6 +1711,9 @@ pub extern "C" fn js_path_win32_relative(
     parts.extend(to_segs[common..].iter().copied());
     string_to_js(&parts.join("\\"))
 }
+
+/// `path.join` over all of its arguments in one pass.
+pub(crate) mod join;
 
 /// NaN-boxed operand entry points (#7621) — see the child module's docs.
 pub mod value_args;
