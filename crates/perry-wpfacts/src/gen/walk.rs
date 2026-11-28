@@ -56,7 +56,7 @@ impl<'a> Gen<'a> {
             }
         }
         self.settle_rule_m(&modules, None);
-        self.ctor_phase_present(&modules);
+        self.ctor_phase_present(&modules, None);
         // The push-filled births (`push_fills`), with the birth lengths.
         if self.m.push_fills
             && self.m.rest_elems
@@ -873,8 +873,9 @@ impl<'a> Gen<'a> {
     /// for a chain of this program's classes that never leaks `this` before
     /// its keys are stored (no observer could delete one) and whose
     /// constructors return no value (`super()` binds `this` to the object
-    /// the parent constructed).
-    fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)]) {
+    /// the parent constructed). `only`: these classes (parents first) instead
+    /// of every derived one.
+    fn ctor_phase_present(&mut self, modules: &[(&str, &'a Module)], only: Option<&[TmplId]>) {
         let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -893,6 +894,7 @@ impl<'a> Gen<'a> {
             .keys()
             .copied()
             .filter(|&tm| self.m.tmpls[tm as usize].parent.is_some())
+            .filter(|tm| only.is_none_or(|o| o.contains(tm)))
             .collect();
         todo.sort_by_key(|&tm| (depth(&self.m, tm), tm));
         for tm in todo {
@@ -1016,9 +1018,24 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, off);
             }
         }
-        // The classes that reach a followed call with another method there.
+        self.m_override_leaks = self.override_leaks(&by_tm, &tms);
+    }
+
+    /// The classes that reach a followed call (`CtorPhase::m_calls`,
+    /// `s_calls`) of a parent constructor with another method there (rule M),
+    /// through the parent links as they stand.
+    fn override_leaks(
+        &self,
+        by_tm: &FxHashMap<TmplId, (usize, &'a Class)>,
+        tms: &[TmplId],
+    ) -> crate::pts::FxHashSet<TmplId> {
+        let defines = |c: &Class, k: &str| {
+            c.methods.iter().any(|m| m.name == k)
+                || c.getters.iter().any(|(n, _)| n == k)
+                || c.setters.iter().any(|(n, _)| n == k)
+        };
         let mut leaks = crate::pts::FxHashSet::default();
-        for &c in &tms {
+        for &c in tms {
             let mut seen: Vec<TmplId> = vec![c];
             let mut cur = self.m.tmpls[c as usize].parent;
             while let Some(p) = cur {
@@ -1035,7 +1052,7 @@ impl<'a> Gen<'a> {
                 cur = self.m.tmpls[p as usize].parent;
             }
         }
-        self.m_override_leaks = leaks;
+        leaks
     }
 
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
@@ -1090,6 +1107,33 @@ impl<'a> Gen<'a> {
                 let tm = self.mods[mi].classes[&c.name];
                 if self.value_parent_on_chain(tm) {
                     redo.push((tm, mi));
+                }
+            }
+        }
+        // SITEB4: before the solve a parent value not yet settled closed the
+        // phase at `super()` (`parent_pending`) and left the parent's keys
+        // out of the layout order, so every store of an inherited key was an
+        // out-of-order add. Settled, the chain is one of this program's
+        // classes: rule M (overrides seen through the settled links) and rule C
+        // (the parent chain's definite keys present after `super()`) run for
+        // these classes as they do for a class linked by name, parents first.
+        if !redo.is_empty() {
+            let mut by_tm: FxHashMap<TmplId, (usize, &'a Class)> = FxHashMap::default();
+            for mi in 0..modules.len() {
+                for c in self.classes_of(mi) {
+                    by_tm.insert(self.mods[mi].classes[&c.name], (mi, c));
+                }
+            }
+            let mut tms: Vec<TmplId> = by_tm.keys().copied().collect();
+            tms.sort_unstable();
+            let leaks = self.override_leaks(&by_tm, &tms);
+            self.m_override_leaks.extend(leaks);
+            let only: Vec<TmplId> = redo.iter().map(|&(tm, _)| tm).collect();
+            self.ctor_phase_present(&modules, Some(&only));
+            for &tm in &only {
+                let leaks = self.parent_chain_leaks(tm);
+                if let Some(ph) = self.ctor_phase.get_mut(&tm) {
+                    ph.parent_leaks = leaks;
                 }
             }
         }
