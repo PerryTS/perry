@@ -659,7 +659,9 @@ impl Model {
     /// this key again joins it.
     ///
     /// TERMINATES (no cap, no depth limit): keys are (root program call,
-    /// code position, finite discriminator, counts): a finite set; a join
+    /// code position, finite discriminator, counts): a finite set (a root
+    /// is a program call, a touch, `TOUCH_ROOT`, the first native call of
+    /// one, or the maker-chain root of a made call: MADEROOT); a join
     /// adds only edges between existing nodes: finitely many; no callee
     /// constraint is ever added twice. EXACT: the runs joined under one
     /// root only merge their value sets in the shared call (sound,
@@ -680,6 +682,17 @@ impl Model {
             // A protocol touch of a token a native model bore: one shared
             // root per code position (`touch_of_solver_born`).
             None if self.touch_of_solver_born(by) => TOUCH_ROOT,
+            // MADEROOT: a call a maker made (`made_root`: a callback call,
+            // a protocol step, a bound target) outside any run's own call
+            // is no program call site: nothing bounds how often a native
+            // runs for it (each join of its key feeds it again), so a run's
+            // own call per run would be a new root per run, without end
+            // (a thenable's `then` reached by an iterator's `next` keeps
+            // making timer and adoption roots). Its natives run under the
+            // root of its maker chain: the program call (or the runtime's
+            // touch) its first maker ran for, as its births are sited
+            // there (FRESHSITE R1, `made_site_root`).
+            None if self.made_root.contains_key(&by) => self.made_root[&by],
             None => {
                 // A program calls native run: its call is the runs own
                 // (its own this, arguments, result and callee), as a program
