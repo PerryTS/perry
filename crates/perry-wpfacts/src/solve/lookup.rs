@@ -1313,6 +1313,7 @@ impl Model {
         }
         self.numeric_accessor = true;
         let num = self.atom(NUM_KEY);
+        let nk = Key::Any(self.number_key_shape());
         let mut pending: Vec<_> = self
             .visits
             .iter()
@@ -1335,7 +1336,7 @@ impl Model {
             (origin, t, kind, n)
         });
         for (origin, t, act) in pending {
-            self.accessor_walk(origin, t, Key::any(), act);
+            self.accessor_walk(origin, t, nk, act);
         }
     }
 
@@ -1421,9 +1422,11 @@ impl Model {
         if self.idx_done.insert((cp, t, at, tag)) {
             self.cons(cp, Cons::PlainKey { origin, act });
             // An accessor under a numeric name (one under a computed key
-            // made the object's fields ⊤ already).
+            // made the object's fields ⊤ already). Rule NUM-ACC: only one
+            // a Number key may name (`number_key_shape`).
             if self.numeric_accessor {
-                self.accessor_walk(origin, t, Key::any(), act);
+                let nk = Key::Any(self.number_key_shape());
+                self.accessor_walk(origin, t, nk, act);
             } else {
                 let num = self.atom(NUM_KEY);
                 self.visits
@@ -1459,7 +1462,8 @@ impl Model {
     /// waits for it).
     pub(crate) fn index_accessors(&mut self, origin: Tok, t: Tok, act: ChainAct) {
         if self.numeric_accessor {
-            self.accessor_walk(origin, t, Key::any(), act);
+            let nk = Key::Any(self.number_key_shape());
+            self.accessor_walk(origin, t, nk, act);
         } else {
             let num = self.atom(NUM_KEY);
             self.visits
@@ -2636,6 +2640,7 @@ impl Model {
         let wildcard = self.atoms[key as usize] == crate::STAR_KEY;
         let numeric = self.numeric_accessor_key(key);
         let num = self.atom(NUM_KEY);
+        let nk = Key::Any(self.number_key_shape());
         let mut pending = Vec::new();
         for (&t, visits) in &self.visits {
             for &(origin, k, act) in visits {
@@ -2643,7 +2648,7 @@ impl Model {
                 if !matches!(act, ChainAct::Lookup { .. })
                     && (wildcard || k.is_any() || k == Key::Named(key) || numeric_read)
                 {
-                    pending.push((origin, t, if numeric_read { Key::any() } else { k }, act));
+                    pending.push((origin, t, if numeric_read { nk } else { k }, act));
                 }
             }
         }

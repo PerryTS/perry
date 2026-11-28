@@ -215,6 +215,7 @@ fn glob_number_prefix_is_exact() {
             globs: vec![vec![p.to_string(), String::new()]],
             free: Vec::new(),
             except: Vec::new(),
+            numeric: false,
         }
         .may_be_numeric()
     };
