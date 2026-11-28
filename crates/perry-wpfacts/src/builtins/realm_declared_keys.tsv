@@ -258,6 +258,7 @@ accessor	Object.prototype	__proto__	Object.prototype.__proto__.<get>	Object.prot
 accessor	Performance	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	Performance	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	Performance	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
+accessor	Performance.prototype	nodeTiming	Performance.prototype.nodeTiming.<get>
 accessor	Performance.prototype	timeOrigin	Performance.prototype.timeOrigin.<get>
 accessor	PerformanceEntry	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	PerformanceEntry	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
