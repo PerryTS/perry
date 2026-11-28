@@ -1704,6 +1704,8 @@ mod notunit6;
 mod notunit7;
 mod notunit9;
 mod prim_call;
+mod synth1;
+mod guardsound1;
 mod bns_recv;
 mod siteb1;
 mod builtin_ctor_number_key;

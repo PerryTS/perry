@@ -195,8 +195,16 @@ fn gs7_rejection_reaches_its_await_and_handlers() {
     let v = calls(GS7_K, "m");
     assert_eq!(v.len(), 3, "{v:?}");
     // Every catch and rejection reader also holds the runtime-error token
-    // (THROWN, gen.rs): the one other receiver is the builtin Error.
-    assert!(v.iter().all(|s| s.contains("builtin Error")), "{v:?}");
+    // (THROWN, gen.rs): the one other receiver is the builtin Error. A
+    // reader whose parameter is typed `B` is E0 (design 11.4: the entry
+    // guard admits B's instances only, SYNTH1); E0 is given only where the
+    // unguarded set is refused, so it too says the Error reaches it (a
+    // reader of B alone would be T0).
+    assert!(
+        v.iter().all(|s| s.contains("builtin Error") || s == "E0"),
+        "{v:?}"
+    );
+    assert!(v.iter().any(|s| s.contains("builtin Error")), "{v:?}");
 }
 
 // GLOBS9 (2026-11-17), R-HOSTREPORT: what a timer or microtask callback or a

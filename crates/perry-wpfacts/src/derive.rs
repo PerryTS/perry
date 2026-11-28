@@ -1684,13 +1684,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    // One instance token per class: the receiver an entry guard admits.
-    let mut class_tok: FxHashMap<TmplId, Tok> = FxHashMap::default();
+    // The receivers an entry guard `class_id(x) == C` admits: every token
+    // of C (GUARDSOUND1). A delete or defineProperty on one instance keeps
+    // its class id (no `[[Delete]]` path rewrites it) while it moves or
+    // drops the slot, so the guarded judgment takes each instance's own
+    // marks (hard, own keys, escape), not the template-wide mark
+    // Obj(C, NO_CTX) alone, which carries none of them.
+    let mut class_tok: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
     for (i, t) in m.toks.iter().enumerate() {
-        if let TokKind::Obj(tm, c) = t {
-            if *c == NO_CTX || !class_tok.contains_key(tm) {
-                class_tok.insert(*tm, i as Tok);
-            }
+        if let TokKind::Obj(tm, _) = t {
+            class_tok.entry(*tm).or_default().push(i as Tok);
         }
     }
     // One fact per read site: records of the same site (a body walked
@@ -1797,9 +1800,9 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 .filter(|g| g.windows(2).all(|w| w[0] == w[1]))
                 .and_then(|g| g.first().copied())
             {
-                if let Some(&it) = class_tok.get(&tm) {
+                if let Some(its) = class_tok.get(&tm) {
                     let (r2, _, v2, f2, t2) =
-                        judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
+                        judge(m, &by_id, &runtime, s, &key, its, 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
                         if m.stop_top.is_some() {
                             // TOPSTOP2: what the unguarded set held (the
@@ -5035,6 +5038,38 @@ fn lookup_holders(
     let mut out = Vec::new();
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut todo = vec![t];
+    // SYNTH1: a class's template-wide token (`Obj(C, NO_CTX)`, a mark the
+    // field-init walk makes, `gen/walk.rs`) that no lookup of the solve
+    // took as a receiver has no prototype node: it is no object of its own.
+    // As the entry guard's receiver (`class_tok`, design §11.4) it stands
+    // for every instance of exactly C, and OrdinaryGet (10.1.8.1) climbs
+    // from each of them: the walk starts at C's instance tokens. One that
+    // may own the key (a computed or named own property, a hard operation
+    // on it) or whose prototype the solve never made is refused.
+    if let TokKind::Obj(tm, NO_CTX) = m.toks[t as usize] {
+        let insts = m.site_toks.get(&tm).map_or(&[][..], |v| v.as_slice());
+        if !m.proto_node.contains_key(&t)
+            && matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. })
+            && !insts.is_empty()
+        {
+            todo.clear();
+            for &u in insts {
+                if computed(u) {
+                    return Err("a computed key may hold it".into());
+                }
+                if holds(u).is_some() {
+                    return Err("key not a definite birth field".into());
+                }
+                if let Some((k, r)) = m.hard.get(&u) {
+                    return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));
+                }
+                if !m.proto_node.contains_key(&u) {
+                    return Err("method not found on the chain".into());
+                }
+                todo.push(u);
+            }
+        }
+    }
     while let Some(h) = todo.pop() {
         // A prototype set that may hold `null` (`x.__proto__ = null`,
         // `Object.setPrototypeOf(x, null)`, `Object.create(null)`: 10.1.2.1)
