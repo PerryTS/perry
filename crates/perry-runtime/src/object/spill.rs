@@ -315,6 +315,62 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
     }
 }
 
+/// Does `src` hold a value at every spill position `from..to` (the keys of
+/// its layout past the live inline bound)? [`spill_copy_into_fresh`]'s
+/// precondition. Reads only.
+pub(crate) unsafe fn spill_positions_present(
+    src: *const ObjectHeader,
+    from: usize,
+    to: usize,
+) -> bool {
+    to <= SPILL_MAX_FIELD_INDEX && (from..to).all(|i| spill_get_present(src as usize, i).is_some())
+}
+
+/// A structural spread result's spill (`spread::structural`): `dst` is a
+/// fresh object born on `src`'s layout word, with no meta record yet. It
+/// gets its own buffer holding `src`'s spill words `from..to`, plus room for
+/// the `tail` keys the literal defines after the spread (they take positions
+/// `to..`, so their stores stay in capacity). The positions below `from` and
+/// the tail stay holes. The words are copied as one block and the buffer's
+/// element layout is derived once from them, each word with its generational
+/// barrier. The caller holds a `GcSuppressScope`, so neither object moves,
+/// and checked [`spill_positions_present`].
+pub(crate) unsafe fn spill_copy_into_fresh(
+    dst: *mut ObjectHeader,
+    src: *const ObjectHeader,
+    from: usize,
+    to: usize,
+    tail: usize,
+) {
+    object_meta_ensure(crate::meta_obj_runtime_born!(dst), MetaReason::Spill);
+    let width =
+        u32::try_from(to.saturating_add(tail).min(SPILL_MAX_FIELD_INDEX)).unwrap_or(to as u32);
+    let spill = crate::array::js_array_alloc_with_length_exact(width);
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(dst, to));
+    (*meta).spill = spill as u64;
+    crate::gc::runtime_write_barrier_slot(
+        meta as usize,
+        &(*meta).spill as *const _ as usize,
+        spill as u64,
+    );
+    let src_meta = crate::meta_read!(crate::meta_obj_from_storage!(src as *mut _, to));
+    let words = spill_elements((*src_meta).spill as *const crate::array::ArrayHeader);
+    let elements = spill_elements(spill);
+    // GC_STORE_AUDIT(INIT): unpublished fresh spill under the caller's
+    // suppression; its layout and barriers follow from the copied words.
+    std::ptr::copy_nonoverlapping(words.add(from), elements.add(from), to - from);
+    super::rebuild_array_layout_from_slots(spill);
+    if !crate::arena::pointer_in_old_gen(spill as usize) {
+        for i in from..to {
+            crate::gc::runtime_write_barrier_slot(
+                spill as usize,
+                elements.add(i) as usize,
+                *elements.add(i),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) type SpillSafepointHook = fn(usize);
 

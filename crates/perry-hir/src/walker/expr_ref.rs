@@ -730,12 +730,10 @@ where
         }
         Expr::FsWriteFileSync(a, b)
         | Expr::FsAppendFileSync(a, b)
-        | Expr::PathJoin(a, b)
         | Expr::PathRelative(a, b)
         | Expr::PathBasenameExt(a, b)
         | Expr::PathMatchesGlob(a, b)
         | Expr::PathResolveJoin(a, b)
-        | Expr::PathWin32Join(a, b)
         | Expr::ObjectGetOwnPropertyDescriptor(a, b)
         | Expr::ObjectIs(a, b)
         | Expr::ObjectHasOwn(a, b)
@@ -848,7 +846,7 @@ where
                 f(e);
             }
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for e in args {
                 f(e);
             }

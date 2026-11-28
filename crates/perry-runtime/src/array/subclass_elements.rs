@@ -167,6 +167,17 @@ pub(crate) unsafe fn backed(addr: usize) -> Option<(*mut ObjectHeader, *mut Arra
     } else {
         addr
     };
+    backed_raw(raw)
+}
+
+/// [`backed`] of an address that is already a raw user pointer (never a
+/// NaN-box): the same classification without the tag strip, for callers
+/// that hold an object pointer.
+///
+/// # Safety
+/// `raw` is a raw user pointer; it is classified before any dereference.
+#[inline]
+pub(crate) unsafe fn backed_raw(raw: usize) -> Option<(*mut ObjectHeader, *mut ArrayHeader)> {
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
     if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0

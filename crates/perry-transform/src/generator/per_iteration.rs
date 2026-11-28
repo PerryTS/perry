@@ -156,7 +156,12 @@ fn analyze_loop(
         }
     }
 
-    classify_block(loop_body(loop_stmt), &block_scoped, out);
+    classify_block(
+        loop_body(loop_stmt),
+        &block_scoped,
+        suspends.then_some(&inside),
+        out,
+    );
 }
 
 /// Classify the `Stmt::Let`s of one block inside a loop.
@@ -168,22 +173,59 @@ fn analyze_loop(
 fn classify_block(
     block: &[Stmt],
     block_scoped: &dyn Fn(LocalId) -> bool,
+    suspending_loop_refs: Option<&HashMap<LocalId, usize>>,
     out: &mut HashSet<LocalId>,
 ) {
+    let block_refs = SuspendingBlockRefs::new(block, suspending_loop_refs);
     for (i, stmt) in block.iter().enumerate() {
         if let Stmt::Let { id, init, .. } = stmt {
             // A `let __tmp = yield …;` IS the state split: the linearizer
             // assigns it in the resumed state, so it must stay a boxed
             // cross-state local.
             let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
-            if !splits_state && block_scoped(*id) && !used_after_suspend(*id, &block[i + 1..]) {
+            if !splits_state
+                && block_scoped(*id)
+                && !may_need_persistent_binding(*id, &block[i + 1..], block_refs.as_ref())
+            {
                 out.insert(*id);
             }
         }
         if !is_loop(stmt) {
-            each_child_stmt_list(stmt, &mut |list| classify_block(list, block_scoped, out));
+            each_child_stmt_list(stmt, &mut |list| {
+                classify_block(list, block_scoped, suspending_loop_refs, out);
+            });
         }
     }
+}
+
+struct SuspendingBlockRefs<'a> {
+    loop_refs: &'a HashMap<LocalId, usize>,
+    block_refs: HashMap<LocalId, usize>,
+}
+
+impl<'a> SuspendingBlockRefs<'a> {
+    fn new(block: &[Stmt], loop_refs: Option<&'a HashMap<LocalId, usize>>) -> Option<Self> {
+        let loop_refs = loop_refs?;
+        let mut block_refs = HashMap::new();
+        count_local_refs_stmts(block, &mut block_refs);
+        Some(Self {
+            loop_refs,
+            block_refs,
+        })
+    }
+}
+
+/// Lowered destructuring can declare a binding inside an iterator cleanup
+/// try and use it in the enclosing loop. The declaring block cannot prove an
+/// outside use precedes suspension. Both passes must make the same decision:
+/// a persistent mutable capture needs a fresh cell, not an activation-wide box.
+fn may_need_persistent_binding(
+    id: LocalId,
+    rest: &[Stmt],
+    refs: Option<&SuspendingBlockRefs<'_>>,
+) -> bool {
+    refs.is_some_and(|refs| refs.loop_refs.get(&id) != refs.block_refs.get(&id))
+        || used_after_suspend(id, rest)
 }
 
 /// Is `id` read at or after a suspend point in `rest` (the statements that
@@ -819,7 +861,7 @@ fn count_decl_sites(stmts: &[Stmt], out: &mut HashMap<LocalId, usize>) {
 // so those passes see the cell form.
 
 /// Loop-body block-scoped `let` bindings that (a) some closure in the loop lists
-/// in its `mutable_captures` and (b) are live across a suspend inside the loop.
+/// in its `mutable_captures` and (b) may be live across a suspend inside the loop.
 /// These are exactly the bindings #6345 leaves collapsed: read-only captures are
 /// snapshotted, and bindings whose live range stays in one state keep their
 /// per-iteration declaration, so neither path covers a written binding that also
@@ -925,26 +967,34 @@ fn analyze_written_loop(
         decl_sites.get(&id).copied().unwrap_or(0) == 1
             && total.get(&id).copied().unwrap_or(0) == inside.get(&id).copied().unwrap_or(0)
     };
-    classify_written_block(loop_body(loop_stmt), &block_scoped, mutably_captured, out);
+    classify_written_block(
+        loop_body(loop_stmt),
+        &block_scoped,
+        loop_contains_suspend(loop_stmt).then_some(&inside),
+        mutably_captured,
+        out,
+    );
 }
 
 /// Mirror of `classify_block`, but selecting the bindings part 2 CANNOT fix: a
 /// block-scoped loop-body `let` that some closure writes (`mutably_captured`)
-/// and that is read at or after a suspend following its declaration. Descends
-/// through non-loop nesting; nested loops are reached by `scan_written_loops`.
+/// and that may need persistent storage. Descends through non-loop nesting;
+/// nested loops are reached by `scan_written_loops`.
 fn classify_written_block(
     block: &[Stmt],
     block_scoped: &dyn Fn(LocalId) -> bool,
+    suspending_loop_refs: Option<&HashMap<LocalId, usize>>,
     mutably_captured: &HashSet<LocalId>,
     out: &mut HashSet<LocalId>,
 ) {
+    let block_refs = SuspendingBlockRefs::new(block, suspending_loop_refs);
     for (i, stmt) in block.iter().enumerate() {
         if let Stmt::Let { id, init, .. } = stmt {
             let splits_state = init.as_ref().is_some_and(expr_contains_suspend);
             if !splits_state
                 && mutably_captured.contains(id)
                 && block_scoped(*id)
-                && used_after_suspend(*id, &block[i + 1..])
+                && may_need_persistent_binding(*id, &block[i + 1..], block_refs.as_ref())
             {
                 out.insert(*id);
             }
@@ -969,7 +1019,13 @@ fn classify_written_block(
         }
         if !is_loop(stmt) {
             each_child_stmt_list(stmt, &mut |list| {
-                classify_written_block(list, block_scoped, mutably_captured, out)
+                classify_written_block(
+                    list,
+                    block_scoped,
+                    suspending_loop_refs,
+                    mutably_captured,
+                    out,
+                )
             });
         }
     }
@@ -1532,6 +1588,7 @@ mod tests {
     ) -> Vec<Stmt> {
         let (x, read) = (X, 3);
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 900,
             params: Vec::new(),

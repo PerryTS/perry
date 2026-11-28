@@ -65,8 +65,9 @@ pub unsafe extern "C" fn js_bun_http_request_from_json(snapshot_ptr: *const Stri
         keepalive: false,
         duplex: "half".to_string(),
         signal,
-        cached_headers_id: None,
+        cached_headers: 0,
         body_error: None,
+        read_body_stream_id: None,
     };
     gc::ensure_gc_registered();
     REQUEST_REGISTRY.lock().unwrap().insert(id, record);

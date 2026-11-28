@@ -2,9 +2,9 @@
 //! makes an ordinary object or, by ToObject (7.1.18), a wrapper of the
 //! value's kind, whose [[Prototype]] is `String`/`Number`/`Boolean`/
 //! `Symbol`/`BigInt.prototype`. The runtime realm declares those
-//! prototypes' own keys exactly: none of them, nor `Object.prototype`,
-//! holds `@@toPrimitive` (the runtime's `Symbol.prototype` holds
-//! `constructor`, `toString`, `valueOf` only), so its [[Get]] reads
+//! prototypes' own keys exactly: of them and `Object.prototype`, only
+//! `Symbol.prototype` holds `@@toPrimitive`, a named native that reads no
+//! member of its receiver (20.4.3.5). Elsewhere its [[Get]] reads
 //! `undefined` (10.1.8.1) and ToPrimitive (7.1.1) of an object whose
 //! [[Prototype]] is such a wrapper goes on to `valueOf`/`toString`, the
 //! named natives of the prototypes the wrapper may have: the object reaches

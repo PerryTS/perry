@@ -42,7 +42,17 @@ export function exposed(n: number): number {
   for (let r = 0; r < n; r++) for (let i = 0; i < 16; i++) s += a[i];
   return s;
 }
-console.log(escaped(3), exposed(3));
+function detachKept() { sink.buffer.transfer(); }
+const detachDyn: any = detachKept;
+export function detachedLater(n: number): number {
+  const a = new Float64Array(16);
+  for (let i = 0; i < 16; i++) a[i] = i * 0.5;
+  dyn(a);
+  let s = 0;
+  for (let i = 0; i < n; i++) { if (i === 4) detachDyn(); s += a[i]; }
+  return s;
+}
+console.log(escaped(3), exposed(3), detachedLater(8));
 "#;
 
 /// The body of the first `define` whose symbol contains `needle`.
@@ -108,6 +118,22 @@ fn a_demoted_view_reads_through_the_guarded_inline_load() {
     assert!(
         !escaped.contains("@js_typed_array_get("),
         "escaped(): a read still fell to js_typed_array_get:\n{escaped}"
+    );
+}
+
+/// The callee keeps the array and detaches its buffer between two reads; the
+/// values (undefined, length 0) are compared against node by
+/// `tests/parity/language/typed-array/test_gap_escaped_view_detach_between_reads.ts`.
+/// This pins that those reads are the guarded load, which re-reads the header
+/// at every access.
+#[test]
+fn a_view_detached_by_its_callee_reads_through_the_guarded_load() {
+    let ir = compile_ir();
+    let detached = function_body(&ir, "dvread_ts__detachedLater")
+        .unwrap_or_else(|| panic!("no detachedLater() in:\n{ir}"));
+    assert!(
+        detached.contains("ctaf.get.load"),
+        "detachedLater(): the reads did not take the guarded load:\n{detached}"
     );
 }
 

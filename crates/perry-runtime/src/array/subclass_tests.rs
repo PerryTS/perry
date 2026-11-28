@@ -1120,3 +1120,62 @@ fn retiring_a_packed_numeric_proof_reports_only_the_call_that_did_it() {
     );
     let _ = epoch_before;
 }
+
+/// ChainDesc (sabotage a): a prototype marked while empty takes the
+/// cache-carried tail transition (subclass.rs fast pop/push ->
+/// install_cached) on every round; its desc must follow each one: the popped
+/// index key leaves it, the pushed one enters it.
+#[test]
+fn chain_desc_follows_a_marked_prototypes_cached_tail_transitions() {
+    use crate::object::layout_probe::chain_glue as g;
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::object::array_tail_transition::test_clear();
+    let class_id = 0x0074_8711;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    crate::node_stream::js_array_subclass_init(receiver, 0.0);
+    unsafe { crate::object::proto_validity::mark_object_as_prototype(obj as usize) };
+    for value in [11.0, 22.0, 33.0] {
+        js_array_push_f64(obj as *mut ArrayHeader, value);
+    }
+    let agrees = |stage: &str, before: &[(u64, u64)]| unsafe {
+        let (why, now) = g::test_fresh_own_keys(obj);
+        assert_eq!(why, 0, "{stage}: the node is not listed (check {why})");
+        assert!(!now.is_empty(), "{stage}: no own keys");
+        for &(k, h) in &now {
+            assert!(
+                g::test_desc_holds(obj, k, h),
+                "{stage}: desc lacks own key {k:#x}"
+            );
+        }
+        for &(k, h) in before.iter().filter(|x| !now.contains(x)) {
+            assert!(
+                !g::test_desc_holds(obj, k, h),
+                "{stage}: desc still holds removed key {k:#x}"
+            );
+        }
+        now
+    };
+    crate::object::shapes::test_watch_cached_transition_stamps(obj as usize);
+    let mut keys = agrees("pushed", &[]);
+    for round in 0..3 {
+        assert!(
+            array_subclass_fast_pop(receiver).is_some(),
+            "round {round}: fast pop declined"
+        );
+        keys = agrees("after pop", &keys);
+        assert!(
+            array_subclass_fast_push_one(receiver, 44.0 + f64::from(round)).is_some(),
+            "round {round}: fast push declined"
+        );
+        keys = agrees("after push", &keys);
+    }
+    assert!(
+        crate::object::shapes::test_cached_transition_stamps() > 0,
+        "the rounds never took the cache-carried transition"
+    );
+    crate::object::shapes::test_reset_cached_transition_stamps();
+}

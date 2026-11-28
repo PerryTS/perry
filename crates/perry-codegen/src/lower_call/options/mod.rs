@@ -45,8 +45,8 @@ pub(in crate::lower_call) fn raw_string_ptr_of(ctx: &mut FnCtx<'_>, v: &str) -> 
         .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, v)])
 }
 
-/// Build a Headers handle from an inline object literal `{ "k": "v", ... }`.
-/// Returns the f64 handle (raw numeric, not NaN-boxed).
+/// Build a Headers object from an inline object literal `{ "k": "v", ... }`.
+/// Returns the boxed object.
 pub(in crate::lower_call) fn build_headers_from_object(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
@@ -55,20 +55,18 @@ pub(in crate::lower_call) fn build_headers_from_object(
         let h = ctx.block().call(DOUBLE, "js_headers_new", &[]);
         let h_root = group.adopt_emitted(ctx, Repr::Boxed, &h, !props.is_empty());
         for (k, vexpr) in props {
-            let key_expr = Expr::String(k.clone());
-            // #11789 sweep: the value is evaluated (and coerced -- a
-            // `toString()` is user code) BEFORE the key's raw pointer is taken.
-            let value = lower_expr(ctx, vexpr)?;
-            let val_ptr = ctx
-                .block()
-                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
-            let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
+            // Both operands reach `js_headers_set` boxed: the value's
+            // coercion (a `toString()` is user code) runs there, with the
+            // Headers object rooted, never across a raw address (#11789).
+            let pair = [Expr::String(k.clone()), vexpr.clone()];
+            let (kv, pair_group) = crate::lower_call::lower_call_args_rooted(ctx, &pair)?;
             let h = group.reread_emitted(ctx, h_root);
             ctx.block().call(
                 DOUBLE,
                 "js_headers_set",
-                &[(DOUBLE, &h), (I64, &key_ptr), (I64, &val_ptr)],
+                &[(DOUBLE, &h), (DOUBLE, &kv[0]), (DOUBLE, &kv[1])],
             );
+            pair_group.release(ctx);
         }
         Ok(group.reread_emitted(ctx, h_root))
     })

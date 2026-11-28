@@ -34,6 +34,7 @@ pub fn emit(out: &Path) {
                     format!("super::callable_exports::nm_attach_{name}")
                 }
                 "worker_threads" => "super::constructor_shapes::nm_attach_worker".to_string(),
+                "process" => "super::callable_exports::nm_attach_process".to_string(),
                 "v8" => "crate::node_v8::attach_v8_constructor".to_string(),
                 _ => "no_decoration".to_string(),
             };
@@ -195,6 +196,12 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             format!("{module}.{property}"),
             format!("{module}/{property}"),
         ];
+        // `path.posix` / `path.win32` is `path` itself on the host whose
+        // flavor it is (`normalize_native_module_alias`): its members are
+        // `path`'s.
+        if module == "path" && matches!(property, "posix" | "win32") {
+            child_modules.push("path".to_string());
+        }
         // WebCrypto owns SubtleCrypto; the latter's declaration uses the
         // canonical crypto.subtle name, also exposed directly by node:crypto.
         if (module, property) == ("crypto", "webcrypto") {

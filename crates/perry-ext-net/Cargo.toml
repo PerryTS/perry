@@ -27,6 +27,10 @@ rustls-pemfile.workspace = true
 # Reuse the workspace's DER parser to distinguish self-signed rejection causes.
 x509-cert = { version = "0.3", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+# `dns.ADDRCONFIG` and IPv6 zone names for `connect`'s `lookup` answers.
+libc.workspace = true
+
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 rustls-native-certs = "0.8"
 

@@ -257,8 +257,35 @@ pub fn runtime_installer_callees(installs: &FeatureInstalls) -> Vec<String> {
         FeatureInstalls::Selected(features) => RUNTIME_INSTALLS
             .iter()
             .filter(|(_, triggers)| triggers.iter().any(|t| features.contains(*t)))
-            .map(|(symbol, _)| (*symbol).to_string())
+            .map(|(symbol, _)| installer_symbol(symbol))
             .collect(),
+    }
+}
+
+/// The diagnostics install as [`RUNTIME_INSTALLS`] names it.
+const DIAGNOSTICS_INSTALL_SYMBOL: &str = "js_runtime_install_diagnostics";
+
+/// The entry point the installer calls for a [`RUNTIME_INSTALLS`] symbol: the
+/// symbol itself, except that a compile with a GC collector diagnostics knob
+/// on (`gc_collector_diagnostics_requested`) calls the diagnostics install
+/// that also selects the diagnostic collector body from the first collection
+/// (perry-runtime `js_runtime_install_gc_diagnostics`). The plain install
+/// selects it at the program's first heap snapshot or `process.report`.
+fn installer_symbol(symbol: &str) -> String {
+    installer_symbol_for(
+        symbol,
+        crate::commands::compile::gc_collector_diagnostics_requested(),
+    )
+    .to_string()
+}
+
+/// [`installer_symbol`] for a known knob state: the one place that names the
+/// diagnostics install's variant.
+fn installer_symbol_for(symbol: &str, gc_collector_diagnostics: bool) -> &str {
+    if symbol == DIAGNOSTICS_INSTALL_SYMBOL && gc_collector_diagnostics {
+        "js_runtime_install_gc_diagnostics"
+    } else {
+        symbol
     }
 }
 
@@ -352,7 +379,7 @@ fn callees_by_fact(
     let mut never = 0;
     let mut callees = Vec::new();
     for (symbol, _) in RUNTIME_INSTALLS {
-        let selected = detector.iter().any(|d| d == symbol);
+        let selected = detector.iter().any(|d| *d == installer_symbol(symbol));
         let family = RUNTIME_FAMILIES
             .iter()
             .find(|f| install_symbol(f) == *symbol && FACT_LINKED_FAMILIES.contains(&f.id));
@@ -367,7 +394,7 @@ fn callees_by_fact(
             None => selected,
         };
         if wanted {
-            callees.push((*symbol).to_string());
+            callees.push(installer_symbol(symbol));
         }
     }
     (callees, never)
@@ -721,9 +748,13 @@ mod tests {
                 .strip_prefix("pub extern \"C\" fn js_runtime_install_")
             {
                 let symbol = format!("js_runtime_install_{}", rest.split('(').next().unwrap());
+                // A listed install, or the variant the installer calls for
+                // one of them (`installer_symbol_for`).
                 assert!(
                     symbol == RUNTIME_INSTALL_COMPILED_SYMBOL
-                        || RUNTIME_INSTALLS.iter().any(|(s, _)| *s == symbol),
+                        || RUNTIME_INSTALLS.iter().any(|(s, _)| {
+                            *s == symbol || installer_symbol_for(s, true) == symbol
+                        }),
                     "perry-runtime defines {symbol} but RUNTIME_INSTALLS does not list it"
                 );
             }

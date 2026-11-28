@@ -102,6 +102,7 @@ pub(super) fn register_noalias_buffer_view(
             native_owned,
             pointer_state: BufferViewPointerState::Stable,
             storage_inline_proven: init.storage_inline_proven && (sealed || late),
+            inline_until_exposed: false,
             // Invariant only while nothing can ever detach it: a late view's
             // length must not be carried past its exposing statement. Arena
             // views carry their own length slot.
@@ -185,7 +186,9 @@ pub(crate) fn late_exposure_limit(ctx: &FnCtx<'_>, stmts: &[perry_hir::Stmt], i:
 /// `.buffer` may have been observed (rebinding the storage) and the buffer
 /// detached (length 0).
 fn distrust_view(ctx: &mut FnCtx<'_>, id: u32) {
+    let mut was_inline = false;
     if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(id) {
+        was_inline = view.storage_inline_proven;
         view.length_source = Some(LengthSource::Unknown);
         view.storage_inline_proven = false;
         view.length_fixed = false;
@@ -201,6 +204,10 @@ fn distrust_view(ctx: &mut FnCtx<'_>, id: u32) {
         id,
         crate::native_value::MaterializationReason::MutableAlias,
     );
+    // Set after the invalidation, which clears it.
+    if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(id) {
+        view.inline_until_exposed = was_inline;
+    }
 }
 
 /// A constructor argument that is a literal element count (or absent) proves

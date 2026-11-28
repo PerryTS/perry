@@ -97,8 +97,8 @@ fn control_program_object_mixed_in() {
     assert!(none(&at(&pf, "ior", false), "OwnDataOrAbsent"));
 }
 
-/// Unknown code holds the realm and the value: it may define an accessor
-/// on the object or set its prototype, and String.prototype takes adds.
+/// Control: unknown code is handed the value: it may define an accessor on
+/// the object or set its prototype.
 #[test]
 fn control_held_realm_and_escape() {
     let pf = one(&format!(
@@ -108,7 +108,10 @@ fn control_held_realm_and_escape() {
     let pf = one(&format!(
         "{C}{HOLD}const o: any = JSON.parse(s);\nconst e: any = o.extensions;\nconsole.log(e.ior);\n"
     ));
-    assert!(none(&at(&pf, "ior", false), "OwnDataOrAbsent"));
+    // K8 (owner 2026-11-23): the unknown call holds no realm in whole-program
+    // mode, and P-N1: it writes no intrinsic. A parse value nothing hands on
+    // keeps its own-data-or-absent read.
+    assert!(!none(&at(&pf, "ior", false), "OwnDataOrAbsent"));
 }
 
 /// A reviver's results are stored in the tree (25.5.1.1

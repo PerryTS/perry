@@ -1,0 +1,1 @@
+Node's internal (`ERR_*`) errors print `Name [CODE]: message` in their stack, `toString()` and `util.inspect` headline, as Node does; system errors, errors Node raises from its C++ layer (an invalid URL) and user errors with an assigned `code` keep the plain head.

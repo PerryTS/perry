@@ -320,6 +320,7 @@ fn born_wide_factory_uses_return_shape_fact() {
 
 fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2002,
         params: vec![],
@@ -376,6 +377,7 @@ fn born_wide_constfn_final_preserves_reserved_capacity() {
     let module = method_fixture();
     let mut options = super::super::class_field_barrier_tests::ir_opts();
     options.output_type = "executable".into();
+    options.target = Some("x86_64-unknown-linux-gnu".into());
     let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
     let finals: Vec<_> = births
         .iter()

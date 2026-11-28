@@ -101,41 +101,36 @@ pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
 pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f64 {
     ensure_gc_registered();
     let id = stream_id(stream_handle);
-    let mut g = WRITABLE_STREAMS.lock().unwrap();
-    let s = match g.get_mut(&id) {
-        Some(s) => s,
-        None => return f64::from_bits(TAG_UNDEFINED),
-    };
-    if s.writer_handle.is_some() {
-        drop(g);
-        throw_type_error("WritableStream is locked");
+    match acquire_writer(WsRef(id)) {
+        Ok(writer) => writer.value(),
+        Err(AcquireError::Locked) => throw_type_error("WritableStream is locked"),
+        Err(AcquireError::Missing) => f64::from_bits(TAG_UNDEFINED),
     }
-    let writer_id = next_stream_id();
-    s.writer_handle = Some(writer_id);
-    let closed_p = s.closed_promise;
-    let ready_p = s.ready_promise;
-    drop(g);
-    WRITERS.lock().unwrap().insert(
-        writer_id,
-        WriterData {
-            props: Default::default(),
-            stream_handle: id,
-            locked: true,
-            closed_promise: closed_p,
-            ready_promise: ready_p,
-        },
-    );
-    stream_value(writer_id)
+}
+
+/// AcquireWritableStreamDefaultWriter: mint a writer record locked to `w`
+/// (getWriter() and pipeTo share it).
+pub(super) fn acquire_writer(w: WsRef) -> Result<WriterRef, AcquireError> {
+    let (closed_p, ready_p, writer) = {
+        let Some(mut rec) = ws_rec(w) else {
+            return Err(AcquireError::Missing);
+        };
+        let s = &mut *rec;
+        if s.writer_handle.is_some() {
+            return Err(AcquireError::Locked);
+        }
+        let writer = WriterRef(next_stream_id());
+        s.writer_handle = Some(writer.0);
+        (s.closed_promise, s.ready_promise, writer)
+    };
+    insert_writer(writer, WriterData::new(w.0, closed_p, ready_p));
+    Ok(writer)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
     let id = stream_id(stream_handle);
-    let g = WRITABLE_STREAMS.lock().unwrap();
-    let locked = g
-        .get(&id)
-        .map(|s| s.writer_handle.is_some())
-        .unwrap_or(false);
+    let locked = with_ws(WsRef(id), |s| s.writer_handle.is_some()).unwrap_or(false);
     f64::from_bits(if locked { TAG_TRUE } else { TAG_FALSE })
 }
 
@@ -144,8 +139,7 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
     let promise = js_promise_new();
     let id = stream_id(stream_handle);
     let start_close = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&id) {
+        match ws_rec(WsRef(id)).as_deref_mut() {
             Some(s) => match s.state {
                 WritableState::Writable => {
                     s.state = WritableState::Closing;
@@ -175,7 +169,11 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
         }
     };
     if start_close {
+        // The close runs the sink's close() (JS): root the promise across it.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = scope.root_raw_mut_ptr(promise);
         finish_writable_close(id);
+        return held.get_raw_mut_ptr();
     }
     promise
 }
@@ -194,12 +192,18 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
     let id = stream_id(stream_handle);
     let reason_bits = reason.to_bits();
     let mut locked_reject = false;
+    let mut already_terminal = false;
     let (cb, closed_p, close_request) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&id) {
+        match ws_rec(WsRef(id)).as_deref_mut() {
             Some(s) => {
                 if !allow_locked && s.writer_handle.is_some() {
                     locked_reject = true;
+                    (0, std::ptr::null_mut(), std::ptr::null_mut())
+                } else if matches!(s.state, WritableState::Closed | WritableState::Errored) {
+                    // WritableStreamAbort steps 2-3: a closed or errored stream
+                    // keeps its state and stored error; its sink (whose
+                    // algorithms the close/abort cleared) is not consulted.
+                    already_terminal = true;
                     (0, std::ptr::null_mut(), std::ptr::null_mut())
                 } else {
                     s.state = WritableState::Errored;
@@ -217,17 +221,38 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
         reject_type_error(promise, "Invalid state: WritableStream is locked");
         return promise;
     }
-    let action = if cb != 0 {
-        match try_call_stream_action(cb, reason) {
-            Ok(result) => stream_action_promise(result),
-            Err(error) => {
-                js_promise_reject(promise, f64::from_bits(error));
-                None
-            }
-        }
+    if already_terminal {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+        return promise;
+    }
+    // The sink's abort() is JS: root what the frame still settles after it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_promise = scope.root_raw_mut_ptr(promise);
+    let held_closed = scope.root_raw_mut_ptr(closed_p);
+    let held_close_request = scope.root_raw_mut_ptr(close_request);
+    let held_reason = scope.root_nanbox_f64(reason);
+    let called = if cb != 0 {
+        Some(try_call_stream_action(cb, reason))
     } else {
         None
     };
+    let promise = held_promise.get_raw_mut_ptr::<Promise>();
+    let closed_p = held_closed.get_raw_mut_ptr::<Promise>();
+    let close_request = held_close_request.get_raw_mut_ptr::<Promise>();
+    let reason = held_reason.get_nanbox_f64();
+    let action = match called {
+        Some(Ok(result)) => stream_action_promise(result),
+        Some(Err(error)) => {
+            js_promise_reject(promise, f64::from_bits(error));
+            None
+        }
+        None => None,
+    };
+    // [[AbortSteps]]: the abort algorithm ran, ClearAlgorithms. On a
+    // TransformStream's writable side this is the sink abort algorithm
+    // (abort, readable cancel, terminate), which clears the transformer too.
+    writable_clear_algorithms(id);
+    transform_clear_algorithms(id);
     if !closed_p.is_null() {
         js_promise_reject(closed_p, reason);
     }
@@ -258,7 +283,7 @@ fn writable_desired_size(s: &WritableStreamData) -> f64 {
 }
 
 fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Promise) {
-    if let Some(w) = WRITERS.lock().unwrap().get_mut(&writer_id) {
+    if let Some(w) = writer_rec(WriterRef(writer_id)).as_deref_mut() {
         if w.stream_handle == stream_id {
             w.ready_promise = ready;
         }
@@ -267,7 +292,7 @@ fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Pro
 
 pub(super) unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
     let ready = internal_promise();
-    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+    if let Some(s) = ws_rec(WsRef(stream_id)).as_deref_mut() {
         s.ready_promise = ready;
     }
     sync_writer_ready_promise(stream_id, writer_id, ready);
@@ -450,8 +475,7 @@ unsafe fn attach_writable_close_handlers(
 
 unsafe fn finish_writable_close(stream_id: usize) {
     let (cb, close_promise) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref_mut() {
             Some(s) if s.state == WritableState::Closing => {
                 if s.in_flight || !s.write_queue.is_empty() || s.close_started {
                     return;
@@ -463,11 +487,20 @@ unsafe fn finish_writable_close(stream_id: usize) {
         }
     };
 
+    // WritableStreamDefaultControllerProcessClose: call the close algorithm,
+    // then ClearAlgorithms, whatever its outcome.
     if cb == 0 {
+        writable_clear_algorithms(stream_id);
         finish_writable_close_success(stream_id, close_promise);
         return;
     }
-    let result = match try_call_writable_close(cb) {
+    // The sink's close() is JS: root the close request promise across it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_close = scope.root_raw_mut_ptr(close_promise);
+    let result = try_call_writable_close(cb);
+    let close_promise = held_close.get_raw_mut_ptr::<Promise>();
+    writable_clear_algorithms(stream_id);
+    let result = match result {
         Ok(result) => result,
         Err(reason) => {
             finish_writable_close_error(stream_id, close_promise, f64::from_bits(reason));
@@ -484,8 +517,7 @@ unsafe fn finish_writable_close(stream_id: usize) {
 
 unsafe fn finish_writable_close_success(stream_id: usize, promise: *mut Promise) {
     let (ready, closed) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref_mut() {
             Some(s) => {
                 s.state = WritableState::Closed;
                 s.close_request_promise = std::ptr::null_mut();
@@ -511,8 +543,7 @@ unsafe fn finish_writable_close_success(stream_id: usize, promise: *mut Promise)
 
 unsafe fn finish_writable_close_error(stream_id: usize, promise: *mut Promise, reason: f64) {
     let (ready, closed) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref_mut() {
             Some(s) => {
                 s.state = WritableState::Errored;
                 s.error_value = reason.to_bits();
@@ -548,7 +579,13 @@ pub(super) unsafe fn run_writable_write(
         finish_writable_write_success(stream_id, writer_id, promise);
         return;
     }
-    let result = match try_call_writable_write(cb, chunk) {
+    // The sink's write() is JS: a collection at one of its safepoints may move
+    // the write request promise, so the frame roots it across the call.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held_promise = scope.root_raw_mut_ptr(promise);
+    let called = try_call_writable_write(cb, chunk);
+    let promise = held_promise.get_raw_mut_ptr::<Promise>();
+    let result = match called {
         Ok(result) => result,
         Err(reason) => {
             finish_writable_write_error(stream_id, promise, f64::from_bits(reason));
@@ -568,19 +605,20 @@ pub(super) unsafe fn writable_stream_write(
     writer_id: usize,
     chunk: f64,
 ) -> *mut Promise {
-    if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
+    if transform_of_writable(WsRef(stream_id)).is_some() {
         return transform_write(stream_id, chunk);
     }
-    let promise = js_promise_new();
     // The strategy's size(chunk) is user JS — run it before taking the
-    // registry lock (it may re-enter the streams FFI).
-    let size_cb = WRITABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&stream_id)
+    // registry lock (it may re-enter the streams FFI). A collection inside it
+    // may move the chunk: the frame roots it across the call, and the write
+    // request promise is born after it.
+    let size_cb = ws_rec(WsRef(stream_id))
+        .as_deref()
         .map(|s| s.strategy_size_cb)
         .unwrap_or(0);
-    let chunk_size = if size_cb != 0 {
+    let (chunk, chunk_size) = if size_cb != 0 {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held_chunk = scope.root_nanbox_f64(chunk);
         let size = JSValue::from_bits(
             js_closure_call1(
                 size_cb as *const ClosureHeader,
@@ -594,15 +632,16 @@ pub(super) unsafe fn writable_stream_write(
             let message = invalid_size_message(size);
             throw_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
         }
-        size
+        (held_chunk.get_nanbox_f64(), size)
     } else {
-        1.0
+        (chunk, 1.0)
     };
+    let promise = js_promise_new();
     let mut start_write = None;
     let needs_pending_ready;
     {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        let s = match g.get_mut(&stream_id) {
+        let mut rec = ws_rec(WsRef(stream_id));
+        let s = match rec.as_deref_mut() {
             Some(s) if s.state == WritableState::Writable => s,
             Some(s) if s.state == WritableState::Errored => {
                 let e = s.error_value;
@@ -658,8 +697,7 @@ unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, prom
     }
 
     let (next, ready, close_now) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref_mut() {
             Some(s) => {
                 s.in_flight = false;
                 s.in_flight_size = 0.0;
@@ -701,8 +739,7 @@ unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, prom
 
 unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, reason: f64) {
     let (ready, closed, close_request, queued) = {
-        let mut g = WRITABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
+        match ws_rec(WsRef(stream_id)).as_deref_mut() {
             Some(s) => {
                 s.in_flight = false;
                 s.in_flight_size = 0.0;
@@ -747,7 +784,7 @@ unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, r
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
     let writer_id = stream_id(writer_handle);
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+    let stream_id = match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) if w.locked => w.stream_handle,
         _ => {
             let promise = js_promise_new();
@@ -761,12 +798,11 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
     let writer_id = stream_id(writer_handle);
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+    let stream_id = match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) => w.stream_handle,
         None => return 0.0,
     };
-    let g = WRITABLE_STREAMS.lock().unwrap();
-    match g.get(&stream_id) {
+    match ws_rec(WsRef(stream_id)).as_deref() {
         Some(s) if s.state == WritableState::Writable => writable_desired_size(s),
         Some(s) if s.state == WritableState::Errored => f64::NAN,
         _ => 0.0,
@@ -776,7 +812,7 @@ pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
     let writer_id = stream_id(writer_handle);
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+    let stream_id = match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) => w.stream_handle,
         None => {
             let p = js_promise_new();
@@ -784,7 +820,7 @@ pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
             return p;
         }
     };
-    if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
+    if transform_of_writable(WsRef(stream_id)).is_some() {
         return transform_close(stream_id);
     }
     js_writable_stream_close(stream_value(stream_id))
@@ -793,7 +829,7 @@ pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mut Promise {
     let writer_id = stream_id(writer_handle);
-    let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
+    let stream_id = match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) => w.stream_handle,
         None => {
             let p = js_promise_new();
@@ -808,8 +844,7 @@ pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mu
 pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
     let writer_id = stream_id(writer_handle);
     let stream_id = {
-        let mut g = WRITERS.lock().unwrap();
-        match g.get_mut(&writer_id) {
+        match writer_rec(WriterRef(writer_id)).as_deref_mut() {
             Some(w) => {
                 w.locked = false;
                 w.stream_handle
@@ -817,7 +852,7 @@ pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
             None => return f64::from_bits(TAG_UNDEFINED),
         }
     };
-    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
+    if let Some(s) = ws_rec(WsRef(stream_id)).as_deref_mut() {
         s.writer_handle = None;
     }
     // #5437: writer instance done — drop its expando entries (see the reader
@@ -830,7 +865,7 @@ pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
     let writer_id = stream_id(writer_handle);
-    match WRITERS.lock().unwrap().get(&writer_id) {
+    match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) => w.closed_promise,
         None => {
             let p = js_promise_new();
@@ -843,7 +878,7 @@ pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_ready(writer_handle: f64) -> *mut Promise {
     let writer_id = stream_id(writer_handle);
-    match WRITERS.lock().unwrap().get(&writer_id) {
+    match writer_rec(WriterRef(writer_id)).as_deref() {
         Some(w) => w.ready_promise,
         None => {
             let p = js_promise_new();

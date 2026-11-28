@@ -9,9 +9,10 @@
 //! native storage. Both are exposed as the same byte-exact `&'static [u8]`.
 //!
 //! Three consumers read the registry at runtime:
-//!   * `fs.readFileSync` / `fs.readFile` — a `$perryfs/...` virtual path (or a
-//!     bare key that matches an embedded asset) resolves to the embedded bytes
-//!     instead of touching disk (see `crate::fs::read_file_bytes_with_options`).
+//!   * `fs.readFileSync` / `fs.readFile`, and any `fs` open with a read flag — a
+//!     `$perryfs/...` virtual path (or a bare key that matches an embedded asset)
+//!     resolves to the embedded bytes instead of touching disk (see
+//!     `crate::fs::read_file_bytes_with_options` and `FdEntry::Embedded`).
 //!   * `import { embeddedFiles } from "perry"` — [`js_perry_embedded_files`]
 //!     builds the introspection array (`{ name, size, type }` per asset).
 //!   * `import { readEmbedded } from "perry"` — [`js_perry_read_embedded`]

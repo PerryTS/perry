@@ -1,0 +1,1 @@
+`TextDecoder#decode(chunk, { stream: true })` keeps an incomplete UTF-8 or UTF-16 sequence for the next call and consumes the BOM once per stream, instead of decoding every chunk on its own (a character split across chunks used to come out as U+FFFD); a call without `stream` ends the stream, decoding what is still pending as U+FFFD or, with `fatal`, throwing (#15476).

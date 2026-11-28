@@ -37,7 +37,7 @@ pub const LAY_NONE: u32 = 0;
 /// The lexical context of a per-site run: a kind-0 instance's program site,
 /// a kind-7 instance's call site (rule C). What the run births is per
 /// (birth site, that site) (`made_ctx`).
-const LAY_SITE: u32 = 5 << 28;
+pub(crate) const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
 /// The lexical context of a method instance on one object: the receiver
@@ -274,6 +274,9 @@ pub struct SumState {
     pub inst_key: FxHashMap<(u8, u32, Tok, u32), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
+    /// Atoms that exist when summaries are built: the program's strings
+    /// and keys (`Model::text_key`: a value the program text names).
+    pub n_prog_atoms: usize,
     /// A call an instance made: the summary call (template) it renames.
     pub tmpl_of: FxHashMap<CallId, CallId>,
     /// A call the solver made (`solver_call`): the program site behind the
@@ -1477,8 +1480,7 @@ impl Model {
             // Rule C: a closure maker's runs are per call site; so are those
             // of a function with a rest parameter no receiver lays out (E2).
             _ if call != NO_NODE && (self.closure_maker(f, x) || self.rest_per_site(f, lay)) => {
-                let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
-                (7, site, ft)
+                (7, self.text_site(call), ft)
             }
             _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             _ if let Some(site) = self.nested_site(call, ft) => (0, site, ft),
@@ -1494,24 +1496,9 @@ impl Model {
             }
             _ => (1, lay, ft),
         };
-        // Widened (`past_work_bound`, above): no new calling context the
-        // solve itself made. The call runs the function's shared instance,
-        // which gets this receiver and these arguments by the same edges
-        // (below): a merge of callers. A birth's run (5) stays per object:
-        // its key is what it births. A key the program text bounds before
-        // the solve stays too (`text_key`, owner 11-26).
-        let key = match key.0 {
-            0 | 1 | 7 | 8 | 9
-                if widened
-                    && !Self::text_key(key, self.sum.n_prog)
-                    && !self
-                        .sum
-                        .inst_key
-                        .contains_key(&(key.0, key.1, key.2, NO_VAL)) =>
-            {
-                (1, LAY_NONE, ft)
-            }
-            _ => key,
+        let key = match widened {
+            true => self.widened_key(key),
+            false => key,
         };
         // A function that only calls a parameter runs once per function
         // value a call passes there alone; checked again once the
@@ -1544,17 +1531,90 @@ impl Model {
         }
     }
 
-    /// WIDEN9 (owner 11-26): a run key whose count the program text fixes
-    /// before the solve, so a widened solve keeps it: a kind-0 run at a
-    /// program site, a rule-C run (7) and a SHARED-SITE-RUN run (9) of a
-    /// call that exists when summaries are built (`n_prog`: program calls
-    /// and summary templates), times a function token. What such a run
-    /// births is per (birth site, that call) (`made_ctx`), so the tokens a
-    /// widened solve makes are bounded too. A key the solve made (a
-    /// nested-site chain copy, a solver call, a receiver or trap context)
-    /// has no such bound and merges.
-    fn text_key(key: (u8, u32, Tok), n_prog: usize) -> bool {
-        matches!(key.0, 0 | 7 | 9) && (key.1 as usize) < n_prog
+    /// The program-text site of `call` (rules C and E2: one run per call
+    /// site): a program call is its own; an instance's copy of a body's
+    /// call is that body's call (`tmpl_of`); a solver-made call (a native
+    /// model's call: `apply`, `call`, a callback) is the site of the call
+    /// its chain of solver-made calls started at (`made_root`). Never the
+    /// id of a call the solve minted: that id is new per level of a
+    /// recursion (a wrapper that calls the function it replaced through
+    /// `f.apply(this, arguments)` reaches itself), so a key holding it
+    /// names a new run per level, without end.
+    fn text_site(&self, call: CallId) -> CallId {
+        let root = self.made_root.get(&call).copied().unwrap_or(call);
+        self.sum.tmpl_of.get(&root).copied().unwrap_or(root)
+    }
+
+    /// The key a call with run key `key` runs past the work bound
+    /// (widened): no new calling context the solve itself made. The call
+    /// runs the function's shared instance, which gets this receiver and
+    /// these arguments by the same edges (`bind_instance`): a merge of
+    /// callers. A birth's run (5) stays per object: its key is what it
+    /// births. A key the program text bounds before the solve stays too
+    /// (`text_key`, owner 11-26), and so does a run that already exists.
+    pub(crate) fn widened_key(&mut self, key: (u8, u32, Tok)) -> (u8, u32, Tok) {
+        match key.0 {
+            0 | 1 | 7 | 8 | 9
+                if !self.text_key(key)
+                    && !self
+                        .sum
+                        .inst_key
+                        .contains_key(&(key.0, key.1, key.2, NO_VAL)) =>
+            {
+                (1, LAY_NONE, key.2)
+            }
+            _ => key,
+        }
+    }
+
+    /// WIDEN9 (owner 11-26): a run key the program text alone bounds, so a
+    /// widened solve keeps it: a per-site key (kinds 0, 7, 9) every part of
+    /// which ranges over a finite set the program text fixes. Its site is a
+    /// program call or a summary template (`n_prog`); its function token
+    /// is a function value born at a program site under a program-root
+    /// context: no closure context, or one made by a run keyed by such a
+    /// site (or by none) under a chain of program strings (`n_prog_atoms`).
+    /// A receiver layout or a trap context is a set the solve computes
+    /// (births x makers x tokens), so those keys merge as before (owner
+    /// 11-28, CWN). A part the solve made (a nested-site chain copy, a
+    /// closure made in a context of an object or of a solver call:
+    /// SHARED-SITE-RUN runs per closure token, so such a token would name
+    /// a new run per token) merges the key.
+    pub(crate) fn text_key(&mut self, key: (u8, u32, Tok)) -> bool {
+        matches!(key.0, 0 | 7 | 9)
+            && (key.1 as usize) < self.sum.n_prog
+            && self.text_tok(key.2)
+    }
+
+    /// Function token `t` is born at a program site under a program-root
+    /// context (`text_key`). A context made for an outer context's closure
+    /// (`CAP_OUTER`) has that context's lexical context and extends its
+    /// value chain, so the context's own pair covers its whole chain.
+    fn text_tok(&mut self, t: Tok) -> bool {
+        let c = match self.toks[t as usize] {
+            TokKind::Func(_, c) => c,
+            _ => return false,
+        };
+        if c == NO_CTX {
+            return true;
+        }
+        let lay = self.sum.ctx_lay[c as usize];
+        let site_lay = lay == LAY_NONE
+            || (lay & !LAY_MASK == LAY_SITE && ((lay & LAY_MASK) as usize) < self.sum.n_prog);
+        if !site_lay {
+            return false;
+        }
+        let mut vc = self.sum.ctx_vc[c as usize];
+        while vc != NO_VC {
+            // The walk is solve work, as the maker walk (`made_ctx`) is.
+            self.charge_work(1);
+            let (parent, _, v) = self.sum.vctx[vc as usize];
+            if v & VAL_PRIM != VAL_PRIM && (v as usize) >= self.sum.n_prog_atoms {
+                return false;
+            }
+            vc = parent;
+        }
+        true
     }
 
     fn bind_instance(
@@ -1959,6 +2019,9 @@ impl Model {
             }
             if let Some(&l) = self.str_index_len.get(t) {
                 self.str_index_len.insert(id, l);
+            }
+            if self.code_unit_calls.contains(t) {
+                self.code_unit_calls.insert(id);
             }
             kmap.push(id);
         }
@@ -2743,6 +2806,7 @@ impl Model {
     pub fn summarize_and_replay(&mut self) {
         let t0 = std::time::Instant::now();
         self.sum.n_prog = self.calls.len();
+        self.sum.n_prog_atoms = self.atoms.len();
         build_summaries(self);
         for n in 0..self.nodes.len() {
             if self.nodes[n].obs {

@@ -421,7 +421,7 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 /// identical). Per the issue #604 architectural change, we no
 /// longer block on the handler-returned Promise.
 pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
-    let req_f64 = handle_to_pointer_f64(pending.request_handle);
+    let req_f64 = pending.request;
     // The response is rooted for the dispatch: every callback below can run
     // a moving collection. The fresh word goes back before parking.
     let exchange_roots = perry_ffi::TransientRootScope::enter();
@@ -429,11 +429,16 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
     unsafe {
-        crate::server::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.request_handle());
         if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
             crate::server::types::js_handle_clear_side_tables(pending.response_handle());
         }
     }
+    let res_root = exchange_roots.root_nanbox(crate::server::response::exchange_response(
+        pending.server_handle,
+        req_f64,
+        res_root.get(),
+    ));
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
@@ -559,14 +564,9 @@ pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringH
 pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) {
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         crate::tls_client::unregister_internal_https_server(s.base.bound_port);
-        s.base.set_listening(false);
-        s.base.connections_checking_interval_destroyed = true;
-        crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
     // P5: stop accepting on the turnloop listener, if this server has one.
-    if let Some(listener) = crate::server::turnloop_serve::listener_for_server(handle) {
-        crate::server::turnloop_serve::close_listener(listener);
-    }
+    crate::server::server::close_server(handle, callback);
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905/#4971).
     signal_connections_close(handle, true);

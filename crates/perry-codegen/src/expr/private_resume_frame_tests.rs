@@ -44,6 +44,7 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
             Stmt::Return(Some(Expr::LocalGet(7)), 0),
         ];
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 1,
             params,
@@ -153,6 +154,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
             })
             .collect();
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 1,
             params,
@@ -303,6 +305,7 @@ fn private_resume_ir(body: Vec<Stmt>) -> String {
         })
         .collect();
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params,

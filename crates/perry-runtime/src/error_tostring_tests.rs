@@ -134,3 +134,40 @@ fn eval_and_uri_errors_have_distinct_kinds_and_names() {
         "URIError"
     );
 }
+
+#[test]
+fn node_internal_error_names_its_code_in_to_string_and_stack() {
+    let message = s(b"bad size");
+    crate::node_submodules::register_error_code_pub(message, "ERR_OUT_OF_RANGE");
+    let e = js_rangeerror_new(message);
+    assert!(unsafe { error_is_node_internal(e) });
+    let text = unsafe { read_string_header_owned(js_error_to_string(e)) };
+    assert_eq!(text, "RangeError [ERR_OUT_OF_RANGE]: bad size");
+    let stack = unsafe { read_string_header_owned(js_error_get_stack(e)) };
+    assert_eq!(
+        stack.lines().next(),
+        Some("RangeError [ERR_OUT_OF_RANGE]: bad size")
+    );
+}
+
+#[test]
+fn a_system_or_user_code_is_not_a_node_internal_header() {
+    let message = s(b"ENOENT: missing");
+    crate::node_submodules::register_error_code_pub(message, "ENOENT");
+    let system = js_error_new_with_message(message);
+    let user = js_typeerror_new(s(b"bad thing"));
+    let code = crate::value::js_nanbox_string(s(b"ERR_USER") as i64);
+    crate::node_submodules::set_error_user_prop(user as usize, "code", code);
+    for (error, head) in [
+        (system, "Error: ENOENT: missing"),
+        (user, "TypeError: bad thing"),
+    ] {
+        assert!(!unsafe { error_is_node_internal(error) });
+        let text = unsafe { read_string_header_owned(js_error_to_string(error)) };
+        assert_eq!(text, head);
+    }
+    assert_eq!(
+        crate::node_submodules::error_own_string(system, "code").as_deref(),
+        Some("ENOENT")
+    );
+}

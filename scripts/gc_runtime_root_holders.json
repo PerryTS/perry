@@ -60,6 +60,24 @@
       "why": "Cell<u64> stores only minor-collection counts from note_cap_phase_reading and zero at start_cap_phase; no address or NaN-boxed value is stored."
     },
     {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_CLOCK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<FixedCostClock> holds only monotonic-clock nanosecond timestamps and durations (last_end_ns, begin_ns, drain_ns, returned_ns) written by the fixed_cost_note_* hooks and reset to START; no address, handle, JSValue or GC allocation enters any field."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_DIAL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<FixedCostDial> holds only retune_fixed_cost_scale's debounce state: parts-per-million shares, floor quarters (u8), reading counts, saved nanoseconds and Eden cap byte sizes in its FixedCostStep/FixedCostHold fields; no address, handle, JSValue or GC allocation enters any field."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "FIXED_COST_SCALE",
+      "verdict": "not_a_gc_pointer",
+      "why": "TriggerInput<u8> stores only the fixed-cost floor of the nursery-cap ladder in quarters (NURSERY_CAP_SCALE_MIN at start, moved by retune_fixed_cost_scale); a small integer, never an address or NaN-boxed value."
+    },
+    {
       "file": "crates/perry-runtime/src/object/global_this/async_generator_state.rs",
       "name": "BIRTH_SHAPE",
       "verdict": "not_a_gc_pointer",
@@ -188,15 +206,15 @@
     },
     {
       "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
-      "name": "AGENT_LOOP",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P0: the calling thread's `AgentLoop` — a `turnloop::Loop` (native poller descriptor, fixed operation/handle tables, notifier and poster `Arc`s), a `turnloop::Completions` buffer, a loop id and plain `u64` statistics. P0 submits no turnloop operation, so no token, completion payload or buffer ever names a JS value; the loop only ever blocks until an `Instant` deadline or a notifier wake. Nothing stored is a GC header address or a NaN-boxed value. When P1 starts routing JS work through tokens this verdict must be re-researched."
-    },
-    {
-      "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
       "name": "CLAIM",
       "verdict": "not_a_gc_pointer",
       "why": "turnloop P9: this thread's claim on its agent's route slot in `ROUTES`. `ClaimGuard` holds exactly one field, an `Arc<AtomicBool>` — the flag a wake producer reads to decide whether a parked loop needs a syscall. No JS value, no NaN-boxed word and no arena pointer ever reaches it: the guard is written only by `claim_route` (which builds the `Arc`) and read only by `claimed_flag`/`release_route`, and its `Drop` removes the matching `ROUTES` entry by `Arc::ptr_eq`. The loop itself lives in the sibling `AGENT_LOOP`, whose completions are copied out of turnloop's pooled buffers before any JS sees them (P1's rule: no heap pointer reaches the driver)."
+    },
+    {
+      "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
+      "name": "CLOSING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Handle-close `turnloop::Completion`s the generated poll phase holds for the close phase (`run_close_phase`). A completion carries an integer routing `Token` (`(class << ID_BITS) | id`), optional `OpId`/`Handle` ids, a terminal flag and a native `OpResult`; none is a GC header address or a NaN-boxed value, the same contents as the covered sibling `STAGED`."
     },
     {
       "file": "crates/perry-runtime/src/fs/deferred.rs",
@@ -226,7 +244,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window. Re-audited #13405: cycle.rs routes birth-color changes through set_birth_extra_flags; it stores the same flags and refreshes the existing inline allocation bound. The refresh only reads existing TLS/arena state and changes the bound, without allocation, JS callbacks, collection or relocation. The synchronous mark-to-sweep custody window is unchanged. Re-audited 2026-10-29 against #13443 (trace.rs -> mark.rs, AtomicFinalize split out to cycle/atomic_finalize.rs, GC_STATS consolidated into gc/progress.rs), the #13457/#13463/#13479 GC slices, and the #13405/#13471/#13472 pacing changes. Both boundaries and both predicates are unchanged and still name the same condition: pass 1 needs minor.is_none() && !is_budgeted(), pass 2 needs full_trace (= minor.is_none()) && !is_budgeted(). The window now runs BlockPersistence -> AtomicFinalize -> the sweep entry before note_sweep_started, and each phase was read rather than assumed: BlockPersistence only marks; the only relocating subphase of AtomicFinalize, MinorPrelude, is entered solely from the minor branch of the ephemeron clear (cycle/weak_ephemerons.rs), while a full goes WeakProcessing -> DisableBarrier -> Sweep, so a full cycle never evacuates between the boundaries; no phase inside the window invokes JavaScript. The const-generic DIAGNOSTICS split of #13443 gates only trace_phase_* recording and the read-only honest-pointer and minor-unmarked verifiers. The new leaf-escape and in-place-promotion machinery (#13463/#13479, #13439) is reached from allocation, store and copying-minor promotion sites, never from this window. census.rs changed only its diagnostic gate predicate. The rest of the interval was read too: HeapChange::begin(Sweep) only clears the weak intern cache and advances the scope counter, the sweep-entry gap drain only traces seeds the barrier shaded, and finish_full_trace invokes perry-stdlib provider hooks that release native payloads owned by the stdlib rather than GC objects. The snapshot's own Vec is a native Rust allocation, which does not collect. Re-audited #13582 (x86-64 Linux GC walk): arena/inline.rs only puts a naked offering shim in front of js_inline_arena_slow_alloc, which passes its caller's pc/sp/fp to a Rust frame that stores a pointer to that origin in the thread-local walk-origin offer cell for the duration of the unchanged slow-path body and clears it on return. It is an allocation entry, not reached from inside the census window; it calls no JS, relocates nothing and changes neither snapshot boundary nor the synchronous mark-to-sweep sequence. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070. census.rs: the reporter's visit_object now accepts both object kinds (gc_object_type_pat!) and reads the meta word and slots through the A1 header accessors (meta_read!, object_slot_at, meta_form_alloc_bytes); it only reads heap words and counts, allocates nothing on the GC heap and changes neither census_pass1_if_armed nor census_take_if_armed_at_full_sweep_start. cycle.rs, mod.rs and allocation_pacing.rs changed formatting and a cfg-gated re-export of poll_armed only. policy.rs: on x86-64 Linux js_gc_loop_safepoint and js_gc_collect became naked entry shims that pass their caller's frame to the armed body as a WalkOrigin (EntryWalkOrigin::enter), and the leaf trigger arm (leaf_window_due) subtracts survivor bytes before comparing Eden with the Eden window. Both are collection ENTRIES and trigger arithmetic, reached before run_to_completion starts, never inside the synchronous mark-to-sweep window; no JS call, relocation or mutator resumption was added between the boundaries. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: census.rs swaps two sort_unstable calls for cold_sort::sort_by (same ordering of the same address Vec, no callback); barrier/mod.rs switches the rewrite-slot visitor to its shared (non-generic) form, same read-only walk; policy.rs, allocation_pacing.rs and verify_honest.rs gain #[optimize(size)] attributes and one rustfmt wrap. No JS callback, relocation or mutator window enters the synchronous mark-to-sweep sequence. Re-audited 2026-11-03 (handle-id reuse): gc/mod.rs gains thread_gc_initialized, a read-only query of the GC_INIT_DONE thread-local used by perry-ffi to tell a collecting thread from a worker; it is called from handle retirement, not from the census window, and calls no JS, allocates nothing on the GC heap and relocates nothing. full_trace.rs adds the pool liveness hook and release step consulted by an armed full trace and weakref.rs asks the pool liveness predicate for handle-valued weak keys, both outside the snapshot boundaries; the synchronous mark-to-sweep sequence is unchanged. Re-audited 2026-11-03 (RELPREP) policy.rs against 68a93a1478f0/f144e6d3d10d/2a03be364e4d/f134e5b860dd: a trigger check turned away inside a GcSuppressScope is now OWED (GC_FLAG_TRIGGER_OWED) and runs at the outermost scope's drop through gc_check_trigger, which returns while GC_FLAG_IN_ALLOC is held (a synchronous full collection holds it), so no check can collect between the pass-1 snapshot and the sweep; the finalization hunk only removes a post-GC delivery. Neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited 2026-11-03 for the SNAP census hooks (instruments builds only; production calls are empty inline stubs): gc/census.rs Census accounting calls snap_census::census_live(header, type, size), which only counts the header against the census's own birth list in a malloc map (no mark, no move, no GC allocation, no JS); arena/inline.rs allocation_limit returns 0 while snap_census closes the inline bump, which routes mutator allocations to the slow path, outside this window; gc/mod.rs re-exports roots::for_each_global_root_slot under the instruments cfg, no code in the window. Re-audited 2026-11-05 (SNAP merge with main) policy.rs: the SNAP census hooks add an early return in gc_unsuppress while snap_census holds collection (a flag clear, no collection) and an early return plus explicit_gc_done bookkeeping in js_gc_collect_body (the manual-collect entry, reached before run_to_completion); all instruments-only stubs in production, no JS, relocation or mutator resumption inside the synchronous mark-to-sweep window, which main left unchanged. Re-audited 2026-11-15 against the diffs since the recorded pins (census.rs since 00fb540ce7, cycle.rs since f648648270, barrier/mod.rs since 71b9dcfe53, allocation_pacing.rs since f4d20d45cb, and arena/inline.rs, gc/mod.rs and gc/policy.rs since 6e5c6e1190, the last commit on which this gate passed, because their recorded pins match no commit on main). census.rs: slot_kind classifies an INTERNAL_WORD_TAG word (I32 slot word or other) instead of INT32_TAG and visit_array matches gc_array_type_pat!; both are read-only reporting, plus a unit test. barrier/mod.rs: one comment. allocation_pacing.rs: test-only (test_throw, this_test_process). arena/inline.rs: ILP32 offset constants with a const assertion, an instruments-only alloc_sample::inline_slow_alloc call on the allocation slow path, and allocation_limit returns 0 while snap_census closes the inline bump; all allocation-side, outside the window. cycle.rs: the one change inside the window is an instruments-only diagnostic_hooks::life_full_marked() call right after census_pass1_if_armed; the installed hook (wpfacts_check life_measure::full_marked and life_regions::full_marked) only reads GC_FLAG_MARKED/PINNED from headers via life::full_alive and edits the measurement's own Rust maps, with no GC allocation, JS call or relocation. Block persistence now runs when roots::collection_point_is_precise() is false instead of the three previous conditions; it still only marks. The other cycle.rs changes are instruments-only phase names, snap_funnel! at cycle construction and step entry, and the post-sweep allocator purge taking a memory_owed argument; none falls between the boundaries. gc/mod.rs: the minor path gains evacuation_veto and life hooks around the copying minor (minor only; pass 1 needs minor.is_none()), snap_funnel! at collection entries, an instruments-only life_collect_full entry, and module/re-export lines. gc/policy.rs: gc_unsuppress returns early while snap_census holds collection, snap_funnel! and the snap_census explicit-gc check at collection entries, evacuation_veto in the budgeted minor fallback, and leaf-service trigger arithmetic (leaf_service_precedes_copying_cap, the quarter-window floor in leaf_window_due); all are entries or trigger decisions reached before run_to_completion. Neither boundary predicate nor the synchronous mark-to-sweep sequence changed, and no JS call, relocation or mutator resumption was added inside it. Re-audited 2026-11-16 gc/mod.rs against c71b7fd958..d666699147 (3c3ed02071): one instruments-only re-export of roots::census_visit_roots, no code in the window. Re-audited 2026-11-23 gc/mod.rs against 3c3ed02071..455e67161e and gc/policy.rs against 119d27e501..455e67161e: mod.rs drops the arguments-object scanner registration from gc_init (before collection), adds an early return to js_gc_release_current_thread_collection_side_allocations when a UI host keeps the thread after main (thread teardown, not a collection), and narrows one instruments-only re-export's cfg; policy.rs adds cfg(test)-only collection-count probes to GcSuppressScope's entry and drop. None of them runs inside the synchronous mark-to-sweep window, calls JS, relocates or resumes the mutator there.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window. Re-audited #13405: cycle.rs routes birth-color changes through set_birth_extra_flags; it stores the same flags and refreshes the existing inline allocation bound. The refresh only reads existing TLS/arena state and changes the bound, without allocation, JS callbacks, collection or relocation. The synchronous mark-to-sweep custody window is unchanged. Re-audited 2026-10-29 against #13443 (trace.rs -> mark.rs, AtomicFinalize split out to cycle/atomic_finalize.rs, GC_STATS consolidated into gc/progress.rs), the #13457/#13463/#13479 GC slices, and the #13405/#13471/#13472 pacing changes. Both boundaries and both predicates are unchanged and still name the same condition: pass 1 needs minor.is_none() && !is_budgeted(), pass 2 needs full_trace (= minor.is_none()) && !is_budgeted(). The window now runs BlockPersistence -> AtomicFinalize -> the sweep entry before note_sweep_started, and each phase was read rather than assumed: BlockPersistence only marks; the only relocating subphase of AtomicFinalize, MinorPrelude, is entered solely from the minor branch of the ephemeron clear (cycle/weak_ephemerons.rs), while a full goes WeakProcessing -> DisableBarrier -> Sweep, so a full cycle never evacuates between the boundaries; no phase inside the window invokes JavaScript. The const-generic DIAGNOSTICS split of #13443 gates only trace_phase_* recording and the read-only honest-pointer and minor-unmarked verifiers. The new leaf-escape and in-place-promotion machinery (#13463/#13479, #13439) is reached from allocation, store and copying-minor promotion sites, never from this window. census.rs changed only its diagnostic gate predicate. The rest of the interval was read too: HeapChange::begin(Sweep) only clears the weak intern cache and advances the scope counter, the sweep-entry gap drain only traces seeds the barrier shaded, and finish_full_trace invokes perry-stdlib provider hooks that release native payloads owned by the stdlib rather than GC objects. The snapshot's own Vec is a native Rust allocation, which does not collect. Re-audited #13582 (x86-64 Linux GC walk): arena/inline.rs only puts a naked offering shim in front of js_inline_arena_slow_alloc, which passes its caller's pc/sp/fp to a Rust frame that stores a pointer to that origin in the thread-local walk-origin offer cell for the duration of the unchanged slow-path body and clears it on return. It is an allocation entry, not reached from inside the census window; it calls no JS, relocates nothing and changes neither snapshot boundary nor the synchronous mark-to-sweep sequence. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070. census.rs: the reporter's visit_object now accepts both object kinds (gc_object_type_pat!) and reads the meta word and slots through the A1 header accessors (meta_read!, object_slot_at, meta_form_alloc_bytes); it only reads heap words and counts, allocates nothing on the GC heap and changes neither census_pass1_if_armed nor census_take_if_armed_at_full_sweep_start. cycle.rs, mod.rs and allocation_pacing.rs changed formatting and a cfg-gated re-export of poll_armed only. policy.rs: on x86-64 Linux js_gc_loop_safepoint and js_gc_collect became naked entry shims that pass their caller's frame to the armed body as a WalkOrigin (EntryWalkOrigin::enter), and the leaf trigger arm (leaf_window_due) subtracts survivor bytes before comparing Eden with the Eden window. Both are collection ENTRIES and trigger arithmetic, reached before run_to_completion starts, never inside the synchronous mark-to-sweep window; no JS call, relocation or mutator resumption was added between the boundaries. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: census.rs swaps two sort_unstable calls for cold_sort::sort_by (same ordering of the same address Vec, no callback); barrier/mod.rs switches the rewrite-slot visitor to its shared (non-generic) form, same read-only walk; policy.rs, allocation_pacing.rs and verify_honest.rs gain #[optimize(size)] attributes and one rustfmt wrap. No JS callback, relocation or mutator window enters the synchronous mark-to-sweep sequence. Re-audited 2026-11-03 (handle-id reuse): gc/mod.rs gains thread_gc_initialized, a read-only query of the GC_INIT_DONE thread-local used by perry-ffi to tell a collecting thread from a worker; it is called from handle retirement, not from the census window, and calls no JS, allocates nothing on the GC heap and relocates nothing. full_trace.rs adds the pool liveness hook and release step consulted by an armed full trace and weakref.rs asks the pool liveness predicate for handle-valued weak keys, both outside the snapshot boundaries; the synchronous mark-to-sweep sequence is unchanged. Re-audited 2026-11-03 (RELPREP) policy.rs against 68a93a1478f0/f144e6d3d10d/2a03be364e4d/f134e5b860dd: a trigger check turned away inside a GcSuppressScope is now OWED (GC_FLAG_TRIGGER_OWED) and runs at the outermost scope's drop through gc_check_trigger, which returns while GC_FLAG_IN_ALLOC is held (a synchronous full collection holds it), so no check can collect between the pass-1 snapshot and the sweep; the finalization hunk only removes a post-GC delivery. Neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited 2026-11-03 for the SNAP census hooks (instruments builds only; production calls are empty inline stubs): gc/census.rs Census accounting calls snap_census::census_live(header, type, size), which only counts the header against the census's own birth list in a malloc map (no mark, no move, no GC allocation, no JS); arena/inline.rs allocation_limit returns 0 while snap_census closes the inline bump, which routes mutator allocations to the slow path, outside this window; gc/mod.rs re-exports roots::for_each_global_root_slot under the instruments cfg, no code in the window. Re-audited 2026-11-05 (SNAP merge with main) policy.rs: the SNAP census hooks add an early return in gc_unsuppress while snap_census holds collection (a flag clear, no collection) and an early return plus explicit_gc_done bookkeeping in js_gc_collect_body (the manual-collect entry, reached before run_to_completion); all instruments-only stubs in production, no JS, relocation or mutator resumption inside the synchronous mark-to-sweep window, which main left unchanged. Re-audited 2026-11-15 against the diffs since the recorded pins (census.rs since 00fb540ce7, cycle.rs since f648648270, barrier/mod.rs since 71b9dcfe53, allocation_pacing.rs since f4d20d45cb, and arena/inline.rs, gc/mod.rs and gc/policy.rs since 6e5c6e1190, the last commit on which this gate passed, because their recorded pins match no commit on main). census.rs: slot_kind classifies an INTERNAL_WORD_TAG word (I32 slot word or other) instead of INT32_TAG and visit_array matches gc_array_type_pat!; both are read-only reporting, plus a unit test. barrier/mod.rs: one comment. allocation_pacing.rs: test-only (test_throw, this_test_process). arena/inline.rs: ILP32 offset constants with a const assertion, an instruments-only alloc_sample::inline_slow_alloc call on the allocation slow path, and allocation_limit returns 0 while snap_census closes the inline bump; all allocation-side, outside the window. cycle.rs: the one change inside the window is an instruments-only diagnostic_hooks::life_full_marked() call right after census_pass1_if_armed; the installed hook (wpfacts_check life_measure::full_marked and life_regions::full_marked) only reads GC_FLAG_MARKED/PINNED from headers via life::full_alive and edits the measurement's own Rust maps, with no GC allocation, JS call or relocation. Block persistence now runs when roots::collection_point_is_precise() is false instead of the three previous conditions; it still only marks. The other cycle.rs changes are instruments-only phase names, snap_funnel! at cycle construction and step entry, and the post-sweep allocator purge taking a memory_owed argument; none falls between the boundaries. gc/mod.rs: the minor path gains evacuation_veto and life hooks around the copying minor (minor only; pass 1 needs minor.is_none()), snap_funnel! at collection entries, an instruments-only life_collect_full entry, and module/re-export lines. gc/policy.rs: gc_unsuppress returns early while snap_census holds collection, snap_funnel! and the snap_census explicit-gc check at collection entries, evacuation_veto in the budgeted minor fallback, and leaf-service trigger arithmetic (leaf_service_precedes_copying_cap, the quarter-window floor in leaf_window_due); all are entries or trigger decisions reached before run_to_completion. Neither boundary predicate nor the synchronous mark-to-sweep sequence changed, and no JS call, relocation or mutator resumption was added inside it. Re-audited 2026-11-16 gc/mod.rs against c71b7fd958..d666699147 (3c3ed02071): one instruments-only re-export of roots::census_visit_roots, no code in the window. Re-audited 2026-11-23 gc/mod.rs against 3c3ed02071..455e67161e and gc/policy.rs against 119d27e501..455e67161e: mod.rs drops the arguments-object scanner registration from gc_init (before collection), adds an early return to js_gc_release_current_thread_collection_side_allocations when a UI host keeps the thread after main (thread teardown, not a collection), and narrows one instruments-only re-export's cfg; policy.rs adds cfg(test)-only collection-count probes to GcSuppressScope's entry and drop. None of them runs inside the synchronous mark-to-sweep window, calls JS, relocates or resumes the mutator there. Re-audited 2026-11-27 gc/mod.rs against a7d0727301, gc/policy.rs against 8ef4cf3152 and gc/allocation_pacing.rs against 8a909d2d97, through 7b5f35ee4d and the byte store placement split: allocation_pacing.rs due_arm takes the old-pressure reading as a closure and checks its debt bands before reading the mature heap (same comparisons, called from burst_boundary at microtask-drain and string-read boundaries and from due); policy.rs adds BudgetedPoll and gc_budgeted_poll under the budgeted step, gc_boundary_safepoint_poll for the outermost microtask drain, and gc_safepoint_moving_minor_nothing_due, which runs the moving-minor entry with the ladder answer given; ByteStorePlacement, INLINE_MAX and byte_store_placement move unchanged to gc/byte_store_placement.rs, reached only from buffer/store.rs allocation, and policy.rs re-exports them; mod.rs declares that module and re-exports the two boundary polls. All are mutator-side entries or trigger arithmetic reached from finish_gc_boundary, the budgeted step or buffer allocation, none from run_to_completion; neither boundary predicate nor the synchronous mark-to-sweep sequence changed, and no JS call, relocation or mutator resumption was added inside it. Re-audited 2026-11-27 gc/mod.rs and gc/policy.rs against aed60a4e13, the commit their recorded pins match, through 6d9f51a42f and the gc/policy split (#15581). mod.rs adds the tenuring fixed-cost clock calls (fixed_cost_minor_begin, fixed_cost_note_page_return, fixed_cost_restart_mutator, which only store thread CPU readings in FIXED_COST_CLOCK) around the minor's idle-page discard and block-pool reuse window; that is the minor path, and pass 1 needs minor.is_none(). policy.rs renames the tenuring helper its nursery-cap arithmetic calls (ladder_nursery_cap_bytes). The split then moves policy.rs's items unchanged into gc/policy/*.rs; each child is pinned here alongside policy.rs, which keeps the flags, trigger state, gc_check_trigger and the deferred-request plumbing. The collection entries and trigger decisions in the children are the same code reached from the same callers before run_to_completion. Neither boundary predicate nor the synchronous mark-to-sweep sequence changed, and no JS call, relocation or mutator resumption was added inside it. Re-audited for the #15581 review round: gc/policy.rs, gc/policy/budgeted.rs, gc/policy/knobs.rs, gc/policy/nursery_cap.rs change doc and line comments only (the mutator-assist allowance, the YoungScavengeCap link, the moving-loop-poll default and the nursery-cap gate); no code changed.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -245,13 +263,28 @@
           "crates/perry-runtime/src/gc/cycle.rs": "ce5aadb557a6597f10532b78c7818889728b9965e00a8cbd0973e21dfe493b81",
           "crates/perry-runtime/src/gc/barrier/mod.rs": "ad9ded48b7d339da5651f68bf325023d954348b9e013a6281c1debc73df5abca",
           "crates/perry-runtime/src/arena/inline.rs": "6b9bb08883891a2e7fce6d278d2f259eac60af5b383f052a19c396addf5160e0",
-          "crates/perry-runtime/src/gc/mod.rs": "a8cb5ef31ad7c36c84ab5b5f4577d467f83ee7474469e5108a5b9eea69253b8a",
-          "crates/perry-runtime/src/gc/policy.rs": "fbe51cfb7dbd50a813d7060d3b72f2d0657825502fba29f68754a05ce48841df",
+          "crates/perry-runtime/src/gc/mod.rs": "55fe1c150bfa0948335877d6793558cfa8a1c022a189351bde96e039056f4c42",
+          "crates/perry-runtime/src/gc/policy.rs": "d37b87c0204383e179fba4eab378c1e9feb4a2aa1d7387e024a2c5b71473c275",
           "crates/perry-runtime/src/gc/progress.rs": "d2cf96a624dff35e405ac15fa37fe6ba31e7e158668581428fb3765f2c7160c3",
-          "crates/perry-runtime/src/gc/allocation_pacing.rs": "bb074b77249c39d1ffb06f94f3d641c6a6afcfa7f89563a4cf3dff202502a7ab",
+          "crates/perry-runtime/src/gc/allocation_pacing.rs": "fd7107847b1436c3085239fe9d1a3533ac0e8172c420635c329a4fe92c0e329a",
           "crates/perry-runtime/src/gc/ephemeron.rs": "fd477a0729117b514c7a41fd0c48ba430afaf40f26f9c85dab6890ef1171f437",
           "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "895c5b3baf0bc76b30c86edc48e649d2a1f51a8bf2dd4ca86bc15c373c813405",
-          "crates/perry-runtime/src/gc/verify_honest.rs": "b980cf09aa4265f40ff2efc94f86046a06ea0ce28c7fe39ed5f9d9739e301359"
+          "crates/perry-runtime/src/gc/verify_honest.rs": "b980cf09aa4265f40ff2efc94f86046a06ea0ce28c7fe39ed5f9d9739e301359",
+          "crates/perry-runtime/src/gc/policy/budgeted.rs": "50aadec1ef839032bd77d472bc020d02b2e8c2dad1481e36a3254e6625e4236b",
+          "crates/perry-runtime/src/gc/policy/due_trigger.rs": "e15a01c81d2f7953fc6e1c6e8238c316d55eb0cde2dd649333872053d6ab18af",
+          "crates/perry-runtime/src/gc/policy/external_side.rs": "4fa19011ceac14734a9424efd41802b9e1eb70246421bdc27ff7f4d8e5f9c365",
+          "crates/perry-runtime/src/gc/policy/knobs.rs": "4a95efc7b0260c52d2d6745c5beb45cd3d95331cca011df9f5b51331e7207337",
+          "crates/perry-runtime/src/gc/policy/leaf_window.rs": "4237f14084d9127af4736e15b9d04e523ebc22f7175fdb454548977914f2acb1",
+          "crates/perry-runtime/src/gc/policy/major_pacing.rs": "7b95483afce689f66946bdcaa97c2bbe0ee7c46e03c76321182e9208ce899239",
+          "crates/perry-runtime/src/gc/policy/malloc_trigger.rs": "79ee99449f943d4772a6de0d2ef32f52a6d09cb75b75f34d70dac5a3389329c6",
+          "crates/perry-runtime/src/gc/policy/manual_collect.rs": "e8590520fbac15a30b8e9c19191734845a469b14882038e1b6b419ccc2d216c6",
+          "crates/perry-runtime/src/gc/policy/nursery_cap.rs": "0986ab4d6caa307d49535c30ff673118fe6c3c0eebb0db8978cfe52ba2f05821",
+          "crates/perry-runtime/src/gc/policy/old_reclaim.rs": "9cbf05be32fee4c714cc84ca75f991eca08fa19f4eec9104736995ff2a885433",
+          "crates/perry-runtime/src/gc/policy/parse_pressure.rs": "c2ceade1f6cba446a1409d77739516ac2ed8eec4530f1bdc372634675272ed0e",
+          "crates/perry-runtime/src/gc/policy/promotion_handoff.rs": "9d7d573b9c39f0f571a2ee0dc3345d9e8d4b869c4ad24ff90ae0d8c90602c680",
+          "crates/perry-runtime/src/gc/policy/rebaseline.rs": "a4e7d33a9df13372a82508dabb193e17f908af22b50900888f9c4d9fb1412ca5",
+          "crates/perry-runtime/src/gc/policy/safepoint.rs": "f8aa05cf9c384fc0628b7c78ff2ab7a03bc4234dd1ced31a7347d12cbb4df08f",
+          "crates/perry-runtime/src/gc/policy/suppress.rs": "616ab4c3d980d055f0a5f5af57277c1f06271cb6514d8066a5545e14e4da74b1"
         }
       }
     },
@@ -322,25 +355,25 @@
       "why": "#9772: releasable block BYTES the last idle selection promised — a size, not an address. A `Cell<usize>` compared against what the collection actually released."
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/external_side.rs",
       "name": "GC_EXTERNAL_SIDE_ALLOC_PENDING",
       "verdict": "not_a_gc_pointer",
       "why": "Byte counters for external side allocations (usize), not addresses: pending bytes noted since the last trigger check and the live external total. Nothing here can hold a GC pointer. They surfaced as rule T once regex operation scratch stopped reporting to them (#11549): the counters are no longer reached from a registered scanner's call graph, which is why the reachability walk used to cover them."
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/external_side.rs",
       "name": "GC_EXTERNAL_SIDE_LIVE_BYTES",
       "verdict": "not_a_gc_pointer",
       "why": "Byte counters for external side allocations (usize), not addresses: pending bytes noted since the last trigger check and the live external total. Nothing here can hold a GC pointer. They surfaced as rule T once regex operation scratch stopped reporting to them (#11549): the counters are no longer reached from a registered scanner's call graph, which is why the reachability walk used to cover them."
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/external_side.rs",
       "name": "GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL",
       "verdict": "not_a_gc_pointer",
       "why": "External side-buffer bytes reported released since the last full baseline, including collector finalization and mutator operations such as JSON tape materialization, regex scratch teardown, native-addon adjustments and Map/Set buffer replacement. This cumulative count keeps released bytes in old-reclaim pressure until a full resets it, and can schedule a full earlier than the previous live-only term. A byte COUNT in Cell<usize>, never a heap address or NaN-boxed value. Written by gc_note_external_side_free, reset by finish_full_old_reclaim_baseline and test guards, read by external_side_old_reclaim_pressure_bytes and diagnostics."
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/external_side.rs",
       "name": "GC_LAST_COLLECTION_EXTERNAL_SIDE_BYTES",
       "verdict": "not_a_gc_pointer",
       "why": "Medium-parse pacing (2026-09-14): `external_side_live_bytes()` (a running sum of Map/Set entry-buffer and JSON tape side-allocation byte counts) recorded as each collection ends, read back by the parse-boundary side-allocation band to price growth since then. A byte COUNT in a `Cell<usize>`, never an address or a NaN-boxed value: written only from `note_collection_finished_arena_occupancy` and the test guard, read only by `external_side_parse_pressure_due` and `diag_tiny_parse_forced_collection`. Same shape and same verdict as its sibling `GC_TINY_PARSE_PRESSURE_BASE_BYTES` two declarations over."
@@ -1115,54 +1148,16 @@
       "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
     },
     {
-      "file": "crates/perry-stdlib/src/streams.rs",
+      "file": "crates/perry-stdlib/src/streams/reader.rs",
       "name": "N",
       "verdict": "not_a_gc_pointer",
       "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams.rs",
-      "name": "READABLE_STREAMS",
-      "verdict": "covered_elsewhere",
-      "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
-      "why": "Chunks, callbacks, pending-read promises and error values are all visited from the child module, so the same-file rule misses it."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/tee.rs",
-      "name": "TEE_PULLING",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of tee SOURCE stream ids (READABLE_STREAMS keys), not addresses."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/tee.rs",
-      "name": "TEE_STARTED",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of tee source stream ids, not addresses."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_BACKPRESSURED_JOBS",
-      "verdict": "covered_elsewhere",
-      "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
-      "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
     },
     {
       "file": "crates/perry-stdlib/src/streams/transform.rs",
       "name": "TRANSFORM_CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_PAIRS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Transform readable id -> writable id: both are stream HANDLE IDS."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_PENDING_WRITES",
-      "verdict": "not_a_gc_pointer",
-      "why": "Transform writable id -> COUNT of queued write jobs (#6607). No address."
     },
     {
       "file": "crates/perry-stdlib/src/tls/turnloop_server.rs",
@@ -2594,12 +2589,6 @@
       "why": "Scalar atomic count of tracked-header resolver probes."
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/inherited_evaluation.rs",
-      "name": "INHERITED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Immutable worker snapshot: owned string bytes, class/order ids and unique-symbol description bytes. ProcessSymbol identities denote process-lifetime persistent symbols; unique movable symbols are copied by description, never address."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/policy.rs",
       "name": "GC_LAST_FULL_OLD_IN_USE_BYTES",
       "verdict": "not_a_gc_pointer",
@@ -2618,6 +2607,48 @@
       "why": "Scalar old-generation byte occupancy count for full-cycle yield and growth pacing; reads and writes use pacing_old_in_use_bytes, never an object address."
     },
     {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_FLAGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u8> of collector state bits (GC_FLAG_IN_ALLOC, GC_FLAG_SUPPRESSED, GC_FLAG_TRIGGER_OWED); never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_PRE_SUPPRESS_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "arena_total_bytes() reading taken at gc_suppress, a byte count used to price the suppressed window's growth; never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_LAST_OLD_RECLAIM_IN_USE_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Old-generation in-use byte count recorded as the old-reclaim baseline; never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_OLD_RECLAIM_IN_PROGRESS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Re-entrancy flag (Cell<bool>) for the allocation-point old reclaim; never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_AT_DECLARED_SAFEPOINT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<bool> set while a declared safepoint drain runs, read by the PERRY_GC_SAFEPOINT_ONLY contract assert; never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy/malloc_trigger.rs",
+      "name": "GC_MALLOC_COUNT_STEP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Adaptive malloc-count trigger step (Cell<usize>), an object count; never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy/nursery_cap.rs",
+      "name": "GC_NURSERY_CAP_TEST_SUPPRESSED",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] TriggerInput<bool> that suppresses the nursery cap for force_legacy_gc_pacing; absent from a shipped binary and never an address. The gc/policy split (#15581) moved the code that names it into a gc/policy/ child, so the same-file coverage rule no longer sees the reachable function that reads it; the declaration and its readers are unchanged."
+    },
+    {
       "file": "crates/perry-runtime/src/arena/owned_stores.rs",
       "name": "YOUNG_STORES_PRESENT",
       "verdict": "not_a_gc_pointer",
@@ -2633,11 +2664,11 @@
       "file": "crates/perry-runtime/src/string/intern.rs",
       "name": "INTERN_TABLE",
       "verdict": "weak_heap_change_cache",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation. WRT3a re-audit: these sources equal e6e7cc419 and the parent. INTERN_TABLE publication still passes the HeapChange exclusion funnel; collection and string realloc clear the weak cache before changing heap addresses, and the current runtime suite covers nested scopes, realloc and relocation. Re-audited #13411: concat.rs extracts numeric heap-string construction into concat_formatted_number and reuses formatted digits after the inline-string capacity/ASCII checks decline. The existing INTERN_TABLE lookup in js_string_concat is unchanged. The extracted helper uses the separate concat memo and the same rooted allocation fallback; it adds no INTERN_TABLE writer. All weak-cache publication still goes through publish_intern_entry, and HeapChange exclusion/invalidation is unchanged. Re-audited 2026-10-29 against #13431 and the #13397/#13472 concat and ASCII-region work. INTERN_TABLE still has exactly two production writers: publish_intern_entry, which returns early for the whole duration of every open HeapChange, and discard_weak_interns, a full clear called from HeapChange::begin for every kind except Realloc and from gc_realloc before a GC_TYPE_STRING cell can move or be released. Every other slot site in the crate is a read: the concat fast path, js_string_intern, intern_prehashed_bytes and intern_lookup_bytes only load entries. #13431's new AtomTable::probe_from/seed_if_absent and the weak metadata rewrite/prune sites write ATOMS, the immutable image atom table repaired by scan_property_atoms and pruned before sweep. gc/malloc.rs gained only malloc_object_count(). No new publication path was added. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: concat.rs changed only the line wrapping of two copy_from_nonoverlapping calls in write_decimal. No INTERN_TABLE writer, reader or HeapChange ordering changed. Re-audited 2026-11-03 (RELPREP) intern.rs against 140dd6950359/f134e5b860dd: lookup_from gains a builtin-global-atom answer and js_string_register_property_atom reuses the probe's vacant slot; both act on the separate ATOMS table (image atoms, weak metadata rewritten after tracing) and neither adds an INTERN_TABLE publication path, so the HeapChange exclusion funnel is unchanged. Re-audited 2026-11-15 against intern.rs since f134e5b860 (4d4391a1b0, 5a2a48419f, 1c6eaf58bc) and concat.rs since f648648270: no added or removed line names INTERN_TABLE, with_intern_table, publish_intern_entry or discard_weak_interns. intern.rs adds the keyed probe over ATOMS (probe_slots/probe_mask, sync_probe, short_key_atom*, key_word_atom*, key_first_atom, retract_agent_atoms on drop), property_atom_from_bytes/mint_property_atom (ATOMS publication), replace_from for ATOMS rehash and prune, and a debug assertion; all act on the separate ATOMS table. concat.rs adds the short_pair inline-string fast arm in js_string_concat_box (inline strings, no heap string, no intern access) and deletes the INT32_TAG arm of concat_chain_sized; its INTERN_TABLE read at the concat fast path is unchanged. The two production writers and the HeapChange exclusion and invalidation are unchanged. Re-audited 2026-11-23 string/concat.rs (raw-handle ratchet): rooted operands are read through across_const/with_const_ptr at their use; no intern-table insertion, lookup or heap-change funnel changed. Re-audited 2026-11-24 string/concat.rs: rustfmt line wrapping only, the tokens are unchanged.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation. WRT3a re-audit: these sources equal e6e7cc419 and the parent. INTERN_TABLE publication still passes the HeapChange exclusion funnel; collection and string realloc clear the weak cache before changing heap addresses, and the current runtime suite covers nested scopes, realloc and relocation. Re-audited #13411: concat.rs extracts numeric heap-string construction into concat_formatted_number and reuses formatted digits after the inline-string capacity/ASCII checks decline. The existing INTERN_TABLE lookup in js_string_concat is unchanged. The extracted helper uses the separate concat memo and the same rooted allocation fallback; it adds no INTERN_TABLE writer. All weak-cache publication still goes through publish_intern_entry, and HeapChange exclusion/invalidation is unchanged. Re-audited 2026-10-29 against #13431 and the #13397/#13472 concat and ASCII-region work. INTERN_TABLE still has exactly two production writers: publish_intern_entry, which returns early for the whole duration of every open HeapChange, and discard_weak_interns, a full clear called from HeapChange::begin for every kind except Realloc and from gc_realloc before a GC_TYPE_STRING cell can move or be released. Every other slot site in the crate is a read: the concat fast path, js_string_intern, intern_prehashed_bytes and intern_lookup_bytes only load entries. #13431's new AtomTable::probe_from/seed_if_absent and the weak metadata rewrite/prune sites write ATOMS, the immutable image atom table repaired by scan_property_atoms and pruned before sweep. gc/malloc.rs gained only malloc_object_count(). No new publication path was added. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: concat.rs changed only the line wrapping of two copy_from_nonoverlapping calls in write_decimal. No INTERN_TABLE writer, reader or HeapChange ordering changed. Re-audited 2026-11-03 (RELPREP) intern.rs against 140dd6950359/f134e5b860dd: lookup_from gains a builtin-global-atom answer and js_string_register_property_atom reuses the probe's vacant slot; both act on the separate ATOMS table (image atoms, weak metadata rewritten after tracing) and neither adds an INTERN_TABLE publication path, so the HeapChange exclusion funnel is unchanged. Re-audited 2026-11-15 against intern.rs since f134e5b860 (4d4391a1b0, 5a2a48419f, 1c6eaf58bc) and concat.rs since f648648270: no added or removed line names INTERN_TABLE, with_intern_table, publish_intern_entry or discard_weak_interns. intern.rs adds the keyed probe over ATOMS (probe_slots/probe_mask, sync_probe, short_key_atom*, key_word_atom*, key_first_atom, retract_agent_atoms on drop), property_atom_from_bytes/mint_property_atom (ATOMS publication), replace_from for ATOMS rehash and prune, and a debug assertion; all act on the separate ATOMS table. concat.rs adds the short_pair inline-string fast arm in js_string_concat_box (inline strings, no heap string, no intern access) and deletes the INT32_TAG arm of concat_chain_sized; its INTERN_TABLE read at the concat fast path is unchanged. The two production writers and the HeapChange exclusion and invalidation are unchanged. Re-audited 2026-11-23 string/concat.rs (raw-handle ratchet): rooted operands are read through across_const/with_const_ptr at their use; no intern-table insertion, lookup or heap-change funnel changed. Re-audited 2026-11-24 string/concat.rs: rustfmt line wrapping only, the tokens are unchanged. Re-audited 2026-11-26 string/concat.rs (string-length-cap): append_chain_all_heap_strings adds a length check before its in-place arm; no INTERN_TABLE writer, reader or HeapChange ordering changed. Re-audited 2026-11-26 string/concat.rs (over-long string refusal): each concat allocation site adds a check_string_length call before reserving storage; no INTERN_TABLE writer, reader or HeapChange ordering changed.",
       "sources": {
         "crates/perry-runtime/src/string/intern.rs": "01fdfbeb3866ce9012449a6e8244b0702588d263b300402c230a2df2232e9a5b",
         "crates/perry-runtime/src/gc/heap_generation.rs": "8344c9995c62342714b40a947dd20338a56fcd1cb8f031356e865b9121d6ee2f",
-        "crates/perry-runtime/src/string/concat.rs": "d5e1e8718c228edda41eac6cbbb31d634a64f64248f4209c25c90099f02388f5",
+        "crates/perry-runtime/src/string/concat.rs": "a9bc2bd38f4f23f4e177bf154e99d7cb58dbbde2495db9b30efca79e2f89ce40",
         "crates/perry-runtime/src/gc/malloc.rs": "507412b031f677b5acdc0a846f3adca4cda39d24a08cf1a07c995dd482044367"
       }
     },
@@ -3072,16 +3103,16 @@
       "why": "A bool set by a UI host that keeps running JavaScript on its thread after main(); read by thread-exit release to skip teardown. Holds no address."
     },
     {
+      "file": "crates/perry-runtime/src/event_pump.rs",
+      "name": "POLL_CHECKPOINT",
+      "verdict": "not_a_gc_pointer",
+      "why": "A per-thread `bool` request for the poll phase's per-callback microtask checkpoint; never a GC address."
+    },
+    {
       "file": "crates/perry-ui-android/src/widgets/canvas.rs",
       "name": "DIRTY",
       "verdict": "not_a_gc_pointer",
       "why": "Android canvas widget handles (i64 ids) waiting for a repaint; ids index the widget registry, never a GC address."
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/mod.rs",
-      "name": "NON_FILL_VSTACKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Set of Android vertical-stack widget handles (i64 ids) whose alignment is not fill; ids, never GC addresses."
     },
     {
       "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
@@ -3118,6 +3149,36 @@
       "name": "CANVAS_STATE",
       "verdict": "not_a_gc_pointer",
       "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_probe/chain_glue.rs",
+      "name": "WAIT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Head of the intrusive waiting list of native ChainNode allocations (cd::new_node), not GC cells. Every waiting node is also linked on ALL, whose obj words for_each_node_obj rewrites during collection, and prune takes a dead node off WAIT before freeing it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "PENDING_FETCH_BODY_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "A binary BodyInit copied to Rust-owned Vec<u8> bytes for the pending fetch call; no JS value or heap address is retained."
+    },
+    {
+      "file": "crates/perry-ui-android/src/back.rs",
+      "name": "BACK_KEY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Integer key of the Back handler in the GC-rooted callback store (callback::register/replace/get); 0 means none. The closure itself lives in that rooted store, never in this atomic."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/image_picker.rs",
+      "name": "PICK_SEQ",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic sequence number that discards stale image-picker deliveries; a counter, never a GC address."
+    },
+    {
+      "file": "crates/perry-runtime/src/turnloop_net/transport.rs",
+      "name": "PLANS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A per-thread u64 counter of link-plan incarnations (next_incarnation); it holds no JS value or heap address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3249,14 +3310,6 @@
     {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_PUMPING"
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
-      "name": "DESERIALIZERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
-      "name": "SERIALIZERS"
     },
     {
       "file": "crates/perry-runtime/src/closure/dispatch/errors.rs",
@@ -3471,11 +3524,11 @@
       "name": "NATIVE_ROOT_SLOT"
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/budgeted.rs",
       "name": "GC_BUDGETED_CYCLE"
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/budgeted.rs",
       "name": "GC_BUDGETED_CYCLE_ACTIVE"
     },
     {
@@ -3527,7 +3580,7 @@
       "name": "GC_TRIGGER_ARMED"
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/manual_collect.rs",
       "name": "OVERRIDE"
     },
     {
@@ -3539,7 +3592,7 @@
       "name": "SURVIVOR_HANDOFF_SUPPRESSIONS"
     },
     {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "file": "crates/perry-runtime/src/gc/policy/major_pacing.rs",
       "name": "TEST_PACING_ARENA_IN_USE"
     },
     {
@@ -3746,10 +3799,6 @@
     {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
       "name": "DIAG_SUPPRESS_UNCAUGHT_DRAIN"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "ERROR_DIAGNOSTICS"
     },
     {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",

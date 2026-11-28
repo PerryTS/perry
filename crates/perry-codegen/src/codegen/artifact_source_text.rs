@@ -141,6 +141,7 @@ pub(super) fn extend_class_method_source_text<'a>(
             // A computed-name static method's function object runs
             // `<body>__clo` too (string pool).
             if matches!(member.kind, perry_hir::ClassComputedMemberKind::Method)
+                && member.declared_static_method().is_none()
                 && llmod.has_function(&body)
             {
                 if let Some(source) = hir.closure_source_text.get(&member.function.id) {

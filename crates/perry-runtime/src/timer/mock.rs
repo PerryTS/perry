@@ -6,10 +6,7 @@
 
 use super::gc_scan::{consume_timer_root_work, TimerRootScanState};
 use super::ref_states::ScheduledTimerId;
-use super::{
-    call_timer_callback, next_timer_id, normalize_timer_delay, record_timer_ref_state,
-    CallbackTimerKind,
-};
+use super::{call_timer_callback, next_timer_id, record_timer_ref_state, CallbackTimerKind};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -154,7 +151,7 @@ pub fn js_mock_timers_run_all() {
 
 pub(super) fn schedule_mock_callback_timer(
     callback: i64,
-    delay_ms: f64,
+    delay: u64,
     args: Vec<f64>,
     kind: CallbackTimerKind,
 ) -> Option<i64> {
@@ -171,7 +168,6 @@ pub(super) fn schedule_mock_callback_timer(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay = normalize_timer_delay(delay_ms);
     let id = next_timer_id();
     // #10447: the mock schedules a real id, so it pins it too. The guard goes
     // onto the queue entry below — a local `let _scheduled` would drop (and
@@ -200,7 +196,7 @@ pub(super) fn schedule_mock_callback_timer(
 
 pub(super) fn schedule_mock_interval_timer(
     callback: i64,
-    interval_ms: f64,
+    interval: u64,
     args: Vec<f64>,
 ) -> Option<i64> {
     let mut state = MOCK_TIMERS.lock().unwrap();
@@ -212,7 +208,6 @@ pub(super) fn schedule_mock_interval_timer(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let interval = normalize_timer_delay(interval_ms);
     let id = next_timer_id();
     // #10447: see `schedule_mock_callback_timer` — the guard rides the entry.
     let scheduled = super::ref_states::register_scheduled_timer(id);

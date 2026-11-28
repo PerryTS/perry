@@ -7,47 +7,27 @@
 //! fans out to BOTH branches (see the hooks in `controller_enqueue` /
 //! `controller_close` / `controller_error`).
 
+use super::state::{insert_rs, rs_rec, with_rs, RsRef};
 use super::{
     build_iter_result, byob, close_pending, error_pending, idalloc, js_promise_resolve,
-    next_stream_id, stream_id, stream_value, throw_type_error, ReadableState, ReadableStreamData,
-    READABLE_STREAMS,
+    next_stream_id, readable_clear_algorithms, stream_id, stream_value, throw_type_error,
+    ReadableState, ReadableStreamData,
 };
 use perry_runtime::array::{js_array_alloc, js_array_push};
 use perry_runtime::closure::ClosureHeader;
 use perry_runtime::value::JSValue;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Mutex;
-
-/// Source id -> its two branch ids (so the source's enqueue/close/error
-/// fan out to both branches).
-static TEE_SOURCE_BRANCHES: std::sync::LazyLock<Mutex<HashMap<usize, (usize, usize)>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Branch id -> its source (so a branch read pulls the source).
-static TEE_BRANCH_SOURCE: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Tee sources with a pull job already queued (one job per source at a time).
-static TEE_PULLING: std::sync::LazyLock<Mutex<HashSet<usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
-/// Tee sources whose pull pipeline has delivered at least once. The
-/// COLD-START demand pull pays Node's full two-hop pipeline latency
-/// (`sourceReader.read()` resolution + `.then(fanout)` reaction); once
-/// the pipeline is warm, mid-stream re-parks resolve on the calibrated
-/// one-hop cadence (Node's pipelined stages overlap, so only the first
-/// delivery exposes the latency).
-static TEE_STARTED: std::sync::LazyLock<Mutex<HashSet<usize>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Sentinel `reader_handle` stamped on a tee'd source so it can't be read
 /// directly (spec: `tee()` acquires a reader on the source). It is never a real
-/// entry in `READERS`, so reader lookups against it resolve to `None`.
+/// reader record, so reader lookups against it resolve to `None`.
 const TEE_LOCK_SENTINEL: usize = usize::MAX;
 
 pub(super) fn tee_branches_of(source: usize) -> Option<(usize, usize)> {
-    TEE_SOURCE_BRANCHES.lock().unwrap().get(&source).copied()
+    with_rs(RsRef(source), |s| s.tee_branches).flatten()
 }
 
 pub(super) fn tee_source_of(branch: usize) -> Option<usize> {
-    TEE_BRANCH_SOURCE.lock().unwrap().get(&branch).copied()
+    with_rs(RsRef(branch), |s| s.tee_source).flatten()
 }
 
 /// Deliver one chunk to a single tee branch: hand it to a parked read if one is
@@ -63,8 +43,7 @@ pub(super) unsafe fn tee_deliver(branch: usize, chunk_bits: u64, is_byte: bool) 
         return;
     }
     let popped = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&branch) {
+        match rs_rec(RsRef(branch)).as_deref_mut() {
             Some(s) if s.state == ReadableState::Readable => {
                 if let Some(p) = s.pending_reads.pop_front() {
                     Some(p)
@@ -91,15 +70,13 @@ pub(super) unsafe fn tee_deliver(branch: usize, chunk_bits: u64, is_byte: bool) 
 
 /// A branch has live read demand: a parked default read OR a parked BYOB read.
 unsafe fn tee_branch_demand(a: usize, b: usize) -> bool {
-    {
-        let g = READABLE_STREAMS.lock().unwrap();
-        if [a, b].iter().any(|id| {
-            g.get(id)
-                .map(|s| !s.pending_reads.is_empty() || s.body_consumer.is_some())
-                .unwrap_or(false)
-        }) {
-            return true;
-        }
+    if [a, b].iter().any(|&id| {
+        with_rs(RsRef(id), |s| {
+            !s.pending_reads.is_empty() || s.body_consumer.is_some()
+        })
+        .unwrap_or(false)
+    }) {
+        return true;
     }
     byob::has_pending(a) || byob::has_pending(b)
 }
@@ -112,8 +89,7 @@ pub(super) unsafe fn tee_close_branches(source: usize) {
     };
     for branch in [a, b] {
         let queue_empty = {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            match g.get_mut(&branch) {
+            match rs_rec(RsRef(branch)).as_deref_mut() {
                 Some(s) => {
                     if s.state == ReadableState::Readable {
                         s.state = ReadableState::Closed;
@@ -142,8 +118,7 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
     // forever, leaking its registry entry, queued chunks and id once the tee
     // links were gone; nothing can drive it after the unlink below.
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&source) {
+        if let Some(s) = rs_rec(RsRef(source)).as_deref_mut() {
             if s.state == ReadableState::Readable {
                 s.state = ReadableState::Errored;
                 s.error_value = reason.get_nanbox_u64();
@@ -153,8 +128,7 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
     }
     for branch in [a, b] {
         {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            if let Some(s) = g.get_mut(&branch) {
+            if let Some(s) = rs_rec(RsRef(branch)).as_deref_mut() {
                 if s.state == ReadableState::Readable {
                     s.state = ReadableState::Errored;
                     s.error_value = reason.get_nanbox_u64();
@@ -169,59 +143,20 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
 }
 
 fn tee_unlink(source: usize, a: usize, b: usize) {
-    TEE_SOURCE_BRANCHES.lock().unwrap().remove(&source);
-    {
-        let mut bs = TEE_BRANCH_SOURCE.lock().unwrap();
-        bs.remove(&a);
-        bs.remove(&b);
+    with_rs(RsRef(source), |s| {
+        s.tee_branches = None;
+        s.tee_started = false;
+    });
+    for branch in [a, b] {
+        with_rs(RsRef(branch), |s| s.tee_source = None);
     }
-    TEE_STARTED.lock().unwrap().remove(&source);
     // #6602: the unlinked source is terminal (close flow: Closed and drained
     // by pull discovery; error flow: stamped Errored above) — retire its id.
-    // Its `TEE_LOCK_SENTINEL` reader_handle matches no READERS entry.
+    // Its `TEE_LOCK_SENTINEL` reader_handle matches no reader record.
+    // Terminal source (closed and drained, errored, or canceled through both
+    // branches): its controller's ClearAlgorithms step.
+    readable_clear_algorithms(source);
     idalloc::retire_readable_terminal(source);
-}
-
-/// #6602: eviction hook — scrub BOTH directions of every tee relationship an
-/// evicted id participates in. A one-directional key removal would leave a
-/// `TEE_SOURCE_BRANCHES` tuple naming an evicted branch (a cancelled branch
-/// keeps its links), and once that id is reused the source's fan-out would
-/// deliver chunks into an unrelated new stream. An evicted branch slot is
-/// zeroed (0 never matches a registry entry) so the live sibling keeps
-/// receiving; the entry drops when both slots are dead.
-pub(super) fn evict_ids(batch: &[usize]) {
-    let dead: HashSet<usize> = batch.iter().copied().collect();
-    {
-        let mut g = TEE_SOURCE_BRANCHES.lock().unwrap();
-        g.retain(|source, (a, b)| {
-            if dead.contains(source) {
-                return false;
-            }
-            if dead.contains(a) {
-                *a = 0;
-            }
-            if dead.contains(b) {
-                *b = 0;
-            }
-            *a != 0 || *b != 0
-        });
-    }
-    {
-        let mut g = TEE_BRANCH_SOURCE.lock().unwrap();
-        g.retain(|branch, source| !dead.contains(branch) && !dead.contains(source));
-    }
-    {
-        let mut g = TEE_PULLING.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
-    {
-        let mut g = TEE_STARTED.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
-    }
 }
 
 /// Enqueue on a tee'd SOURCE: the chunk stays in the source queue (spec size
@@ -242,8 +177,10 @@ pub(super) unsafe fn tee_source_enqueue(
     // Per spec the strategy's size(chunk) runs once at enqueue time (same
     // accounting as the non-tee enqueue path).
     let size_cb = {
-        let g = READABLE_STREAMS.lock().unwrap();
-        g.get(&id).map(|s| s.strategy_size_cb).unwrap_or(0)
+        rs_rec(RsRef(id))
+            .as_deref()
+            .map(|s| s.strategy_size_cb)
+            .unwrap_or(0)
     };
     let size = if size_cb != 0 {
         let size =
@@ -262,8 +199,7 @@ pub(super) unsafe fn tee_source_enqueue(
         1.0
     };
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&id) {
+        if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
             if s.state == ReadableState::Readable {
                 s.push_chunk(chunk_bits, size);
             }
@@ -281,8 +217,17 @@ pub(super) unsafe fn tee_source_enqueue(
 /// branch reads a tick early and delivered `done` immediately after the last
 /// chunk, which reordered promise chains racing the stream (Next.js cold-start
 /// head reorder: the flight read loop overtook the module-dep unblock chain).
+/// Mark a pull cycle of tee `source` as queued; false when one already is
+/// (one job per source at a time).
+fn tee_begin_pull(source: usize) -> bool {
+    with_rs(RsRef(source), |s| {
+        !std::mem::replace(&mut s.tee_pulling, true)
+    })
+    .unwrap_or(true)
+}
+
 pub(super) unsafe fn tee_schedule_pull(source: usize) {
-    if !TEE_PULLING.lock().unwrap().insert(source) {
+    if !tee_begin_pull(source) {
         return;
     }
     let job = perry_runtime::closure::js_closure_alloc(
@@ -304,7 +249,7 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
 /// extra hop. CHAINED cycles and producer-side arrivals keep their existing
 /// calibrated cadence throughout.
 pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
-    if TEE_STARTED.lock().unwrap().contains(&source) {
+    if with_rs(RsRef(source), |s| s.tee_started).unwrap_or(false) {
         tee_schedule_pull(source);
         return;
     }
@@ -315,17 +260,15 @@ pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
     // (test_gap_stream_tee_tick_parity: first delivery after t2 instead of
     // Node's t1). Keep the extra cold-start hop only for an empty source whose
     // producer still has to run; that is the Flight cadence #6657 calibrated.
-    let has_buffered_chunk = READABLE_STREAMS
-        .lock()
-        .unwrap()
-        .get(&source)
+    let has_buffered_chunk = rs_rec(RsRef(source))
+        .as_deref()
         .map(|s| !s.chunks.is_empty())
         .unwrap_or(false);
     if has_buffered_chunk {
         tee_schedule_pull(source);
         return;
     }
-    if !TEE_PULLING.lock().unwrap().insert(source) {
+    if !tee_begin_pull(source) {
         return;
     }
     let job = perry_runtime::closure::js_closure_alloc(
@@ -337,7 +280,7 @@ pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
 }
 
 /// The extra demand-entry hop: hand off to the real pull job one microtask
-/// later. `TEE_PULLING` stays held across the hop (single-threaded microtask
+/// later. `tee_pulling` stays set across the hop (single-threaded microtask
 /// dispatch — the remove+insert below has no interleaving window), so
 /// coalescing against enqueue/close reroutes keeps working.
 extern "C" fn tee_demand_hop(
@@ -346,7 +289,7 @@ extern "C" fn tee_demand_hop(
 ) -> f64 {
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        TEE_PULLING.lock().unwrap().remove(&source);
+        with_rs(RsRef(source), |s| s.tee_pulling = false);
         tee_schedule_pull(source);
     }
     f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
@@ -383,7 +326,7 @@ extern "C" fn tee_pull_microtask(
     let undef = f64::from_bits(0x7FFC_0000_0000_0001); // TAG_UNDEFINED
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        TEE_PULLING.lock().unwrap().remove(&source);
+        with_rs(RsRef(source), |s| s.tee_pulling = false);
         let Some((a, b)) = tee_branches_of(source) else {
             return undef;
         };
@@ -398,8 +341,7 @@ extern "C" fn tee_pull_microtask(
         // Pop ONE chunk per cycle — per-chunk reaction cadence, like the
         // spec's per-read pull loop.
         let (chunk, closed, live_pull, is_byte) = {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            match g.get_mut(&source) {
+            match rs_rec(RsRef(source)).as_deref_mut() {
                 Some(s) => (
                     s.pop_chunk(),
                     s.state == ReadableState::Closed,
@@ -419,7 +361,7 @@ extern "C" fn tee_pull_microtask(
             Some(bits) => {
                 // Pipeline is warm from the first delivery on — later
                 // demand entries skip the cold-start hop.
-                TEE_STARTED.lock().unwrap().insert(source);
+                with_rs(RsRef(source), |s| s.tee_started = true);
                 // Spec order: branch-a sees the chunk before branch-b,
                 // regardless of which branch's read triggered the pull.
                 // Byte tees clone the chunk for branch-b (CloneAsUint8Array)
@@ -437,8 +379,8 @@ extern "C" fn tee_pull_microtask(
                 // pre-fill from ever happening.
                 let more = {
                     let source_backlog = {
-                        let g = READABLE_STREAMS.lock().unwrap();
-                        g.get(&source)
+                        rs_rec(RsRef(source))
+                            .as_deref()
                             .map(|s| !s.chunks.is_empty() || s.state == ReadableState::Closed)
                             .unwrap_or(false)
                     };
@@ -446,8 +388,8 @@ extern "C" fn tee_pull_microtask(
                 };
                 if more {
                     let close_only = {
-                        let g = READABLE_STREAMS.lock().unwrap();
-                        g.get(&source)
+                        rs_rec(RsRef(source))
+                            .as_deref()
                             .map(|s| s.chunks.is_empty() && s.state == ReadableState::Closed)
                             .unwrap_or(true)
                     };
@@ -509,13 +451,17 @@ extern "C" fn tee_pull_microtask(
 /// previous implementation snapshot-drained the source's current buffer and
 /// closed it, which yielded two empty branches for a pull-driven source (e.g.
 /// react-server-dom's RSC flight producer, which only produces on pull) — #5989.
-pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
+pub(crate) unsafe fn tee_readable_stream(source: RsRef) -> (RsRef, RsRef) {
+    let (a, b) = tee_readable_stream_ids(source.0);
+    (RsRef(a), RsRef(b))
+}
+
+unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
     let mut was_locked = false;
     let mut is_byte_stream = false;
     let mut source_state = ReadableState::Readable;
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&id) {
+        match rs_rec(RsRef(id)).as_deref_mut() {
             Some(s) if s.reader_handle.is_none() => {
                 is_byte_stream = s.is_byte_stream;
                 source_state = s.state;
@@ -545,10 +491,8 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
     };
     // An errored source's branches must carry its rejection reason.
     let branch_error_value = if branch_state == ReadableState::Errored {
-        READABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get(&id)
+        rs_rec(RsRef(id))
+            .as_deref()
             .map(|s| s.error_value)
             .unwrap_or(0)
     } else {
@@ -557,48 +501,24 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
     let id_a = next_stream_id();
     let id_b = next_stream_id();
     {
-        let mut g = READABLE_STREAMS.lock().unwrap();
         for new_id in [id_a, id_b] {
-            g.insert(
-                new_id,
-                ReadableStreamData {
-                    props: Default::default(),
-                    native_source: None,
-                    tee_cancel_promise: None,
-                    body_consumer: None,
-                    state: branch_state,
-                    chunks: VecDeque::new(),
-                    chunk_sizes: VecDeque::new(),
-                    queue_total_size: 0.0,
-                    pending_reads: VecDeque::new(),
-                    start_cb: 0,
-                    // No own pull_cb: a branch read pulls the SOURCE via the tee
-                    // link (see `maybe_pull`). highWaterMark 0 so every read that
-                    // finds an empty queue triggers a source pull.
-                    pull_cb: 0,
-                    cancel_cb: 0,
-                    strategy_size_cb: 0,
-                    high_water_mark: 0.0,
-                    is_byte_stream,
-                    pull_returns_byte_chunk: false,
-                    pulling: false,
-                    started: true,
-                    reader_handle: None,
-                    error_value: branch_error_value,
-                    pending_error_after_chunks: None,
-                    canceled: false,
-                    disturbed: false,
-                },
-            );
+            // No own pull_cb: a branch read pulls the SOURCE via the tee link
+            // (see `maybe_pull`). highWaterMark 0 so every read that finds an
+            // empty queue triggers a source pull.
+            let mut branch = ReadableStreamData::new(0, 0, 0, 0, 0.0, is_byte_stream);
+            branch.state = branch_state;
+            branch.started = true;
+            branch.error_value = branch_error_value;
+            insert_rs(RsRef(new_id), branch);
         }
     }
     // Only a still-producible source needs live links; a terminal source's
     // branches already carry its final state + any drained chunks.
     if branch_state == ReadableState::Readable {
-        TEE_SOURCE_BRANCHES.lock().unwrap().insert(id, (id_a, id_b));
-        let mut bs = TEE_BRANCH_SOURCE.lock().unwrap();
-        bs.insert(id_a, id);
-        bs.insert(id_b, id);
+        with_rs(RsRef(id), |s| s.tee_branches = Some((id_a, id_b)));
+        for branch in [id_a, id_b] {
+            with_rs(RsRef(branch), |s| s.tee_source = Some(id));
+        }
     } else {
         // #6602: born-Errored branches have no tee lifecycle (no links) and no
         // error_pending ever fires for them — retire now so repeatedly teeing
@@ -629,17 +549,13 @@ pub(super) unsafe fn tee_cancel_branch(branch: usize, promise: *mut super::Promi
     let Some((a, b)) = tee_branches_of(source) else {
         return false;
     };
-    let both = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        if let Some(s) = g.get_mut(&branch) {
-            s.tee_cancel_promise = Some(promise);
-        }
-        [a, b].iter().all(|id| g.get(id).is_none_or(|s| s.canceled))
-    };
+    with_rs(RsRef(branch), |s| s.tee_cancel_promise = Some(promise));
+    let both = [a, b]
+        .iter()
+        .all(|&id| with_rs(RsRef(id), |s| s.canceled).unwrap_or(true));
     if both {
         {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            if let Some(s) = g.get_mut(&source) {
+            if let Some(s) = rs_rec(RsRef(source)).as_deref_mut() {
                 s.canceled = true;
                 s.state = ReadableState::Closed;
                 s.clear_chunks();
@@ -653,10 +569,8 @@ pub(super) unsafe fn tee_cancel_branch(branch: usize, promise: *mut super::Promi
 
 unsafe fn settle_cancellations(a: usize, b: usize) {
     for id in [a, b] {
-        let promise = READABLE_STREAMS
-            .lock()
-            .unwrap()
-            .get_mut(&id)
+        let promise = rs_rec(RsRef(id))
+            .as_deref_mut()
             .and_then(|s| s.tee_cancel_promise.take());
         if let Some(promise) = promise {
             js_promise_resolve(promise, f64::from_bits(super::TAG_UNDEFINED));

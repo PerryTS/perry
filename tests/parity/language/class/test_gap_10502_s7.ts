@@ -99,13 +99,15 @@ async function thenables() {
   console.log("then after", b);
 }
 thenables().then(() => {
-  // for-in after Object.prototype gains an enumerable key.
-  const rec = { a: 1, b: 2 };
+  // for-in after a prototype gains an enumerable key (DEC 250 keeps
+  // Object.prototype itself closed to new keys).
+  const recProto: any = {};
+  const rec = Object.assign(Object.create(recProto), { a: 1, b: 2 });
   const keys = () => { const ks: string[] = []; for (const k in rec) ks.push(k); return ks.join(","); };
   for (let i = 0; i < 20; i++) keys();
-  (Object.prototype as any).zz = 1;
+  recProto.zz = 1;
   console.log("for-in", keys());
-  delete (Object.prototype as any).zz;
+  delete recProto.zz;
   console.log("for-in restored", keys());
 
   // instanceof Object once a class prototype stands on null.

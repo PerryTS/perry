@@ -1105,7 +1105,6 @@ js_crypto_encapsulate	ptr	f64
 js_crypto_encapsulate_async	f64	f64,f64
 js_crypto_generate_key_async	f64	i64,f64,f64
 js_crypto_generate_key_pair_async	f64	i64,f64,f64
-js_crypto_generate_key_pair_sync	f64	i64,i64
 js_crypto_generate_key_pair_sync_ec_p256	ptr	f64
 js_crypto_generate_key_pair_sync_ed25519	ptr	f64
 js_crypto_generate_key_pair_sync_named	ptr	i64,f64
@@ -1413,8 +1412,11 @@ js_event_emitter_async_resource_subclass_init	f64	f64,f64
 js_event_emitter_object_new	f64	f64
 js_event_emitter_subclass_init	f64	f64,f64
 js_event_loop_check_phase	i32s	
+js_event_loop_close_phase	void	
 js_event_loop_host_driven	i32s	
 js_event_loop_poll_callbacks	i32s	
+js_event_loop_poll_nowait	void	
+js_event_loop_poll_wait	void	
 js_event_loop_timers_phase	i32s	
 js_event_new	ptr	f64,f64,i32u
 js_event_subclass_init	f64	f64,f64,f64,i32u,i32u
@@ -1510,6 +1512,7 @@ js_ext_zlib_subclass_init	f64	ptr,usize,f64,f64
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize
+js_fetch_headers_prototype	ptr	
 js_fetch_headers_to_json	i64	f64
 js_fetch_input_ptr	i64	f64
 js_fetch_notify_signal_aborted	void	i64
@@ -1801,20 +1804,19 @@ js_handle_property_set_dispatch	void	i64,ptr,usize,f64
 js_handle_prototype_dispatch	f64	i64
 js_has_exception	i32s	
 js_has_path_module	f64	f64
-js_headers_append	f64	f64,ptr,ptr
-js_headers_delete	f64	f64,ptr
+js_headers_append	f64	f64,f64,f64
+js_headers_delete	f64	f64,f64
 js_headers_entries	f64	f64
 js_headers_fetch_object_json	ptr	f64
 js_headers_for_each	f64	f64,f64
 js_headers_from_value	f64	f64
-js_headers_get	ptr	f64,ptr
+js_headers_get	f64	f64,f64
 js_headers_get_set_cookie	f64	f64
-js_headers_has	f64	f64,ptr
+js_headers_has	f64	f64,f64
 js_headers_init_from_value	f64	f64,f64
 js_headers_keys	f64	f64
-js_headers_method_value	f64	f64,ptr,usize
 js_headers_new	f64	
-js_headers_set	f64	f64,ptr,ptr
+js_headers_set	f64	f64,f64,f64
 js_headers_setheaders_entries_json	ptr	f64
 js_headers_values	f64	f64
 js_http_agent_create_connection	i64	i64
@@ -2110,7 +2112,6 @@ js_math_sin	f64	f64
 js_math_sinh	f64	f64
 js_math_tan	f64	f64
 js_math_tanh	f64	f64
-js_math_to_number	f64	f64
 js_math_trunc	f64	f64
 js_message_channel_new	f64	
 js_message_port_constructor_error	f64	
@@ -2355,6 +2356,7 @@ js_net_socket_write	void	i64,i64
 js_net_subclass_init	f64	f64,f64,f64,i32u
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
+js_net_validate_connect_attempt_timeout	i32s	f64
 js_net_validate_connect_port	void	f64
 js_net_validate_create_server_options	void	f64
 js_net_validate_default_auto_select_family	i32s	f64
@@ -2465,6 +2467,10 @@ js_node_http_im_signal	f64	i64
 js_node_http_im_trailers_distinct_json	ptr	i64
 js_node_http_im_trailers_json	ptr	i64
 js_node_http_im_url	ptr	i64
+js_node_http_incoming_message_abort_signal	void	f64
+js_node_http_incoming_message_birth	f64	f64,f64,f64,f64,f64,f64,f64,f64
+js_node_http_incoming_message_create	f64	f64
+js_node_http_incoming_message_dump_unread	void	f64
 js_node_http_incoming_message_init	void	f64,f64
 js_node_http_incoming_message_standalone_new	i64	f64
 js_node_http_method_fallback	f64	ptr,i64,f64,f64,f64
@@ -2743,6 +2749,7 @@ js_node_test_suite	f64	f64,f64,f64
 js_node_test_todo	f64	f64,f64,f64
 js_notify_main_thread	void	
 js_number_coerce	f64	f64
+js_number_from_value	f64	f64
 js_number_is_finite	f64	f64
 js_number_is_integer	f64	f64
 js_number_is_nan	f64	f64
@@ -2937,8 +2944,7 @@ js_path_dirname	ptr	ptr
 js_path_extname	ptr	ptr
 js_path_format	ptr	f64
 js_path_is_absolute	i32s	ptr
-js_path_join	ptr	ptr,ptr
-js_path_join_value	ptr	f64,f64
+js_path_join_values	ptr	ptr,i32u
 js_path_matches_glob	i32s	ptr,ptr
 js_path_matches_glob_value	i32s	f64,f64
 js_path_normalize	ptr	ptr
@@ -2959,8 +2965,7 @@ js_path_win32_dirname	ptr	ptr
 js_path_win32_extname	ptr	ptr
 js_path_win32_format	ptr	f64
 js_path_win32_is_absolute	i32s	ptr
-js_path_win32_join	ptr	ptr,ptr
-js_path_win32_join_value	ptr	f64,f64
+js_path_win32_join_values	ptr	ptr,i32u
 js_path_win32_matches_glob	i32s	ptr,ptr
 js_path_win32_matches_glob_value	i32s	f64,f64
 js_path_win32_normalize	ptr	ptr
@@ -3025,6 +3030,7 @@ js_perry_event_emit_in_resource	f64	f64,f64,f64,f64
 js_perry_event_emit_span_in_resource	f64	f64,f64,ptr,usize,ptr,usize
 js_perry_event_emit_span_rooted	f64	usize,usize,usize,ptr,usize,ptr,usize
 js_perry_event_get	f64	f64,f64
+js_perry_event_uncaught	f64	f64
 js_perry_native_f32	f64	f64
 js_perry_native_f64	f64	f64
 js_perry_native_i16	f64	f64
@@ -3065,12 +3071,14 @@ js_perry_net_link_pipe_connect	i32s	ptr,usize,ptr,usize,ptr
 js_perry_net_link_pipe_listen	i32s	ptr,usize,ptr,usize,i32u,ptr
 js_perry_net_link_queued_bytes	usize	ptr,usize
 js_perry_net_link_read_start	i32s	ptr,usize,ptr
+js_perry_net_link_read_stop	i32s	ptr,usize,ptr
 js_perry_net_link_retained_bytes	usize	ptr,usize
 js_perry_net_link_set_ref	i32s	ptr,usize,i32s
 js_perry_net_link_set_route	i32s	ptr,usize,i32s,ptr
 js_perry_net_link_shutdown	i32s	ptr,usize,i64,ptr
 js_perry_net_link_snapshot_handle	i32s	ptr,usize,ptr
 js_perry_net_link_tcp_connect	i32s	ptr,usize,ptr,usize,i16u,i32s,ptr
+js_perry_net_link_tcp_connect_addrs	i32s	ptr,usize,ptr,usize,i32s,i32u,ptr
 js_perry_net_link_tcp_listen	i32s	ptr,usize,ptr,usize,i16u,i32u,i32s,i32s,ptr
 js_perry_net_link_write	i32s	ptr,usize,ptr,usize,i64,ptr,ptr
 js_perry_net_live_handles	usize	
@@ -3495,6 +3503,7 @@ js_reflect_get_prototype_of	f64	f64
 js_reflect_has	f64	f64,f64
 js_reflect_has_metadata	f64	f64,f64,f64
 js_reflect_has_own_metadata	f64	f64,f64,f64
+js_reflect_install_metadata	f64	f64
 js_reflect_is_extensible	f64	f64
 js_reflect_own_keys	f64	f64
 js_reflect_prevent_extensions	f64	f64
@@ -3564,6 +3573,7 @@ js_register_global_fetch_notify_abort	void	ptr
 js_register_global_fetch_with_options	void	ptr
 js_register_global_headers_entries_json	void	ptr
 js_register_global_headers_object_json	void	ptr
+js_register_global_headers_prototype	void	ptr
 js_register_handle_method_dispatch	void	ptr
 js_register_handle_method_dispatch_extension	void	ptr
 js_register_handle_own_property_names_dispatch	void	ptr
@@ -3681,6 +3691,7 @@ js_runtime_install_date	void
 js_runtime_install_diagnostics	void	
 js_runtime_install_dyn_eval	void	
 js_runtime_install_event_target	void	
+js_runtime_install_gc_diagnostics	void	
 js_runtime_install_global_atomics	void	
 js_runtime_install_global_json	void	
 js_runtime_install_global_math	void	
@@ -4268,6 +4279,7 @@ js_throw_json_constructor_type_error	f64
 js_throw_local	void	f64
 js_throw_math_constructor_type_error	f64	
 js_throw_not_a_constructor	f64	
+js_throw_program_value	void	f64
 js_throw_reference_error_super_delete	f64	
 js_throw_reference_error_tdz	f64	f64
 js_throw_reference_error_this_before_super	f64	
@@ -4491,6 +4503,7 @@ js_unsettled_top_level_await_exit	void
 js_urierror_new	ptr	ptr
 js_url_can_parse	i32s	ptr
 js_url_can_parse_with_base	i32s	ptr,ptr
+js_url_coerce_base	ptr	f64
 js_url_coerce_string	ptr	f64
 js_url_create_object_url	ptr	f64
 js_url_domain_to_ascii	f64	f64
@@ -4503,11 +4516,13 @@ js_url_get_host	f64	ptr
 js_url_get_hostname	f64	ptr
 js_url_get_href	f64	ptr
 js_url_get_origin	f64	ptr
+js_url_get_password	f64	ptr
 js_url_get_pathname	f64	ptr
 js_url_get_port	f64	ptr
 js_url_get_protocol	f64	ptr
 js_url_get_search	f64	ptr
 js_url_get_search_params	f64	ptr
+js_url_get_username	f64	ptr
 js_url_href_if_url	f64	f64
 js_url_legacy_parse	f64	f64,f64,f64
 js_url_legacy_resolve	f64	f64,f64

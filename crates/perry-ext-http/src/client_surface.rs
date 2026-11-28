@@ -12,6 +12,13 @@ pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
     handle: Handle,
     encoding_ptr: *const StringHeader,
 ) -> Handle {
+    if let Some(v) = crate::server::request_payload::call(
+        handle,
+        b"setEncoding",
+        &[crate::server::request_payload::string_arg(encoding_ptr)],
+    ) {
+        return (v.to_bits() & crate::server::request_payload::PTR_MASK) as i64;
+    }
     let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
     let mut matched = false;
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
@@ -160,6 +167,9 @@ pub extern "C" fn js_ext_http_client_incoming_message_is_handle(handle: Handle) 
 /// `res.statusCode`.
 #[no_mangle]
 pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"statusCode") {
+        return v;
+    }
     let mut out = 0.0;
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = res.status_code as f64;
@@ -170,6 +180,9 @@ pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
 /// `res.statusMessage`.
 #[no_mangle]
 pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
+    if let Some(s) = crate::server::request_payload::get_str(handle, b"statusMessage") {
+        return s;
+    }
     let mut out: *mut StringHeader = std::ptr::null_mut();
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = alloc_string(&res.status_message).as_raw();
@@ -186,6 +199,9 @@ pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
 /// the user's TS code sees an Object as expected.
 #[no_mangle]
 pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"headers") {
+        return v;
+    }
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = build_response_headers_object(&res.headers);
@@ -201,6 +217,9 @@ pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
 /// `res.trailers` — HTTP trailers populated after the body completes.
 #[no_mangle]
 pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"trailers") {
+        return v;
+    }
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = map_to_js_object(&res.trailers);
@@ -215,6 +234,9 @@ pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"socket") {
+        return v;
+    }
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
         if response.socket_handle == 0 {
             f64::from_bits(TAG_UNDEFINED)
@@ -232,6 +254,9 @@ pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
 /// header-casing caveat on the pooled reqwest path.
 #[no_mangle]
 pub extern "C" fn js_http_response_raw_headers(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"rawHeaders") {
+        return v;
+    }
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = crate::response_headers::build_raw_headers_array(&res.headers);
@@ -252,6 +277,9 @@ pub extern "C" fn js_http_response_raw_headers(handle: Handle) -> f64 {
 /// regardless of the real negotiated version.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version(handle: Handle) -> *mut StringHeader {
+    if let Some(s) = crate::server::request_payload::get_str(handle, b"httpVersion") {
+        return s;
+    }
     let mut out: Option<String> = None;
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = Some(format!("{}.{}", res.http_version.0, res.http_version.1));
@@ -273,6 +301,9 @@ pub extern "C" fn js_http_response_http_version(handle: Handle) -> *mut StringHe
 /// still resolve through the server accessor.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version_major(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"httpVersionMajor") {
+        return v;
+    }
     if let Some(v) =
         with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.0 as f64)
     {
@@ -285,6 +316,9 @@ pub extern "C" fn js_http_response_http_version_major(handle: Handle) -> f64 {
 /// `js_http_response_http_version`.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version_minor(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"httpVersionMinor") {
+        return v;
+    }
     if let Some(v) =
         with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.1 as f64)
     {
@@ -300,6 +334,9 @@ pub extern "C" fn js_http_response_http_version_minor(handle: Handle) -> f64 {
 /// the dynamic dispatcher, which already returns a boxed JS boolean here).
 #[no_mangle]
 pub extern "C" fn js_http_response_complete(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"complete") {
+        return v;
+    }
     if let Some(v) = with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         if res.complete {
             TAG_TRUE
@@ -318,6 +355,9 @@ pub extern "C" fn js_http_response_complete(handle: Handle) -> f64 {
 /// `res.req` — the ClientRequest paired with a client IncomingMessage.
 #[no_mangle]
 pub extern "C" fn js_http_incoming_message_req(handle: Handle) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"req") {
+        return v;
+    }
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
         if response.request_handle == 0 {
             f64::from_bits(TAG_UNDEFINED)

@@ -346,9 +346,9 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
         ) {
             return reject_with_dom_exception(name, message);
         }
-        let public_key = match RsaPublicKey::from_public_key_der(&wrapping_key_bytes) {
-            Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        let public_key = match rsa_public_key_from_spki_der(&wrapping_key_bytes) {
+            Some(k) => k,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         match rsa_oaep_encrypt(wrapping_mat.hash, &public_key, &key_bytes) {
             Some(c) => c,

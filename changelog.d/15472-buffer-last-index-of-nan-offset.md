@@ -1,0 +1,1 @@
+`Buffer#lastIndexOf` follows Node for its offset: one that is NaN after `+byteOffset` (`NaN`, `undefined`, a non-numeric string or object) searches the whole buffer instead of only index 0, and a string offset is read as the encoding; a `Uint8Array` keeps ToIntegerOrInfinity, so NaN is still 0 there (#15463).

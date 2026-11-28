@@ -157,7 +157,15 @@ fn named_closure(
 /// while building the prototype. No call site or receiver state is retained.
 fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
     let ptr = crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::Acquire);
-    if !ptr.is_null() && matches!(name, "setHeader" | "writeHead" | "write" | "end") {
+    if let Some(info) = crate::node_stream::http_incoming::method_info(name) {
+        return info;
+    }
+    if !ptr.is_null()
+        && matches!(
+            name,
+            "setHeader" | "writeHead" | "write" | "end" | "_addHeaderLine"
+        )
+    {
         let dispatch: crate::value::JsNativeHttpDispatchFn = unsafe { std::mem::transmute(ptr) };
         let module = b"#http-prototype-method-info";
         let info = unsafe {
@@ -175,7 +183,7 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
             return info as *const crate::closure::JsFunctionInfo;
         }
     }
-    crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype._addHeaderLine", capture = property_key, constructible = true; "node:http.IncomingMessage.prototype._addHeaderLineDistinct", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._send", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._writeRaw", capture = property_key, constructible = true; "node:http.IncomingMessage.prototype._addHeaderLines", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_addheaderlines_metadata); "node:http.IncomingMessage.prototype._destroy", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_destroy_metadata); "node:http.IncomingMessage.prototype._dump", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_incomingmessage_prototype_dump_metadata); "node:http.IncomingMessage.prototype._dumpAndCloseReadable", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_incomingmessage_prototype_dumpandclosereadable_metadata); "node:http.IncomingMessage.prototype._read", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_incomingmessage_prototype_read_metadata); "node:http.IncomingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_finish_metadata); "node:http.OutgoingMessage.prototype._flush", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flush_metadata); "node:http.OutgoingMessage.prototype._flushOutput", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushoutput_metadata); "node:http.OutgoingMessage.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_implicitheader_metadata); "node:http.OutgoingMessage.prototype._isLenientHeaderValidation", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_islenientheadervalidation_metadata); "node:http.OutgoingMessage.prototype._renderHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_renderheaders_metadata); "node:http.OutgoingMessage.prototype._storeHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_storeheader_metadata); "node:http.OutgoingMessage.prototype.addTrailers", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_addtrailers_metadata); "node:http.OutgoingMessage.prototype.appendHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_appendheader_metadata); "node:http.OutgoingMessage.prototype.cork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_cork_metadata); "node:http.OutgoingMessage.prototype.destroy", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_destroy_metadata); "node:http.OutgoingMessage.prototype.flushHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushheaders_metadata); "node:http.OutgoingMessage.prototype.getHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheader_metadata); "node:http.OutgoingMessage.prototype.getHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheadernames_metadata); "node:http.OutgoingMessage.prototype.getHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheaders_metadata); "node:http.OutgoingMessage.prototype.getRawHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getrawheadernames_metadata); "node:http.OutgoingMessage.prototype.hasHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_hasheader_metadata); "node:http.OutgoingMessage.prototype.pipe", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_pipe_metadata); "node:http.OutgoingMessage.prototype.removeHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_removeheader_metadata); "node:http.OutgoingMessage.prototype.setHeaders", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_setheaders_metadata); "node:http.OutgoingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype.uncork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_uncork_metadata); "node:http.ServerResponse.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_finish_metadata); "node:http.ServerResponse.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_implicitheader_metadata); "node:http.ServerResponse.prototype.assignSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_assignsocket_metadata); "node:http.ServerResponse.prototype.detachSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_detachsocket_metadata); "node:http.ServerResponse.prototype.writeContinue", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writecontinue_metadata); "node:http.ServerResponse.prototype.writeEarlyHints", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeearlyhints_metadata); "node:http.ServerResponse.prototype.writeInformation", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeinformation_metadata); "node:http.ServerResponse.prototype.writeProcessing", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writeprocessing_metadata); "node:http.IncomingMessage.prototype[\"@runtime:kAttachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kAttachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_attach_public); "node:http.IncomingMessage.prototype[\"@runtime:kDetachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kDetachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_detach_public); "node:http.OutgoingMessage.prototype[\"@runtime:nodejs.rejection\"]", capture = public_name, constructible = true, spec = {name = "destroy", length = 0}, emit = metadata(realm_http_symbol_rejection_public); })] export crate::object::node_http_prototypes::js_node_http_method_fallback, 3; with_declared(3))
+    crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype._addHeaderLineDistinct", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._send", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._writeRaw", capture = property_key, constructible = true; "node:http.IncomingMessage.prototype._addHeaderLines", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_addheaderlines_metadata); "node:http.IncomingMessage.prototype._dumpAndCloseReadable", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_incomingmessage_prototype_dumpandclosereadable_metadata); "node:http.IncomingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_finish_metadata); "node:http.OutgoingMessage.prototype._flush", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flush_metadata); "node:http.OutgoingMessage.prototype._flushOutput", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushoutput_metadata); "node:http.OutgoingMessage.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_implicitheader_metadata); "node:http.OutgoingMessage.prototype._isLenientHeaderValidation", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_islenientheadervalidation_metadata); "node:http.OutgoingMessage.prototype._renderHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_renderheaders_metadata); "node:http.OutgoingMessage.prototype._storeHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_storeheader_metadata); "node:http.OutgoingMessage.prototype.addTrailers", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_addtrailers_metadata); "node:http.OutgoingMessage.prototype.appendHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_appendheader_metadata); "node:http.OutgoingMessage.prototype.cork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_cork_metadata); "node:http.OutgoingMessage.prototype.destroy", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_destroy_metadata); "node:http.OutgoingMessage.prototype.flushHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushheaders_metadata); "node:http.OutgoingMessage.prototype.getHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheader_metadata); "node:http.OutgoingMessage.prototype.getHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheadernames_metadata); "node:http.OutgoingMessage.prototype.getHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheaders_metadata); "node:http.OutgoingMessage.prototype.getRawHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getrawheadernames_metadata); "node:http.OutgoingMessage.prototype.hasHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_hasheader_metadata); "node:http.OutgoingMessage.prototype.pipe", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_pipe_metadata); "node:http.OutgoingMessage.prototype.removeHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_removeheader_metadata); "node:http.OutgoingMessage.prototype.setHeaders", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_setheaders_metadata); "node:http.OutgoingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype.uncork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_uncork_metadata); "node:http.ServerResponse.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_finish_metadata); "node:http.ServerResponse.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_implicitheader_metadata); "node:http.ServerResponse.prototype.assignSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_assignsocket_metadata); "node:http.ServerResponse.prototype.detachSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_detachsocket_metadata); "node:http.ServerResponse.prototype.writeContinue", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writecontinue_metadata); "node:http.ServerResponse.prototype.writeEarlyHints", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeearlyhints_metadata); "node:http.ServerResponse.prototype.writeInformation", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeinformation_metadata); "node:http.ServerResponse.prototype.writeProcessing", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writeprocessing_metadata); "node:http.IncomingMessage.prototype[\"@runtime:kAttachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kAttachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_attach_public); "node:http.IncomingMessage.prototype[\"@runtime:kDetachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kDetachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_detach_public); "node:http.OutgoingMessage.prototype[\"@runtime:nodejs.rejection\"]", capture = public_name, constructible = true, spec = {name = "destroy", length = 0}, emit = metadata(realm_http_symbol_rejection_public); })] export crate::object::node_http_prototypes::js_node_http_method_fallback, 3; with_declared(3))
 }
 
 /// Build `kind`'s prototype for `constructor`: born on its layout, every slot
@@ -203,7 +211,7 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
         fill(name, value);
     };
     let accessor = #[inline(always)] |name: &'static str, setter: bool| {
-        let get = named_closure(&scope, crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype.connection.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_connection_get_name_metadata); "node:http.IncomingMessage.prototype.headers.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headers_get_name_metadata); "node:http.IncomingMessage.prototype.headersDistinct.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata); "node:http.IncomingMessage.prototype.signal.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_signal_get_name_metadata); "node:http.IncomingMessage.prototype.trailers.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailers_get_name_metadata); "node:http.IncomingMessage.prototype.trailersDistinct.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata); "node:http.OutgoingMessage.prototype.closed.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_closed_get_name_metadata); "node:http.OutgoingMessage.prototype.connection.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata); "node:http.OutgoingMessage.prototype.errored.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_errored_get_name_metadata); "node:http.OutgoingMessage.prototype.headersSent.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_headerssent_get_name_metadata); "node:http.OutgoingMessage.prototype.socket.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata); "node:http.OutgoingMessage.prototype.writableCorked.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablecorked_get_name_metadata); "node:http.OutgoingMessage.prototype.writableEnded.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableended_get_name_metadata); "node:http.OutgoingMessage.prototype.writableFinished.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablefinished_get_name_metadata); "node:http.OutgoingMessage.prototype.writableHighWaterMark.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablehighwatermark_get_name_metadata); "node:http.OutgoingMessage.prototype.writableLength.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablelength_get_name_metadata); "node:http.OutgoingMessage.prototype.writableNeedDrain.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableneeddrain_get_name_metadata); "node:http.OutgoingMessage.prototype.writableObjectMode.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableobjectmode_get_name_metadata); })] export crate::object::node_http_prototypes::http_getter_thunk, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR)), name, 0);
+        let get = named_closure(&scope, im_getter_info(name).unwrap_or(crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype.headersDistinct.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata); "node:http.IncomingMessage.prototype.trailersDistinct.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata); "node:http.OutgoingMessage.prototype.closed.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_closed_get_name_metadata); "node:http.OutgoingMessage.prototype.connection.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata); "node:http.OutgoingMessage.prototype.errored.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_errored_get_name_metadata); "node:http.OutgoingMessage.prototype.headersSent.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_headerssent_get_name_metadata); "node:http.OutgoingMessage.prototype.socket.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata); "node:http.OutgoingMessage.prototype.writableCorked.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablecorked_get_name_metadata); "node:http.OutgoingMessage.prototype.writableEnded.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableended_get_name_metadata); "node:http.OutgoingMessage.prototype.writableFinished.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablefinished_get_name_metadata); "node:http.OutgoingMessage.prototype.writableHighWaterMark.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablehighwatermark_get_name_metadata); "node:http.OutgoingMessage.prototype.writableLength.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablelength_get_name_metadata); "node:http.OutgoingMessage.prototype.writableNeedDrain.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableneeddrain_get_name_metadata); "node:http.OutgoingMessage.prototype.writableObjectMode.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableobjectmode_get_name_metadata); })] export crate::object::node_http_prototypes::http_getter_thunk, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR))), name, 0);
         let get = scope.root_nanbox_f64(get);
         let set = if setter {
             named_closure(&scope, crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype.connection.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_connection_get_name_metadata); "node:http.IncomingMessage.prototype.headers.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headers_get_name_metadata); "node:http.IncomingMessage.prototype.headersDistinct.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata); "node:http.IncomingMessage.prototype.trailers.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailers_get_name_metadata); "node:http.IncomingMessage.prototype.trailersDistinct.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata); "node:http.OutgoingMessage.prototype.connection.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata); "node:http.OutgoingMessage.prototype.socket.<set>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata); })] export crate::object::node_http_prototypes::http_setter_thunk, 1; with_flags(crate::closure::FN_NON_CONSTRUCTOR)), name, 1).to_bits()
@@ -552,6 +560,7 @@ extern "C" fn http_getter_thunk(
             }
             .read_value(receiver)
         };
+        // IncomingMessage's getters are their own bodies (`im_headers_get`, ...).
         match name {
             b"writableEnded" => return field(b"finished"),
             b"headersSent" => {
@@ -585,6 +594,240 @@ extern "C" fn http_getter_thunk(
     }
 }
 
+#[rustfmt::skip] crate::realm_decl! { info crate::fn_info!(export static IM_CONNECTION_GET_INFO = crate::object::node_http_prototypes::im_connection_get, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR)); realm { "node:http.IncomingMessage.prototype.connection.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_connection_get_name_metadata); } }
+#[rustfmt::skip] crate::realm_decl! { info crate::fn_info!(export static IM_HEADERS_GET_INFO = crate::object::node_http_prototypes::im_headers_get, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR)); realm { "node:http.IncomingMessage.prototype.headers.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headers_get_name_metadata); } }
+#[rustfmt::skip] crate::realm_decl! { info crate::fn_info!(export static IM_SIGNAL_GET_INFO = crate::object::node_http_prototypes::im_signal_get, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR)); realm { "node:http.IncomingMessage.prototype.signal.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_signal_get_name_metadata); } }
+#[rustfmt::skip] crate::realm_decl! { info crate::fn_info!(export static IM_TRAILERS_GET_INFO = crate::object::node_http_prototypes::im_trailers_get, 0; with_flags(crate::closure::FN_NON_CONSTRUCTOR)); realm { "node:http.IncomingMessage.prototype.trailers.<get>", capture = property_key, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailers_get_name_metadata); } }
+
+/// `IncomingMessage.prototype`'s own getters, each its own body. A heap
+/// message answers as node's getter does; a numeric handle (an HTTP/2
+/// compat request) keeps the handle's property dispatch.
+fn im_getter_info(name: &str) -> Option<*const crate::closure::JsFunctionInfo> {
+    let info: &crate::closure::JsFunctionInfo = match name {
+        "connection" => &IM_CONNECTION_GET_INFO,
+        "headers" => &IM_HEADERS_GET_INFO,
+        "signal" => &IM_SIGNAL_GET_INFO,
+        "trailers" => &IM_TRAILERS_GET_INFO,
+        _ => return None,
+    };
+    Some(info as *const _)
+}
+
+fn heap_receiver(receiver: f64) -> bool {
+    !JSValue::from_bits(receiver.to_bits()).is_handle()
+        && crate::object::field_get_set::runtime_read_site::object_receiver(receiver).is_some()
+}
+
+/// node's `headers` getter: `this[kHeaders]`, built once.
+extern "C" fn im_headers_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let receiver = this.as_f64();
+    if heap_receiver(receiver) {
+        return message_header_view(receiver, HeaderView::Headers);
+    }
+    http_getter_thunk(closure, this)
+}
+
+/// node's `trailers` getter: `this[kTrailers]`, built once.
+extern "C" fn im_trailers_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let receiver = this.as_f64();
+    if heap_receiver(receiver) {
+        return message_header_view(receiver, HeaderView::Trailers);
+    }
+    http_getter_thunk(closure, this)
+}
+
+/// node's `connection` getter: `this.socket`.
+extern "C" fn im_connection_get(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    use crate::object::runtime_layouts::incoming_slot as s;
+    let receiver = this.as_f64();
+    if heap_receiver(receiver) {
+        return incoming_field(receiver, s::SOCKET).unwrap_or_else(|| unsafe {
+            crate::runtime_state_key::js_runtime_state_key_get(receiver, b"socket".as_ptr(), 6)
+        });
+    }
+    http_getter_thunk(closure, this)
+}
+
+/// node's `signal` getter.
+extern "C" fn im_signal_get(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let receiver = this.as_f64();
+    if heap_receiver(receiver) {
+        return message_signal(receiver);
+    }
+    http_getter_thunk(closure, this)
+}
+
+/// Which of node's lazily built IncomingMessage header views.
+#[derive(Clone, Copy)]
+enum HeaderView {
+    Headers,
+    Trailers,
+}
+
+impl HeaderView {
+    fn symbol(self) -> &'static crate::object::layout_desc::StaticAtom {
+        match self {
+            HeaderView::Headers => &layouts::NP_SYMBOL_K_HEADERS,
+            HeaderView::Trailers => &layouts::NP_SYMBOL_K_TRAILERS,
+        }
+    }
+    fn count_symbol(self) -> &'static crate::object::layout_desc::StaticAtom {
+        match self {
+            HeaderView::Headers => &layouts::NP_SYMBOL_K_HEADERS_COUNT,
+            HeaderView::Trailers => &layouts::NP_SYMBOL_K_TRAILERS_COUNT,
+        }
+    }
+    fn slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::K_HEADERS,
+            HeaderView::Trailers => s::K_TRAILERS,
+        }
+    }
+    fn count_slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::K_HEADERS_COUNT,
+            HeaderView::Trailers => s::K_TRAILERS_COUNT,
+        }
+    }
+    fn raw_slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::RAW_HEADERS,
+            HeaderView::Trailers => s::RAW_TRAILERS,
+        }
+    }
+    fn raw(self) -> &'static [u8] {
+        match self {
+            HeaderView::Headers => b"rawHeaders",
+            HeaderView::Trailers => b"rawTrailers",
+        }
+    }
+}
+
+/// node's `IncomingMessage.prototype.headers` (`trailers`) getter on an
+/// ordinary message: `this[kHeaders]` when set; otherwise a fresh `{}` stored
+/// there, filled by `this._addHeaderLine(raw[n], raw[n + 1], dst)` for each
+/// pair below `this[kHeadersCount]`. One object per message, so identity and
+/// writes hold across reads.
+fn message_header_view(receiver: f64, view: HeaderView) -> f64 {
+    // A request on its layout holds the view in its slot: one load.
+    if let Some(current) = incoming_field(receiver, view.slot()) {
+        if crate::value::js_is_truthy(current) != 0 {
+            return current;
+        }
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(receiver);
+    let get_symbol = |atom: &'static crate::object::layout_desc::StaticAtom, slot: u32| {
+        incoming_field(this.get_nanbox_f64(), slot).unwrap_or_else(|| unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                this.get_nanbox_f64(),
+                layouts::runtime_symbol_value(atom),
+            )
+        })
+    };
+    let current = get_symbol(view.symbol(), view.slot());
+    if crate::value::js_is_truthy(current) != 0 {
+        return current;
+    }
+    let dst = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 0)));
+    if incoming_field(this.get_nanbox_f64(), view.slot()).is_some() {
+        incoming_set(
+            this.get_nanbox_f64(),
+            view.slot(),
+            b"",
+            dst.get_nanbox_f64(),
+        );
+    } else {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                this.get_nanbox_f64(),
+                layouts::runtime_symbol_value(view.symbol()),
+                dst.get_nanbox_f64(),
+            )
+        };
+    }
+    let raw_name = view.raw();
+    let src = scope.root_nanbox_f64(
+        incoming_field(this.get_nanbox_f64(), view.raw_slot()).unwrap_or_else(|| unsafe {
+            crate::runtime_state_key::js_runtime_state_key_get(
+                this.get_nanbox_f64(),
+                raw_name.as_ptr(),
+                raw_name.len(),
+            )
+        }),
+    );
+    let mut n = 0.0;
+    loop {
+        let count = get_symbol(view.count_symbol(), view.count_slot());
+        if !(n < crate::builtins::js_number_coerce(count)) {
+            break;
+        }
+        let field = scope.root_nanbox_f64(crate::value::js_dyn_index_get(src.get_nanbox_f64(), n));
+        let value = scope.root_nanbox_f64(crate::value::js_dyn_index_get(
+            src.get_nanbox_f64(),
+            n + 1.0,
+        ));
+        let args = [
+            field.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+            dst.get_nanbox_f64(),
+        ];
+        // `this._addHeaderLine(...)`: on a pristine request the function is
+        // the one `IncomingMessage.prototype` holds (one own-slot read of
+        // the sealed prototype), called directly; anything else looks it up.
+        match pristine_add_header_line(this.get_nanbox_f64()) {
+            Some(add) => {
+                crate::object::property_ops::common::call_with_this_and_args(
+                    add,
+                    this.get_nanbox_f64(),
+                    &args,
+                );
+            }
+            None => unsafe {
+                crate::runtime_state_key::js_runtime_state_key_call(
+                    this.get_nanbox_f64(),
+                    b"_addHeaderLine".as_ptr(),
+                    14,
+                    args.as_ptr(),
+                    args.len(),
+                );
+            },
+        }
+        n += 2.0;
+    }
+    get_symbol(view.symbol(), view.slot())
+}
+
+/// The `_addHeaderLine` a [`crate::node_stream::http_incoming::pristine`]
+/// request inherits: the value `IncomingMessage.prototype` holds in its own
+/// data slot (the chain is unwritten, so it is the runtime's). `None` for any
+/// other receiver.
+fn pristine_add_header_line(receiver: f64) -> Option<f64> {
+    let obj = crate::node_stream::http_incoming::pristine(receiver)?;
+    // SAFETY: a live object.
+    let proto = unsafe { crate::object::shapes::object_prototype_word(obj) };
+    let holder = JSValue::from_bits(proto);
+    if !holder.is_pointer() {
+        return None;
+    }
+    // SAFETY: the live, sealed, unwritten prototype; its method slots are
+    // data slots, so no getter runs.
+    let value = unsafe {
+        crate::object::own_property_get_by_bytes(
+            holder.as_pointer(),
+            b"_addHeaderLine",
+            f64::from_bits(proto),
+        )
+    }?;
+    Some(f64::from_bits(value.bits()))
+}
+
 /// Body of every http prototype setter: the native side keeps the socket and
 /// the request's header views.
 extern "C" fn http_setter_thunk(
@@ -594,6 +837,34 @@ extern "C" fn http_setter_thunk(
 ) -> f64 {
     let (name_ptr, name_len) = unsafe { captured_name(closure) };
     let receiver = this.as_f64();
+    let heap = !JSValue::from_bits(receiver.to_bits()).is_handle()
+        && crate::object::field_get_set::runtime_read_site::object_receiver(receiver).is_some();
+    if heap {
+        // node's setters: `headers`/`trailers` store their view symbol,
+        // `connection` is `this.socket`.
+        let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+        let view = match name {
+            b"headers" => Some(HeaderView::Headers),
+            b"trailers" => Some(HeaderView::Trailers),
+            _ => None,
+        };
+        if let Some(view) = view {
+            let symbol = layouts::runtime_symbol_value(view.symbol());
+            unsafe { crate::symbol::js_object_set_symbol_property(receiver, symbol, value) };
+            return undefined();
+        }
+        if name == b"connection" {
+            unsafe {
+                crate::runtime_state_key::js_runtime_state_key_set(
+                    receiver,
+                    b"socket".as_ptr(),
+                    6,
+                    value,
+                )
+            };
+            return undefined();
+        }
+    }
     if native_receiver(receiver).is_some() {
         if let Some(dispatch) = crate::object::class_handles::handle_property_set_dispatch() {
             unsafe {
@@ -637,7 +908,9 @@ pub unsafe extern "C" fn js_node_http_outgoing_message_init(this: f64) {
 
 /// Node's IncomingMessage constructor on its explicit receiver. Readable owns
 /// stream-state initialization; the remaining stores follow Node's constructor
-/// order and use ordinary [[Get]]/[[Set]] so inherited accessors participate.
+/// order. On an object born on the request layout (or on its keys under a
+/// plain derived chain) each store fills its slot; on any other object each
+/// is the ordinary [[Set]], so inherited accessors participate.
 ///
 /// # Safety
 /// `this` and `socket` are live JavaScript values.
@@ -646,6 +919,35 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let socket = scope.root_nanbox_f64(socket);
+    incoming_init(&this, &socket, None);
+}
+
+/// The values node's parser stores on a server request after its
+/// constructor (`parserOnHeadersComplete`, `_addHeaderLines`), each rooted
+/// by the caller.
+struct Parsed<'a, 's> {
+    raw: &'a crate::gc::RuntimeHandle<'s>,
+    major: f64,
+    minor: f64,
+    version: &'a crate::gc::RuntimeHandle<'s>,
+    url: &'a crate::gc::RuntimeHandle<'s>,
+    method: &'a crate::gc::RuntimeHandle<'s>,
+    count: f64,
+}
+
+/// node's constructor on `this`. With `parsed`, on a request born on its
+/// layout under its sealed, unwritten chain (no accessor or read-only data
+/// on the chain can observe an intermediate value), each field is born
+/// with the parser's final value: one store per slot, in the constructor's
+/// key order. Returns whether `parsed` was written; otherwise the caller
+/// performs the parser's stores as node does.
+unsafe fn incoming_init(
+    this: &crate::gc::RuntimeHandle<'_>,
+    socket: &crate::gc::RuntimeHandle<'_>,
+    parsed: Option<&Parsed<'_, '_>>,
+) -> bool {
+    use crate::object::runtime_layouts::incoming_slot as s;
+    let scope = crate::gc::RuntimeHandleScope::new();
     let read = |value, bytes: &'static [u8]| {
         crate::runtime_state_key::NamedStateKey {
             bytes,
@@ -654,43 +956,77 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         }
         .read_value(value)
     };
-    let put = |name: &'static [u8], value| {
-        crate::runtime_state_key::js_runtime_state_key_set(
+    let receiver =
+        || crate::object::field_get_set::runtime_read_site::object_receiver(this.get_nanbox_f64());
+    // One chain check here, then each store fills its slot while the object
+    // stays on the layout's keys.
+    let plain_chain = receiver().is_some_and(|obj| {
+        crate::node_stream::instance_birth::on_layout_with_plain_chain(
+            obj,
+            layouts::INCOMING_MESSAGE::WORD,
+        )
+    });
+    // node: `streamOptions = { highWaterMark: socket.readableHighWaterMark }`
+    // when there is a socket.
+    let high_water_mark = scope.root_nanbox_f64(
+        if crate::value::js_is_truthy(socket.get_nanbox_f64()) != 0 {
+            read(socket.get_nanbox_f64(), b"readableHighWaterMark")
+        } else {
+            undefined()
+        },
+    );
+    if plain_chain {
+        // `Readable.call(this, opts)` on a receiver whose chain is
+        // IncomingMessage.prototype's: a Readable, so node's constructor runs
+        // in place, its stores fill the layout's Readable slots, and its
+        // state is born from the number the options object would hold.
+        crate::node_stream::init_readable_native(
             this.get_nanbox_f64(),
-            name.as_ptr(),
-            name.len(),
-            value,
-        );
-    };
-    let options = if crate::value::js_is_truthy(socket.get_nanbox_f64()) != 0 {
-        let high_water_mark =
-            scope.root_nanbox_f64(read(socket.get_nanbox_f64(), b"readableHighWaterMark"));
-        let options = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 1)));
-        crate::runtime_state_key::js_runtime_state_key_set(
-            options.get_nanbox_f64(),
-            b"highWaterMark".as_ptr(),
-            13,
             high_water_mark.get_nanbox_f64(),
         );
-        options.get_nanbox_f64()
     } else {
-        undefined()
-    };
-    let options = scope.root_nanbox_f64(options);
-    // Reuse the Readable explicit-this path, including its instanceof check:
-    // an unrelated receiver gets a fresh discarded Readable, as in Node.
-    crate::object::native_module_registry::js_nm_install_stream();
-    let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", "Readable",
-    ));
-    let args = [options.get_nanbox_f64()];
-    let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(
-        readable.get_nanbox_f64(),
-        this.get_nanbox_f64(),
-        args.as_ptr(),
-        args.len(),
-    );
-    let state = scope.root_nanbox_f64(read(this.get_nanbox_f64(), b"_readableState"));
+        let options = if crate::value::js_is_truthy(socket.get_nanbox_f64()) != 0 {
+            let options = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 1)));
+            crate::runtime_state_key::js_runtime_state_key_set(
+                options.get_nanbox_f64(),
+                b"highWaterMark".as_ptr(),
+                13,
+                high_water_mark.get_nanbox_f64(),
+            );
+            options.get_nanbox_f64()
+        } else {
+            undefined()
+        };
+        let options = scope.root_nanbox_f64(options);
+        // Reuse the Readable explicit-this path, including its instanceof
+        // check: an unrelated receiver gets a fresh discarded Readable, as in
+        // Node.
+        crate::object::native_module_registry::js_nm_install_stream();
+        let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "stream", "Readable",
+        ));
+        let args = [options.get_nanbox_f64()];
+        let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(
+            readable.get_nanbox_f64(),
+            this.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
+    let on_layout = plain_chain && receiver().is_some_and(|obj| on_incoming_layout(obj));
+    // `this._readableState.readingMore = true`.
+    let state = scope.root_nanbox_f64(match receiver() {
+        Some(obj) if on_layout => {
+            let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                .add(crate::object::runtime_layouts::readable_slot::STATE as usize);
+            f64::from_bits(if bits == crate::value::TAG_HOLE {
+                crate::value::TAG_UNDEFINED
+            } else {
+                bits
+            })
+        }
+        _ => read(this.get_nanbox_f64(), b"_readableState"),
+    });
     let state_value = JSValue::from_bits(state.get_nanbox_u64());
     if state_value.is_undefined() || state_value.is_null() {
         crate::object::object_ops::throw_object_type_error(if state_value.is_null() {
@@ -705,51 +1041,190 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         11,
         bool_value(true),
     );
+    let one_pass = on_layout && parsed.is_some();
+    // Every value is allocated before the first store, so the stores below
+    // allocate nothing on the layout path and the object does not move.
+    fn fresh_array(scope: &crate::gc::RuntimeHandleScope) -> crate::gc::RuntimeHandle<'_> {
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc(0) as i64,
+        ))
+    }
+    let raw_headers = match parsed {
+        Some(p) if one_pass => scope.root_nanbox_f64(p.raw.get_nanbox_f64()),
+        _ => fresh_array(&scope),
+    };
+    let raw_trailers = fresh_array(&scope);
+    let url = match parsed {
+        Some(p) if one_pass => scope.root_nanbox_f64(p.url.get_nanbox_f64()),
+        _ => scope.root_nanbox_f64(crate::value::nanbox_string_key(
+            crate::string::js_string_from_bytes(b"".as_ptr(), 0),
+        )),
+    };
     let null = f64::from_bits(crate::value::TAG_NULL);
-    put(b"socket", socket.get_nanbox_f64());
-    for name in [
-        b"httpVersionMajor".as_slice(),
-        b"httpVersionMinor",
-        b"httpVersion",
-    ] {
-        put(name, null);
-    }
-    put(b"complete", bool_value(false));
+    let f = bool_value(false);
+    let (major, minor, version, method, count) = match parsed {
+        Some(p) if one_pass => (
+            p.major,
+            p.minor,
+            p.version.get_nanbox_f64(),
+            p.method.get_nanbox_f64(),
+            p.count,
+        ),
+        _ => (null, null, null, null, 0.0),
+    };
+    // The stores below run in the layout's key order, from `socket` on, and
+    // the one later key (`_eventsCount`, the first listener's) is absent:
+    // each store's later keys are all still holes, so it fills its slot in
+    // place (`birth_store`'s decision, made once for the whole sequence).
+    let in_order = match receiver() {
+        Some(obj) if on_layout => {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            *fields.add(crate::object::runtime_layouts::emitter_slot::EVENTS_COUNT as usize)
+                == crate::value::TAG_HOLE
+                && *fields.add(s::SOCKET as usize) == crate::value::TAG_HOLE
+        }
+        _ => false,
+    };
+    let put = |slot: u32, name: &'static [u8], value: f64| match receiver() {
+        Some(obj)
+            if on_layout
+                && *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                    .add(slot as usize)
+                    == crate::value::TAG_HOLE =>
+        {
+            if in_order {
+                crate::object::store_object_field_slot(obj, slot as usize, value.to_bits())
+            } else {
+                crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            }
+        }
+        _ => crate::runtime_state_key::js_runtime_state_key_set(
+            this.get_nanbox_f64(),
+            name.as_ptr(),
+            name.len(),
+            value,
+        ),
+    };
+    let put_symbol = |slot: u32,
+                      atom: &'static crate::object::layout_desc::StaticAtom,
+                      value: f64| match receiver() {
+        Some(obj)
+            if on_layout
+                && *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                    .add(slot as usize)
+                    == crate::value::TAG_HOLE =>
+        {
+            if in_order {
+                crate::object::store_object_field_slot(obj, slot as usize, value.to_bits())
+            } else {
+                crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            }
+        }
+        _ => {
+            let symbol = layouts::runtime_symbol_value(atom);
+            crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), symbol, value);
+        }
+    };
+    put(s::SOCKET, b"socket", socket.get_nanbox_f64());
+    put(s::HTTP_VERSION_MAJOR, b"httpVersionMajor", major);
+    put(s::HTTP_VERSION_MINOR, b"httpVersionMinor", minor);
+    put(s::HTTP_VERSION, b"httpVersion", version);
+    put(s::COMPLETE, b"complete", f);
+    put(s::RAW_HEADERS, b"rawHeaders", raw_headers.get_nanbox_f64());
     put(
-        b"rawHeaders",
-        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
-    );
-    put(
+        s::RAW_TRAILERS,
         b"rawTrailers",
-        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
+        raw_trailers.get_nanbox_f64(),
     );
-    put(b"joinDuplicateHeaders", bool_value(false));
-    put(b"aborted", bool_value(false));
-    put(b"upgrade", null);
-    put(
-        b"url",
-        crate::value::nanbox_string_key(crate::string::js_string_from_bytes(b"".as_ptr(), 0)),
-    );
-    put(b"method", null);
-    put(b"statusCode", null);
-    put(b"statusMessage", null);
-    put(b"client", socket.get_nanbox_f64());
-    put(b"_consuming", bool_value(false));
-    put(b"_dumped", bool_value(false));
+    put(s::JOIN_DUPLICATE_HEADERS, b"joinDuplicateHeaders", f);
+    put(s::ABORTED, b"aborted", f);
+    put(s::UPGRADE, b"upgrade", null);
+    put(s::URL, b"url", url.get_nanbox_f64());
+    put(s::METHOD, b"method", method);
+    put(s::STATUS_CODE, b"statusCode", null);
+    put(s::STATUS_MESSAGE, b"statusMessage", null);
+    put(s::CLIENT, b"client", socket.get_nanbox_f64());
+    put(s::CONSUMING, b"_consuming", f);
+    put(s::DUMPED, b"_dumped", f);
     use layouts as p;
-    for (atom, value) in [
-        (&p::NP_SYMBOL_K_HEADERS, null),
-        (&p::NP_SYMBOL_K_HEADERS_COUNT, 0.0),
-        (&p::NP_SYMBOL_K_TRAILERS, null),
-        (&p::NP_SYMBOL_K_TRAILERS_COUNT, 0.0),
-        (&p::NP_SYMBOL_K_ABORT_CONTROLLER, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, bool_value(false)),
-    ] {
-        let symbol = p::runtime_symbol_value(atom);
-        crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), symbol, value);
+    put_symbol(s::K_HEADERS, &p::NP_SYMBOL_K_HEADERS, null);
+    put_symbol(s::K_HEADERS_COUNT, &p::NP_SYMBOL_K_HEADERS_COUNT, count);
+    put_symbol(s::K_TRAILERS, &p::NP_SYMBOL_K_TRAILERS, null);
+    put_symbol(s::K_TRAILERS_COUNT, &p::NP_SYMBOL_K_TRAILERS_COUNT, 0.0);
+    put_symbol(
+        s::K_ABORT_CONTROLLER,
+        &p::NP_SYMBOL_K_ABORT_CONTROLLER,
+        null,
+    );
+    put_symbol(
+        s::K_ABORT_SIGNAL_SOCKET,
+        &p::NP_SYMBOL_K_ABORT_SIGNAL_SOCKET,
+        null,
+    );
+    put_symbol(
+        s::K_ABORT_SIGNAL_LISTENER,
+        &p::NP_SYMBOL_K_ABORT_SIGNAL_LISTENER,
+        null,
+    );
+    put_symbol(
+        s::K_ABORT_SIGNAL_DETACHED,
+        &p::NP_SYMBOL_K_ABORT_SIGNAL_DETACHED,
+        f,
+    );
+    one_pass
+}
+
+/// Is `obj` on the request layout's keys (born on it, on its keys under a
+/// derived chain, or on keys added after them; no shadow bit), so each of
+/// the layout's keys names its slot?
+///
+/// # Safety
+/// `obj` is a live object header.
+#[inline]
+unsafe fn on_incoming_layout(obj: *const ObjectHeader) -> bool {
+    // Born on the layout and still on it, or on a shape that descends from
+    // it by key adds (`req[sym] = v`), whose record names it as its runtime
+    // base: the layout's keys keep their slots. A shadowed word (overflow
+    // or attribute variant) declines.
+    crate::object::shapes::runtime_base_of_word((*obj).parent_class_id)
+        == layouts::INCOMING_MESSAGE::WORD
+}
+
+/// The word in `slot` of a request on its layout ([`on_incoming_layout`]),
+/// `None` when the receiver is not on it or the slot holds the hole (the key
+/// is absent; the caller's ordinary read decides).
+fn incoming_field(receiver: f64, slot: u32) -> Option<f64> {
+    let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
+    // SAFETY: a live object; a layout's slots are its inline storage.
+    unsafe {
+        if !on_incoming_layout(obj) {
+            return None;
+        }
+        let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+            .add(slot as usize);
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
     }
+}
+
+/// Store `value` as `name` (slot `slot`) of a request: a present data key of
+/// its layout is one slot store, anything else the ordinary [[Set]].
+fn incoming_set(receiver: f64, slot: u32, name: &'static [u8], value: f64) {
+    if incoming_field(receiver, slot).is_some() {
+        let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)
+            .expect("a live request");
+        // SAFETY: the key is present plain data in its slot.
+        unsafe { crate::object::store_object_field_slot(obj, slot as usize, value.to_bits()) };
+        return;
+    }
+    // SAFETY: `receiver` is a live value.
+    unsafe {
+        crate::runtime_state_key::js_runtime_state_key_set(
+            receiver,
+            name.as_ptr(),
+            name.len(),
+            value,
+        )
+    };
 }
 
 /// [`js_node_http_server_response_init`] with `req`, and its
@@ -955,6 +1430,165 @@ pub unsafe extern "C" fn js_node_http_server_response_birth(proto: f64, req: f64
     obj.get_nanbox_f64()
 }
 
+/// A server request as node's parser makes it, in two steps: the object on
+/// `proto` (`IncomingMessage.prototype` when `proto` is not an object), then
+/// (after the payload attach) `new IncomingMessage(socket)`'s fields and `parserOnHeadersComplete`'s stores in its order (`httpVersionMajor`,
+/// `httpVersionMinor`, `httpVersion`, `url`, `method`) and
+/// `_addHeaderLines(rawHeaders, n)` (`rawHeaders`, `this[kHeadersCount]`).
+/// The native payload is attached by the caller.
+///
+/// # Safety
+/// FFI entry: every argument is a live JS value; `raw_headers` is an array.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_create(proto: f64) -> f64 {
+    let proto = if JSValue::from_bits(proto.to_bits()).is_pointer() {
+        proto
+    } else {
+        ensure_http_prototype(HttpProto::IncomingMessage)
+    };
+    // Born on the request layout when `proto` is the sealed, unwritten
+    // `IncomingMessage.prototype`, as a response is on its own.
+    match crate::node_stream::instance_birth::alloc_on_layout(
+        proto,
+        layouts::INCOMING_MESSAGE::desc(),
+    ) {
+        Some(obj) => boxed(obj),
+        None => crate::object::js_object_create(proto),
+    }
+}
+
+/// node's constructor and parser fields on `this`, a fresh object from
+/// [`js_node_http_incoming_message_create`] whose payload the caller has
+/// attached (a stream's state record joins an existing payload cell).
+///
+/// # Safety
+/// FFI entry: every argument is a live JS value; `raw_headers` is an array.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_birth(
+    this: f64,
+    socket: f64,
+    raw_headers: f64,
+    major: f64,
+    minor: f64,
+    version: f64,
+    url: f64,
+    method: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let raw = scope.root_nanbox_f64(raw_headers);
+    let version = scope.root_nanbox_f64(version);
+    let url = scope.root_nanbox_f64(url);
+    let method = scope.root_nanbox_f64(method);
+    let obj = scope.root_nanbox_f64(this);
+    use crate::object::runtime_layouts::incoming_slot as s;
+    let count = crate::array::js_array_length(
+        (raw.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader,
+    ) as f64;
+    let parsed = Parsed {
+        raw: &raw,
+        major,
+        minor,
+        version: &version,
+        url: &url,
+        method: &method,
+        count,
+    };
+    if incoming_init(&obj, &socket, Some(&parsed)) {
+        return obj.get_nanbox_f64();
+    }
+    let put = |slot: u32, name: &'static [u8], value: f64| {
+        incoming_set(obj.get_nanbox_f64(), slot, name, value);
+    };
+    put(s::HTTP_VERSION_MAJOR, b"httpVersionMajor", major);
+    put(s::HTTP_VERSION_MINOR, b"httpVersionMinor", minor);
+    put(s::HTTP_VERSION, b"httpVersion", version.get_nanbox_f64());
+    put(s::URL, b"url", url.get_nanbox_f64());
+    put(s::METHOD, b"method", method.get_nanbox_f64());
+    if count > 0.0 {
+        put(s::RAW_HEADERS, b"rawHeaders", raw.get_nanbox_f64());
+        if incoming_field(obj.get_nanbox_f64(), s::K_HEADERS_COUNT).is_some() {
+            incoming_set(obj.get_nanbox_f64(), s::K_HEADERS_COUNT, b"", count);
+        } else {
+            crate::symbol::js_object_set_symbol_property(
+                obj.get_nanbox_f64(),
+                layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_HEADERS_COUNT),
+                count,
+            );
+        }
+    }
+    obj.get_nanbox_f64()
+}
+
+/// node's `IncomingMessage.prototype.signal` getter: `this[kAbortController]`,
+/// created on first read, and its signal.
+fn message_signal(receiver: f64) -> f64 {
+    extern "C" {
+        fn js_abort_controller_new() -> *mut ObjectHeader;
+        fn js_abort_controller_signal(controller: *mut ObjectHeader) -> *mut ObjectHeader;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(receiver);
+    use crate::object::runtime_layouts::incoming_slot as s;
+    let mut controller = incoming_field(this.get_nanbox_f64(), s::K_ABORT_CONTROLLER)
+        .unwrap_or_else(|| unsafe {
+            let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+            crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), key)
+        });
+    if crate::value::js_is_truthy(controller) == 0 {
+        controller = boxed(unsafe { js_abort_controller_new() });
+        let c = scope.root_nanbox_f64(controller);
+        if incoming_field(this.get_nanbox_f64(), s::K_ABORT_CONTROLLER).is_some() {
+            incoming_set(
+                this.get_nanbox_f64(),
+                s::K_ABORT_CONTROLLER,
+                b"",
+                c.get_nanbox_f64(),
+            );
+        } else {
+            let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+            unsafe {
+                crate::symbol::js_object_set_symbol_property(
+                    this.get_nanbox_f64(),
+                    key,
+                    c.get_nanbox_f64(),
+                )
+            };
+        }
+        controller = c.get_nanbox_f64();
+    }
+    let ptr = (controller.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    boxed(unsafe { js_abort_controller_signal(ptr) })
+}
+
+/// The request's exchange is over: abort `this[kAbortController]` if a
+/// program read `req.signal` (node's `abortIncoming` / `onRequestClose`).
+///
+/// # Safety
+/// FFI entry: `this` is a live JS value.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_abort_signal(this: f64) {
+    extern "C" {
+        fn js_abort_controller_abort(controller: *mut ObjectHeader);
+    }
+    if crate::object::field_get_set::runtime_read_site::object_receiver(this).is_none() {
+        return;
+    }
+    let controller = incoming_field(
+        this,
+        crate::object::runtime_layouts::incoming_slot::K_ABORT_CONTROLLER,
+    )
+    .unwrap_or_else(|| {
+        let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+        crate::symbol::js_object_get_symbol_property(this, key)
+    });
+    if JSValue::from_bits(controller.to_bits()).is_pointer() {
+        js_abort_controller_abort(
+            (controller.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! A direct `new ServerResponse(req)` is born on the response layout only
@@ -1040,6 +1674,68 @@ mod tests {
     }
     fn no_methods(_: &mut crate::native_payload::PayloadPrototype) {}
 
+    /// A program key add (`res.write = f`) moves the response to a dynamic
+    /// shape whose record names the response layout as its runtime base:
+    /// the payload is still read from its fixed slot, no key lookup.
+    #[test]
+    fn a_program_key_add_keeps_the_response_layout_as_runtime_base() {
+        on_a_fresh_thread(|| unsafe {
+            static FAMILY: crate::native_payload::NativePayloadFamily =
+                crate::native_payload::NativePayloadFamily {
+                    class_id: crate::native_class_ids::HTTP_SERVER_RESPONSE,
+                    links_owner: false,
+                    name: "ServerResponse",
+                    constructor_export: None,
+                    constructor_length: 0,
+                    install_prototype: no_methods,
+                };
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let proto = super::ensure_http_prototype(super::HttpProto::ServerResponse);
+            let req = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
+            let res = super::js_node_http_server_response_birth(proto, req);
+            let obj = (res.to_bits() & POINTER_MASK) as usize;
+            assert!(crate::native_payload::attach_to_object(
+                res, &FAMILY, 7u64, 0
+            ));
+            let born = (*(obj as *const ObjectHeader)).parent_class_id;
+            let cell = crate::native_payload::payload_cell_of_object(obj as *const ObjectHeader);
+            assert!(cell.is_some());
+            crate::object::js_object_set_field_by_name(
+                obj as *mut ObjectHeader,
+                (atom("perryAddedKey") & POINTER_MASK) as *const crate::StringHeader,
+                3.0,
+            );
+            let word = (*(obj as *const ObjectHeader)).parent_class_id;
+            assert_ne!(word, born, "the add leaves the response layout's word");
+            assert_eq!(
+                crate::object::shapes::runtime_base_of_word(word),
+                crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+                "the added-to shape names the response layout as its base"
+            );
+            assert_eq!(
+                crate::native_payload::payload_cell_of_object(obj as *const ObjectHeader),
+                cell,
+                "the payload is read from the base layout's slot"
+            );
+            assert_eq!(get(obj, "perryAddedKey"), 3.0f64.to_bits());
+            assert_eq!(get(obj, "statusCode"), 200.0f64.to_bits());
+            // An ordinary object with other keys has no base.
+            let plain = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
+            let p = (plain.to_bits() & POINTER_MASK) as usize;
+            crate::object::js_object_set_field_by_name(
+                p as *mut ObjectHeader,
+                (atom("perryAddedKey") & POINTER_MASK) as *const crate::StringHeader,
+                1.0,
+            );
+            assert_eq!(
+                crate::object::shapes::runtime_base_of_word(
+                    (*(p as *const ObjectHeader)).parent_class_id
+                ),
+                0
+            );
+        });
+    }
+
     /// The response layout lists the payload key: the attach fills its slot,
     /// and the response stays on its layout (no key-add transition).
     #[test]
@@ -1082,6 +1778,28 @@ mod tests {
                 "the payload is in the slot the layout lists"
             );
             assert_eq!(get(obj, "statusCode"), 200.0f64.to_bits());
+            // node's `_maxRequestsPerSocket`, `statusMessage` and
+            // `statusCode` stores after the attach: the written payload is a
+            // private field with no enumeration order, so each fills its
+            // slot in place and the response stays on its layout.
+            for (key, value) in [
+                ("_maxRequestsPerSocket", 0.0f64),
+                ("statusMessage", 1.0),
+                ("statusCode", 404.0),
+            ] {
+                crate::runtime_state_key::js_runtime_state_key_set(
+                    res,
+                    key.as_ptr(),
+                    key.len(),
+                    value,
+                );
+                assert_eq!(get(obj, key), value.to_bits());
+            }
+            assert_eq!(
+                (*(obj as *const ObjectHeader)).parent_class_id,
+                word,
+                "late member stores after the attach keep the response on its layout"
+            );
         });
     }
 }

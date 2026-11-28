@@ -166,6 +166,24 @@ fn lower_stream_ctor_args(
     Ok((named, object, extra_values))
 }
 
+pub(super) fn lower_sqlite_database_ctor<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+    group: &mut RootedGroup<'a>,
+) -> Result<String> {
+    let path = if args.is_empty() {
+        "0".to_string()
+    } else {
+        let filename = adopt_leading_arg_discard_rest(ctx, args, group)?;
+        super::raw_string_ptr_of(ctx, &filename)
+    };
+    let blk = ctx.block();
+    let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path)]);
+    Ok(crate::expr::nanbox_inline::nanbox_handle_inline(
+        blk, &handle,
+    ))
+}
+
 pub(super) fn lower_builtin_new<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -752,25 +770,7 @@ pub(super) fn lower_builtin_new<'a>(
                 blk, &handle,
             )))
         }
-        // better-sqlite3 Database — `new Database(filename)` opens a SQLite
-        // connection. Without this, `new Database(...)` falls into lower_new's
-        // empty-object placeholder, so `db` is a generic ObjectHeader pointer
-        // instead of a real Handle from `js_sqlite_open`. `db.prepare(...)`
-        // then unboxes that bogus pointer; `get_handle::<SqliteDbHandle>`
-        // returns None; prepare returns -1; every chained `.run()`/`.get()`/
-        // `.all()` dispatches against junk and silently produces undefined.
-        "Database" => {
-            let path_ptr = if let Some(arg) = args.first() {
-                get_raw_string_ptr(ctx, arg)?
-            } else {
-                "0".to_string()
-            };
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
-            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
-                blk, &handle,
-            )))
-        }
+        "Database" => lower_sqlite_database_ctor(ctx, args, group).map(Some),
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.
         // The result is an ordinary object (#11919).
@@ -1157,21 +1157,18 @@ pub(super) fn lower_builtin_new<'a>(
             if !args.is_empty() {
                 if let Some(props) = extract_options_fields(ctx, &args[0]) {
                     for (k, vexpr) in &props {
-                        let key_expr = Expr::String(k.clone());
-                        // #11789 sweep: the value is evaluated (and coerced --
-                        // a `toString()` is user code) BEFORE the key's raw
-                        // pointer is taken, so the key is never held across it.
-                        let value = lower_expr(ctx, vexpr)?;
-                        let val_ptr =
-                            ctx.block()
-                                .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &value)]);
-                        let key_ptr = get_raw_string_ptr(ctx, &key_expr)?;
+                        // Both operands reach `js_headers_set` boxed; the
+                        // value's coercion runs there with the object rooted.
+                        let pair = [Expr::String(k.clone()), vexpr.clone()];
+                        let (kv, pair_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, &pair)?;
                         let h = group.reread_emitted(ctx, h_root);
                         ctx.block().call(
                             DOUBLE,
                             "js_headers_set",
-                            &[(DOUBLE, &h), (I64, &key_ptr), (I64, &val_ptr)],
+                            &[(DOUBLE, &h), (DOUBLE, &kv[0]), (DOUBLE, &kv[1])],
                         );
+                        pair_group.release(ctx);
                     }
                 } else {
                     let init = lower_expr(ctx, &args[0])?;

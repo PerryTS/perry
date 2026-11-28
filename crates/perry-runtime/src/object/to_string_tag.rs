@@ -49,7 +49,6 @@ pub(crate) fn fetch_handle_interface_name(addr: usize) -> Option<&'static str> {
     match unsafe { probe(addr) } {
         1 => Some("Response"),
         2 => Some("Request"),
-        3 => Some("Headers"),
         4 => Some("Blob"),
         5 => Some("File"),
         6 => Some("FormData"),

@@ -18,7 +18,7 @@ pub(super) unsafe fn read(handle: f64, kind: Kind) -> *mut perry_runtime::Promis
         .lock()
         .unwrap()
         .get(&id)
-        .map(|r| (r.body_present, r.body_used, r.body_stream_id));
+        .map(|r| (r.body_present, r.body_used, r.body_stream));
     let Some((present, used, stream)) = state else {
         reject_fetch_type_error(promise, "Invalid response handle");
         return promise;
@@ -67,9 +67,9 @@ pub(super) unsafe fn read(handle: f64, kind: Kind) -> *mut perry_runtime::Promis
 }
 
 fn text(body: Vec<u8>, _: String) -> Result<f64, f64> {
-    let text = String::from_utf8_lossy(&body);
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    // Dropping the UTF-8 BOM bytes is dropping the decoded U+FEFF.
+    let bytes = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&body);
+    let ptr = perry_runtime::buffer::utf8_string_or_too_long_error(bytes)?;
     Ok(f64::from_bits(JSValue::string_ptr(ptr).bits()))
 }
 fn json(body: Vec<u8>, _: String) -> Result<f64, f64> {

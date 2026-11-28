@@ -42,6 +42,7 @@ fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
 
 fn closure(func_id: FuncId, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

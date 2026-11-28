@@ -565,6 +565,14 @@ export function Picker(onChange: (index: number) => void): Widget;
  */
 export function WheelPicker(onChange: (index: number) => void): Widget;
 
+/**
+ * A group of radio buttons, one per item, for a short list where every choice
+ * should stay visible. Picker's API: add items with `radioGroupAddItem`; `onChange`
+ * receives the chosen index (tvOS never calls it). Radio buttons on the web; native
+ * backends show a Picker.
+ */
+export function RadioGroup(onChange: (index: number) => void): Widget;
+
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
@@ -575,6 +583,17 @@ export function Section(title: string): Widget;
  * pattern on every other platform.
  */
 export function Section(title: string, children: Widget[]): Widget;
+
+/**
+ * A collapsible section: `title` is always shown, and the children attached with
+ * `widgetAddChild` show when the reader expands it. Web: `<details>`/`<summary>`,
+ * collapsed at first. Native backends show `Section(title)`, always expanded, with no
+ * control to collapse it and with the limits of `Section`: on macOS the children are not
+ * laid out and cannot be reordered or cleared; on iOS, tvOS, visionOS and Android the
+ * title counts as the first child; on GTK4 the children cannot be reordered; on watchOS
+ * the title is not drawn.
+ */
+export function Disclosure(title: string): Widget;
 
 /**
  * Navigation stack for multi-page apps.
@@ -940,6 +959,22 @@ export function widgetSetBackgroundGradient(
 export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
+/**
+ * The name a screen reader announces for `widget`: `aria-label` on web,
+ * `accessibilityLabel` on the Apple targets, the content description on Android, the
+ * accessible label on GTK4. On Android it replaces what TalkBack reads of a text field's
+ * value, so name a field with `Label` there. No-op on Windows and HarmonyOS.
+ */
+export function widgetSetAccessibilityLabel(widget: Widget, text: string): void;
+/**
+ * A caption for a form field. Web: a `<label for>` bound to `field` (or to the first
+ * input, textarea or select inside it), so tapping the caption focuses the field and a
+ * screen reader announces it; two Labels for one field are read together in document
+ * order, and `widgetSetAccessibilityLabel` wins over any Label. Native: a `Text` that
+ * also names `field`, replacing a name set before; on Windows and HarmonyOS only a
+ * `Text`.
+ */
+export function Label(text: string, field: Widget): Widget;
 /**
  * Attach a rich (widget-tree) tooltip to `widget`. The `content` widget
  * is presented in a borderless floating panel after `hoverDelayMs` of
@@ -1509,6 +1544,42 @@ export function navstackPush(navStack: Widget, view: Widget, title: string): voi
 export function navstackPop(navStack: Widget): void;
 
 // ---------------------------------------------------------------------------
+// Link and router. The router follows the browser's location and history, so it
+// acts on the web target only: on native, routerNavigate and routerOnChange do
+// nothing and routerCurrentPath returns "" (not on HarmonyOS, see below).
+// ---------------------------------------------------------------------------
+
+/**
+ * On web, an `<a href>`: a plain click on a same-origin http(s) `href` navigates through
+ * the router, and the browser handles every other click (another origin or scheme, a
+ * fragment of the page, a modifier key, or a page the history refuses, such as `file://`).
+ *
+ * On macOS, iOS, visionOS, Android, GTK4 and Windows, a Text whose click opens an `http`,
+ * `https`, `mailto` or `tel` URL in its default app; any other `href` does nothing. It
+ * takes no keyboard focus. On tvOS, watchOS and HarmonyOS the text cannot be activated.
+ *
+ * A `javascript:` `href` is ignored on every target: the Link is only its text.
+ */
+export function Link(text: string, href: string): Widget;
+/**
+ * Push `path` onto the session history and notify every `routerOnChange` listener. Throws
+ * where the history refuses it (another origin or, from `file://`, another file). No-op on
+ * native.
+ */
+export function routerNavigate(path: string): void;
+/**
+ * Call `onChange` with the new path after `routerNavigate`, a `Link` click, or
+ * back/forward. A listener stays for the page's life, so register one per app; one
+ * registered during a notification waits for the next. Never called on native.
+ */
+export function routerOnChange(onChange: (path: string) => void): void;
+/**
+ * The current route, `location.pathname + search + hash`; `""` on native, except on
+ * HarmonyOS, where the value must not be used.
+ */
+export function routerCurrentPath(): string;
+
+// ---------------------------------------------------------------------------
 // Picker
 // ---------------------------------------------------------------------------
 
@@ -1523,6 +1594,18 @@ export function pickerSetSelected(picker: Widget, index: number): void;
 export function wheelPickerAddItem(picker: Widget, title: string): void;
 export function wheelPickerGetSelected(picker: Widget): number;
 export function wheelPickerSetSelected(picker: Widget, index: number): void;
+
+// ---------------------------------------------------------------------------
+// RadioGroup
+// ---------------------------------------------------------------------------
+
+export function radioGroupAddItem(group: Widget, title: string): void;
+/**
+ * The chosen index. Until something is chosen it is -1 on the web and Windows; the
+ * other native targets report the first item, 0, once there is one.
+ */
+export function radioGroupGetSelected(group: Widget): number;
+export function radioGroupSetSelected(group: Widget, index: number): void;
 
 // ---------------------------------------------------------------------------
 // TabBar
@@ -1771,6 +1854,18 @@ export function alertWithButtons(
   callback: (index: number) => void,
 ): void;
 export function openFileDialog(callback: (path: string) => void): void;
+/**
+ * Web: pick a file and receive its name and its contents as a base64 `data:` URL,
+ * which is what a page needs to upload it (`openFileDialog` gives a browser page only
+ * the name). `accept` filters the picker: "image/*", ".pdf", or "" for any file.
+ * A cancelled picker passes ("", ""), and a file that cannot be read, or whose data URL
+ * does not fit in one string (above about 384 MB in Chrome), (name, ""). The page keeps
+ * each data URL, and each string made from it, in memory until it is closed. Call it from
+ * a user gesture: `callback` may never run without one, or on cancel in a browser without
+ * the `cancel` event. Native backends open no dialog and pass ("", ""); read the path from
+ * `openFileDialog` instead.
+ */
+export function openFileDialogData(accept: string, callback: (name: string, dataUrl: string) => void): void;
 export function openFolderDialog(callback: (path: string) => void): void;
 export function saveFileDialog(callback: (path: string) => void, defaultName: string, extension: string): void;
 export function pollOpenFile(): string;
@@ -1885,6 +1980,13 @@ export function onAppKeyDown(
 export function onAppKeyUp(
     handler: (key: Key, modifiers: number) => void,
 ): void;
+
+/**
+ * System Back (Android's back button / gesture). Return `true` when the app
+ * handled it (e.g. popped its own navigation); `false` lets Android apply its
+ * default (leave the app). No-op on other platforms.
+ */
+export function onBackPressed(handler: () => boolean): void;
 
 /** Route subsequent keyboard events to this widget. Pair with `style: { focusable: true }`. */
 export function focus(widget: Widget): void;

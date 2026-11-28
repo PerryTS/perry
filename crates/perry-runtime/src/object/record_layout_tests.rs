@@ -15,7 +15,6 @@ fn static_layout_records_are_present_without_an_inline_floor() {
         RECORD_F13_0::desc(),
         RECORD_F17_0::desc(),
         RECORD_F20_0::desc(),
-        RECORD_F21_0::desc(),
         RECORD_F28_0::desc(),
         RECORD_F29_0::desc(),
         RECORD_F30_0::desc(),

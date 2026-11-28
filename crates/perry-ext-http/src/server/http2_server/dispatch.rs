@@ -93,10 +93,26 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
         "close" => {
             let callback = closure_arg(args.first().copied());
             let turnloop = super::turnloop_conn_of_session(handle);
+            let mut server = false;
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                session.mark_closed();
+                server = session.session_type == 0;
+                if server {
+                    // Destroyed only once its socket has closed.
+                    session.closed = true;
+                } else {
+                    session.mark_closed();
+                }
                 if callback != 0 {
                     session.close_callbacks.push(callback);
+                    if server {
+                        // A `'close'` listener too, in registration order;
+                        // `close_callbacks` marks it one-shot.
+                        session
+                            .listeners
+                            .entry("close".into())
+                            .or_default()
+                            .push(callback);
+                    }
                 }
             }
             // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
@@ -105,16 +121,22 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             if let Some(conn) = turnloop {
                 crate::server::turnloop_h2::control::session_close(conn);
             }
-            push_h2_event(Http2PendingEvent::ClientClose {
-                session_handle: handle,
-                callback,
-            });
+            if !server {
+                push_h2_event(Http2PendingEvent::ClientClose {
+                    session_handle: handle,
+                    callback,
+                });
+            }
             self_ref
         }
         "destroy" => {
             let turnloop = super::turnloop_conn_of_session(handle);
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-                session.mark_closed();
+                if session.session_type == 0 {
+                    session.mark_destroyed();
+                } else {
+                    session.mark_closed();
+                }
             }
             // `destroy()` is the abrupt one: no GOAWAY, no drain.
             if let Some(conn) = turnloop {
@@ -399,15 +421,11 @@ pub extern "C" fn js_node_http2_server_address_json(handle: i64) -> *mut StringH
 /// `http2SecureServer.close(cb?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) {
-    // Stop accepting first. Live sessions finish, which is Node's contract:
-    // `server.close()` resolves once every session has closed.
-    super::turnloop_listen::close_turnloop_listener(handle);
-    if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
-        s.base.set_listening(false);
-        s.base.connections_checking_interval_destroyed = true;
-        crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
-    }
+    // Stop accepting first: `'close'` follows the last session's close.
+    crate::server::server::close_server(handle, callback);
     mark_server_sessions_closed(handle);
+    // `allowHTTP1` connections carry no session.
+    crate::server::server::signal_connections_close(handle, true);
 }
 
 /// `http2SecureServer.on(event, cb)`.

@@ -125,6 +125,7 @@ impl LoweringContext {
                     _ => unreachable!(),
                 };
                 return Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: ident.span.lo.0,
                     func_id,
                     params: vec![Param {
@@ -515,6 +516,49 @@ impl LoweringContext {
             .get(class_name)
             .map(|&idx| self.class_statics[idx].1.iter().any(|f| f == field_name))
             .unwrap_or(false)
+    }
+
+    /// The class whose lexical inner-name binding `name` resolves to: the
+    /// innermost class (current, then enclosing) whose own name is `name`,
+    /// unless a local declared inside that class scope shadows it.
+    pub(crate) fn resolve_class_inner_binding(&self, name: &str) -> Option<String> {
+        let current = (
+            self.current_class_inner_name.as_deref(),
+            self.current_class.as_deref(),
+            self.current_class_scope_depth,
+        );
+        let enclosing = self
+            .enclosing_class_inner_names
+            .iter()
+            .rev()
+            .map(|(inner, class, depth)| (Some(inner.as_str()), Some(class.as_str()), *depth));
+        let (_, class, class_depth) = std::iter::once(current)
+            .chain(enclosing)
+            .find(|(inner, _, _)| *inner == Some(name))?;
+        let shadowed_by_nearer_local = self
+            .local_decl_scope_depth(name)
+            .zip(class_depth)
+            .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
+        if shadowed_by_nearer_local {
+            return None;
+        }
+        class.map(str::to_string)
+    }
+
+    /// Enter a class scope: the class being lowered so far (if it has an inner
+    /// name) becomes an enclosing binding. Returns the stack length to restore.
+    pub(crate) fn push_enclosing_class_inner_name(
+        &mut self,
+        inner: Option<&String>,
+        class: Option<&String>,
+        depth: Option<usize>,
+    ) -> usize {
+        let len = self.enclosing_class_inner_names.len();
+        if let (Some(inner), Some(class)) = (inner, class) {
+            self.enclosing_class_inner_names
+                .push((inner.clone(), class.clone(), depth));
+        }
+        len
     }
 
     /// The compiler-private self-binding local `name` resolves to while a
@@ -1909,6 +1953,7 @@ pub(crate) fn perry_ui_handle_widget(name: &str) -> bool {
             | "NavigationStack"
             | "Picker"
             | "WheelPicker"
+            | "RadioGroup"
             | "Table"
             | "TabBar"
     )

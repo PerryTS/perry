@@ -64,13 +64,11 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
         &finish_listeners,
         &close_listeners,
     );
-    // Node order: queued write callbacks flush, then `'finish'` listeners, then
-    // the end callback, then `'close'`. The end cb fires *after* `'finish'` so
-    // a `res.on('finish')` handler that inspects end-callback state sees the
-    // same interleaving as Node.
+    // node's `onFinish`: queued write callbacks, the end callbacks
+    // (`flushEndCallbacks`), then `'finish'`, then `'close'`.
     tail.run_write_callbacks();
-    tail.emit_finish();
     tail.run_end_callback();
+    tail.emit_finish();
     tail.emit_close();
 }
 
@@ -122,9 +120,8 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
         return;
     }
     // #4909 — Node's flush ordering, matching `js_node_http_res_end_full`:
-    // queued write callbacks → `'finish'` → end callback → `'close'`. The
-    // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
-    // before any callback ran.
+    // queued write callbacks → end callback → `'finish'` → `'close'` (node's
+    // `onFinish` flushes the end callbacks before it emits).
     let (finish_listeners, close_listeners) =
         match finalize_buffered_end(response_root.get(), chunk, callback_root.get()) {
             Some(EndOutcome::Deferred) => return,
@@ -143,8 +140,8 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
         &close_listeners,
     );
     tail.run_write_callbacks();
-    tail.emit_finish();
     tail.run_end_callback();
+    tail.emit_finish();
     tail.emit_close();
 }
 
@@ -382,6 +379,16 @@ impl<'a> EndTail<'a> {
         call_closure0(self.callback.get());
     }
 
+    fn run_end_callback_with(&self, error: f64) {
+        let callback = self.callback.get();
+        if callback == 0 {
+            return;
+        }
+        let func =
+            f64::from_bits(JsValue::from_object_ptr(callback as *mut RawClosureHeader).bits());
+        unsafe { perry_ffi::call_value(func, perry_ffi::JsThis::UNDEFINED, &[error]) };
+    }
+
     fn emit_finish(&self) {
         self.emit("finish", &self.finish);
     }
@@ -402,6 +409,8 @@ impl<'a> EndTail<'a> {
         if owner != 0 && super::response_payload::is_response(owner) {
             if event == "close" {
                 super::response_payload::emit_close(owner);
+            } else if event == "finish" {
+                super::response_payload::emit_finish(owner);
             } else {
                 super::response_payload::emit(owner, event);
             }
@@ -530,11 +539,60 @@ extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, 
         &array_addrs(finish.get()),
         &array_addrs(close.get()),
     );
-    if !failed {
+    if failed {
+        // node's `onFinish(outmsg, err)`: the end callbacks get the error and
+        // the message never finishes.
+        tail.run_end_callback_with(error);
+    } else {
+        // node's `onFinish`: `flushEndCallbacks`, then `emit('finish')`.
         tail.run_write_callbacks();
-        tail.emit_finish();
         tail.run_end_callback();
+        tail.emit_finish();
+        // node's `resOnFinish` (the first `'finish'` listener) then queues
+        // `process.nextTick(emitCloseNT, res)`: `'close'` comes a tick later,
+        // after the request's `resume_` tick its `_dump()` queued.
+        queue_close_tick(close.get(), capture(4).get());
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    tail.emit_close();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" {
+    fn js_queue_next_tick(callback: i64);
+}
+
+/// node's `process.nextTick(emitCloseNT, res)`: the tail's `'close'` (its
+/// listener snapshot `close`, its response `owner`) on the next tick.
+fn queue_close_tick(close: f64, owner: f64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let close = scope.root_nanbox(close);
+    let owner = scope.root_nanbox(owner);
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(close_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        2,
+    ) as i64);
+    // SAFETY: the rooted closure has two traced capture slots; the values
+    // are reloaded from their roots after the allocation.
+    unsafe {
+        perry_ffi::set_closure_capture_f64(job.get() as *mut RawClosureHeader, 0, close.get());
+        perry_ffi::set_closure_capture_f64(job.get() as *mut RawClosureHeader, 1, owner.get());
+        js_queue_next_tick(job.get());
+    }
+}
+
+/// node's `emitCloseNT(res)` for a tail [`queue_close_tick`] queued.
+extern "C" fn close_tick(closure: *const RawClosureHeader, _this: JsThis) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    // SAFETY: the closure was allocated with two capture slots.
+    let close = scope.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    let owner_bits = unsafe { perry_ffi::closure_capture_f64(closure, 1) }.to_bits();
+    let owner = if JsValue::from_bits(owner_bits).is_pointer() {
+        (owner_bits & PTR_MASK) as i64
+    } else {
+        0
+    };
+    let tail = EndTail::root(&scope, owner, &[], 0, &[], &array_addrs(close.get()));
     tail.emit_close();
     f64::from_bits(TAG_UNDEFINED)
 }

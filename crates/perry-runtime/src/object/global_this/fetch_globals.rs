@@ -956,13 +956,17 @@ pub(crate) unsafe fn init_fetch_backed_receiver(
     arg0: f64,
     arg1: f64,
 ) -> bool {
+    if name == "Headers" {
+        // A Headers is an ordinary object: the receiver itself takes the list.
+        super::super::global_fetch::call_global_headers_init_from_value(this_box, arg0);
+        return true;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this_box);
     let this = crate::closure::JsThis::UNDEFINED;
     let handle = match name {
         "Request" => global_this_request_thunk(std::ptr::null(), this, arg0, arg1),
         "Response" => global_this_response_thunk(std::ptr::null(), this, arg0, arg1),
-        "Headers" => global_this_headers_thunk(std::ptr::null(), this, arg0),
         "Blob" => global_this_blob_thunk(std::ptr::null(), this, arg0, arg1),
         _ => return false,
     };

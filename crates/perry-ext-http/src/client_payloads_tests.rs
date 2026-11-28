@@ -64,6 +64,7 @@ fn request(closed: bool) -> Handle {
         socket_snapshot: None,
         abort_signal_bits: 0,
         abort_listener_bits: 0,
+        connect_options_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
         preflight_error: None,
         incoming_handle: 0,

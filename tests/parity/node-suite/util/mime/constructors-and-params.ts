@@ -27,6 +27,11 @@ mime.params.set("Version", "1.0");
 mime.params.delete("x");
 console.log("mutated:", mime.type, mime.subtype, mime.essence, mime.toString());
 console.log("case:", mime.params.get("version"), mime.params.has("Version"));
+mime.params.set("VERSION", "2.0");
+console.log("case set:", mime.params.toString());
+console.log("json:", JSON.stringify(mime.params), JSON.stringify({ p: new MIMEParams() }));
+mime.params.delete("vErSiOn");
+console.log("case delete:", mime.params.get("VERSION"), mime.params.toString());
 
 const params = new MIMEParams([["ignored", "yes"]]);
 params.set("c", "needs;quote");

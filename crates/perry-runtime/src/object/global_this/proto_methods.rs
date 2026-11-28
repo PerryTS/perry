@@ -211,6 +211,17 @@ pub(crate) fn install_builtin_well_known_symbol_method(
     symbol_name: &str,
     value: f64,
 ) {
+    let attrs = crate::object::PropertyAttrs::new(true, false, true);
+    install_builtin_well_known_symbol_value(proto_obj, symbol_name, value, attrs);
+}
+
+/// `proto[Symbol.<symbol_name>] = value` with the descriptor bits `attrs`.
+pub(crate) fn install_builtin_well_known_symbol_value(
+    proto_obj: *mut ObjectHeader,
+    symbol_name: &str,
+    value: f64,
+    attrs: crate::object::PropertyAttrs,
+) {
     if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
@@ -225,11 +236,7 @@ pub(crate) fn install_builtin_well_known_symbol_method(
             value,
         );
     }
-    crate::symbol::set_symbol_property_attrs(
-        proto_obj as usize,
-        iter as usize,
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
+    crate::symbol::set_symbol_property_attrs(proto_obj as usize, iter as usize, attrs);
 }
 
 /// #10482: install `Object.prototype.__proto__` as a REAL accessor
@@ -1533,7 +1540,7 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
             install_proto_method(
                 proto_obj,
                 "decode",
-                crate::fn_info!(#[realm(TextDecoder.prototype.decode)] export crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(TextDecoder.prototype.decode)] export crate::text::text_decoder_decode_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_web_getter_accessor(
@@ -1562,31 +1569,9 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
 pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     match builtin_name {
         "Headers" => {
-            // WHATWG aliases Headers.prototype[Symbol.iterator] to the exact
-            // same function as `.entries`.  Besides reflection parity, axios
-            // deliberately requires this to be an own prototype member before
-            // treating an untrusted header source as iterable.
-            let entries_value = install_proto_method(
-                proto_obj,
-                "entries",
-                crate::fn_info!(#[realm(Headers.prototype.entries)] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
-            );
-            install_builtin_iterator_symbol(proto_obj, entries_value);
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("append", realm_noop_append_2_metadata!(length)),
-                    ("delete", 1),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("getSetCookie", realm_noop_getsetcookie_0_metadata!(length)),
-                    ("has", 1),
-                    ("keys", realm_noop_keys_0_metadata!(length)),
-                    ("set", realm_noop_set_2_metadata!(length)),
-                    ("values", realm_noop_values_0_metadata!(length)),
-                ],
-            );
+            // The members are perry-stdlib's (`fetch/headers.rs`): real
+            // functions over the Headers object's own list.
+            crate::object::global_fetch::install_headers_prototype_members(proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         "Request" | "Response" => {

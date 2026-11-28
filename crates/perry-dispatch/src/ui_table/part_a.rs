@@ -1004,6 +1004,18 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "widgetSetAccessibilityLabel",
+        runtime: "perry_ui_widget_set_accessibility_label",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "Label",
+        runtime: "perry_ui_label_create",
+        args: &[ArgKind::Str, ArgKind::Widget],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
         method: "widgetSetRichTooltip",
         runtime: "perry_ui_widget_set_rich_tooltip",
         args: &[ArgKind::Widget, ArgKind::Widget, ArgKind::F64],

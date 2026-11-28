@@ -208,6 +208,7 @@ fn a_use_of_the_owner_in_another_body_keeps_everything() {
 #[test]
 fn a_captured_owner_keeps_everything() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 9,
         params: vec![],

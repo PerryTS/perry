@@ -934,6 +934,80 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 }
 
+/// The own keys a class evaluation's static initializers and static blocks
+/// add to its class object by assignment (`static #e = this.debug = …`,
+/// `static { this.x = 1 }`): the distinct names stored on the class object
+/// itself that are not declared statics, static methods, `length` or `name`.
+/// Each takes an own slot, so the class object is sized for them and its
+/// internal keys stay inline. A store in a nested function is counted too
+/// (it may not run, or may name another `this`): the width only grows.
+fn static_this_store_slots(
+    named_statics: &[(String, Expr)],
+    computed_statics: &[(String, Expr)],
+    class: Option<&perry_hir::Class>,
+    owner: Option<perry_hir::types::LocalId>,
+    template: &str,
+) -> usize {
+    fn names<'a>(expr: &'a Expr, is_class: &dyn Fn(&Expr) -> bool, out: &mut Vec<&'a str>) {
+        // `this.p = v` lowers to a `PropertySet`, or, in a static field
+        // initializer, to the `PutValueSet` of its assignment chain.
+        let stored = match expr {
+            Expr::PropertySet {
+                object, property, ..
+            } => Some((object.as_ref(), property.as_str())),
+            Expr::PutValueSet { target, key, .. } => match key.as_ref() {
+                Expr::String(name) => Some((target.as_ref(), name.as_str())),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((object, name)) = stored {
+            if is_class(object) && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        perry_hir::walker::walk_expr_children(expr, &mut |child| names(child, is_class, out));
+    }
+    // Static `this`: the evaluation owner (a plain or a boxed local), the
+    // template ref, or `this` in a static block.
+    let is_class = |object: &Expr| match object {
+        Expr::This => true,
+        Expr::LocalGet(id) => Some(*id) == owner,
+        Expr::IndexGet { object, index, .. } => {
+            matches!(object.as_ref(), Expr::LocalGet(id) if Some(*id) == owner)
+                && matches!(index.as_ref(), Expr::Integer(0))
+        }
+        Expr::ClassRef(name) => name == template,
+        _ => false,
+    };
+    let mut found: Vec<&str> = Vec::new();
+    for (_, init) in named_statics.iter().chain(computed_statics) {
+        names(init, &is_class, &mut found);
+    }
+    if let Some(class) = class {
+        for block in class
+            .static_methods
+            .iter()
+            .filter(|m| m.name.starts_with("__perry_static_init_"))
+        {
+            for stmt in &block.body {
+                perry_hir::walker::stmt_any_expr(stmt, &mut |expr| {
+                    names(expr, &is_class, &mut found);
+                    false
+                });
+            }
+        }
+    }
+    found
+        .iter()
+        .filter(|name| {
+            !matches!(**name, "length" | "name" | "prototype")
+                && !named_statics.iter().any(|(declared, _)| declared == *name)
+                && !class.is_some_and(|c| c.static_methods.iter().any(|m| m.name == **name))
+        })
+        .count()
+}
+
 /// One evaluation's class object (`Expr::ClassExprFresh`): a fresh heap class
 /// object carrying the evaluation's statics, captures and self-binding.
 pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -1009,7 +1083,14 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
                         .count()
                     + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
             })
-            + usize::from(!captured_args.is_empty());
+            + usize::from(!captured_args.is_empty())
+            + static_this_store_slots(
+                named_statics,
+                computed_statics,
+                ctx.classes.get(template).copied(),
+                *evaluation_owner,
+                template,
+            );
         let nfields = (named_statics.len() + own_member_slots).to_string();
         // A static FIELD named `length` / `name` takes over the intrinsic
         // property; it is created as an ordinary one.
@@ -1366,7 +1447,22 @@ pub(crate) fn lower_computed_member_registration(
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
                     let registry_name = if *is_static {
-                        crate::codegen::static_method_registry_key(method_name)
+                        // A plain-named static registered in source order is
+                        // its declaration: one body, one `JsFunctionInfo`
+                        // (the one `CLASS_STATIC_METHODS` records).
+                        let declared = ctx
+                            .classes
+                            .get(class_name)
+                            .and_then(|c| {
+                                c.computed_members
+                                    .iter()
+                                    .find(|m| m.function.name == *method_name)
+                            })
+                            .and_then(|m| m.declared_static_method())
+                            .map(str::to_string);
+                        crate::codegen::static_method_registry_key(
+                            declared.as_deref().unwrap_or(method_name),
+                        )
                     } else {
                         method_name.clone()
                     };

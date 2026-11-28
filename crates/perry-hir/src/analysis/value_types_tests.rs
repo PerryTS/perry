@@ -51,6 +51,7 @@ fn class_field(name: &str, ty: Type) -> ClassField {
 
 fn closure_returning(return_type: Type) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: Vec::new(),
@@ -656,6 +657,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             is_static: false,
             kind: crate::ClassComputedMemberKind::Method,
             source_order: 0,
+            names_declaration: false,
         }],
         decorators: Vec::new(),
         is_exported: false,

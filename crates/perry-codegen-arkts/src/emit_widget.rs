@@ -77,6 +77,13 @@ pub(crate) fn emit_widget(
         } if m == "perry/ui" => {
             let core = match method.as_str() {
                 "Text" => emit_text(args, text_slots, arkts_locals, bindings),
+                // Only its text: a second string is Text's reactive id, not an href.
+                "Link" => emit_text(
+                    &args[..args.len().min(1)],
+                    text_slots,
+                    arkts_locals,
+                    bindings,
+                ),
                 "VStack" => emit_stack(
                     "Column",
                     args,
@@ -113,6 +120,12 @@ pub(crate) fn emit_widget(
                 "Slider" => emit_slider(args, callbacks),
                 "Spacer" => "Blank()".to_string(),
                 "Divider" => "Divider()".to_string(),
+                "Label" => emit_text(
+                    &args[..args.len().min(1)],
+                    text_slots,
+                    arkts_locals,
+                    bindings,
+                ),
                 "Image" | "ImageFile" => emit_image(args, bindings),
                 "ScrollView" => emit_scrollview(
                     args,
@@ -142,7 +155,7 @@ pub(crate) fn emit_widget(
                     mutations,
                 ),
                 "Picker" => emit_picker(args, callbacks),
-                "WheelPicker" => emit_wheel_picker(args, callbacks),
+                "WheelPicker" | "RadioGroup" => emit_wheel_picker(args, callbacks),
                 // Issue #475 — Combobox(initial, onChange) maps to ArkUI
                 // Select. Runtime-added items (`comboboxAddItem`) are
                 // currently not folded into the static options array;
@@ -163,7 +176,7 @@ pub(crate) fn emit_widget(
                 // Calendar's CalendarPicker grid).
                 "DatePicker" => emit_date_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
-                "Section" => emit_section(
+                "Section" | "Disclosure" => emit_section(
                     args,
                     bindings,
                     depth,

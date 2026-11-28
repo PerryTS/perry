@@ -7,8 +7,8 @@
 
 use super::*;
 
-/// `h` is a value from unmodeled code (node: `hostFn` returns
-/// `Array.prototype`), given prototype `{proto}`. `a[0]` is an element read
+/// `h` is a value from unmodeled code (never `Array.prototype`: P-N1, owner
+/// 2026-11-23), given prototype `{proto}`. `a[0]` is an element read
 /// on an array, which consults the builtin prototypes under its index.
 fn verdict(proto: &str, read: &str) -> Verdict {
     let src = format!(
@@ -39,16 +39,20 @@ fn a_given_prototype_writes_only_its_keys() {
 }
 
 #[test]
-fn a_key_of_the_given_prototype_is_written() {
+fn a_key_of_the_given_prototype_is_not_written() {
     // node: `a.greet` is P.greet once `Array.prototype`'s chain holds P.
     let v = verdict(LIT, "greet");
-    assert!(!proven(&v), "{v:?}");
+    // P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+    // built-in prototype, so `h` is no `Array.prototype` and `a.greet` stays absent.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
-fn a_key_stored_into_the_given_prototype_later_is_written() {
+fn a_key_stored_into_the_given_prototype_later_is_not_written() {
     let v = verdict("const P: any = { k: 1 }; P.greet = () => 1;", "greet");
-    assert!(!proven(&v), "{v:?}");
+    // P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+    // built-in prototype, so `h` is no `Array.prototype` and `a.greet` stays absent.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
@@ -82,10 +86,12 @@ fn a_created_prototype_with_defined_keys_writes_only_its_keys() {
 }
 
 #[test]
-fn a_defined_key_of_a_created_prototype_is_written() {
+fn a_defined_key_of_a_created_prototype_is_not_written() {
     // node: `a.greet` is the getter of P once the chain of `Array.prototype` holds P.
     let v = verdict(CREATED, "greet");
-    assert!(!proven(&v), "{v:?}");
+    // P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+    // built-in prototype, so `h` is no `Array.prototype` and `a.greet` stays absent.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]

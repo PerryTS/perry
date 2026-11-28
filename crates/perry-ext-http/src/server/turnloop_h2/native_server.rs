@@ -182,6 +182,16 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
             conn::start_core(codec);
         });
     }
+    let on_close = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(socket_closed, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    perry_ffi::set_closure_capture_f64(on_close.get() as *mut RawClosureHeader, 0, session as f64);
+    net::once(
+        socket.value(),
+        "close",
+        f64::from_bits(JsValue::from_object_ptr(on_close.get() as *mut u8).bits()),
+    );
     crate::server::server::emit_connection(server_handle, socket.value());
     if !secure {
         // Node sends the session's first SETTINGS from a scheduled write, after
@@ -193,6 +203,25 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
                 conn::flush(codec);
             }
         });
+    }
+    undefined()
+}
+
+/// Node emits a server session's `'close'` from its socket's `'close'`, so
+/// it runs in that socket's close callback.
+unsafe extern "C" fn socket_closed(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    use crate::server::http2_server::Http2SessionHandle;
+    let session = perry_ffi::closure_capture_f64(closure, 0) as i64;
+    let listeners = match perry_ffi::get_handle_mut::<Http2SessionHandle>(session) {
+        Some(handle) => {
+            handle.mark_destroyed();
+            handle.take_close_listeners()
+        }
+        None => return undefined(),
+    };
+    let scope = TransientRootScope::enter();
+    for listener in scope.root_addrs(&listeners) {
+        crate::server::http2_server::call0(listener.get());
     }
     undefined()
 }
@@ -340,7 +369,4 @@ pub(crate) fn listen(
         tls,
     )?;
     Ok((listener.get(), bound.port, bound.address))
-}
-pub(crate) fn close_listener(listener: f64) {
-    net::close_server(listener);
 }

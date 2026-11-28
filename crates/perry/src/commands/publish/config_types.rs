@@ -243,15 +243,14 @@ pub(super) struct BuildConfig {
 ///
 /// `--march` wins over `[build] march`, which wins over the
 /// `[build] native_tuning` boolean shorthand (`true` → `native`, `false` →
-/// `generic`). Linux defaults to the portable `x86-64-v2`: the hub worker
-/// compiles linux-on-linux natively, and an unpinned baseline bakes the
-/// build box's full ISA (AVX-512) into the binary, which SIGILLs on
-/// non-AVX-512 hosts (Zen2/EPYC-Rome, pre-Skylake Xeons). Forwarded to the
-/// worker as `BuildManifest.build_march` → `perry compile --march`.
+/// `generic`). Unset sends nothing: the worker's `perry compile` then uses
+/// the target's fixed baseline (`baseline_cpu_for_target`, the same level the
+/// runtime archives are built at), never the build box's instruction set.
+/// Forwarded to the worker as `BuildManifest.build_march` →
+/// `perry compile --march`.
 pub(super) fn resolve_build_march(
     march_flag: Option<&str>,
     build: Option<&BuildConfig>,
-    is_linux: bool,
 ) -> Option<String> {
     march_flag
         .or_else(|| build.and_then(|b| b.march.as_deref()))
@@ -262,7 +261,6 @@ pub(super) fn resolve_build_march(
                 .and_then(|b| b.native_tuning)
                 .map(|tuning| if tuning { "native" } else { "generic" }.to_string())
         })
-        .or_else(|| is_linux.then(|| "x86-64-v2".to_string()))
 }
 
 #[derive(Debug, Deserialize)]

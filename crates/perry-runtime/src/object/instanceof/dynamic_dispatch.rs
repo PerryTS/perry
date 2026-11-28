@@ -444,6 +444,25 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             return f64::from_bits(TAG_FALSE);
         }
     }
+    // Live http(s) servers are registry handles too: same brand check.
+    if let Some((module, "Server")) = unsafe { bound_native_callable_module_and_method(type_ref) }
+        .as_ref()
+        .map(|(module, method)| (module.as_str(), method.as_str()))
+    {
+        let want = match module {
+            "http" => Some(super::class_handles::HTTP_SERVER_KIND),
+            "https" => Some(super::class_handles::HTTPS_SERVER_KIND),
+            _ => None,
+        };
+        if want.is_some()
+            && small_native_handle_id(value)
+                .zip(super::class_handles::http_server_handle_kind_probe())
+                .map(|(handle, probe)| unsafe { probe(handle) })
+                == want
+        {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+    }
     // #6558: `e instanceof WebAssembly.CompileError` (and LinkError /
     // RuntimeError). These constructors live on the WebAssembly NAMESPACE —
     // not on `globalThis`, so the builtin-name path above never resolves

@@ -77,6 +77,44 @@ pub(crate) unsafe fn define_own_data_from_shape(
     define_other(obj_value, key_value, value, record)
 }
 
+/// CreateDataProperty of a key `obj_value` does not hold as an own property,
+/// which the caller knows (a spread into a literal that held no key when the
+/// copy began, from a source whose key list names each key once): step 1,
+/// the creation through the learned key-add edge, without the own-key
+/// searches that answer a replacement. A creation the edge does not answer
+/// takes [`define_own_data_from_shape`], which asks every question.
+pub(crate) unsafe fn define_own_data_absent(
+    obj_value: f64,
+    key_value: f64,
+    value: f64,
+) -> Option<f64> {
+    let bits = obj_value.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || !crate::value::addr_class::is_above_handle_band(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        return None;
+    }
+    let (mut obj_value, mut value) = (obj_value, value);
+    if let Some(key) = super::store_key::interned_key_for_store(key_value) {
+        let obj = (bits & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        let mut refreshed: Option<(f64, f64, f64)> = None;
+        if let Some(stored) = super::object_set_field_by_name_transition_chain_proven_value(
+            obj,
+            key,
+            value,
+            &mut refreshed,
+        ) {
+            return Some(stored);
+        }
+        if let Some((o, _, v)) = refreshed {
+            (obj_value, value) = (o, v);
+        }
+    }
+    define_own_data_from_shape(obj_value, key_value, value)
+}
+
 #[cold]
 #[inline(never)]
 #[optimize(size)]
@@ -96,32 +134,14 @@ unsafe fn define_other(
         return super::function_own_put::function_own_put(obj_value, key_value, value, true);
     }
     let obj = addr as *mut ObjectHeader;
-    if let Some(record) = record {
-        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
-            && record.summary() == 0
-            && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
-            && record.logical_key_count() != 0
-        {
-            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
-            if let Some(bytes) = crate::string::js_string_key_bytes(
-                crate::JSValue::from_bits(key_value.to_bits()),
-                &mut scratch,
-            ) {
-                if let Some(Some(slot)) = record.own_data_slot_of_value(key_value.to_bits(), bytes)
-                {
-                    if super::shape_store::store_proven_own_slot(obj, record, slot as usize, value)
-                    {
-                        return Some(value);
-                    }
-                }
-            }
-        }
-    }
     // The word the lattice is keyed on: the interned string, found without
     // allocating (a pooled literal or an SSO immediate resolves to its
     // interned twin). Private names and canonical indices are refused there:
     // they are not ordinary named properties.
     let Some(key) = super::store_key::interned_key_for_store(key_value) else {
+        if let Some(stored) = replace_listed_data(obj, key_value, value, record) {
+            return Some(stored);
+        }
         // The interned-key store funnels validate this same header themselves.
         // Content lookup reads the shape directly, so validate only this lane.
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
@@ -140,6 +160,8 @@ unsafe fn define_other(
     // 1. Creation. The chain-proven form is exactly the definition's append:
     // it vets the receiver kind, its flags and an own descriptor for the key,
     // and skips only the prototype-chain question a definition never asks.
+    // A key-add edge exists only for a shape that lacks the key, so a hit is
+    // the creation without a search of the shape's keys for the key.
     let mut refreshed: Option<(f64, f64, f64)> = None;
     if let Some(stored) = super::object_set_field_by_name_transition_chain_proven_value(
         obj,
@@ -156,11 +178,44 @@ unsafe fn define_other(
         None => (obj_value, value),
     };
     let obj = (obj_value.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    // 2. Replacement of an own data property with default attributes.
+    // 2. Replacement of an own data property with default attributes: by
+    // content in an all-default ordinary layout, else by the interned key.
+    let record = match refreshed {
+        Some(_) => None,
+        None => record,
+    };
+    if let Some(stored) = replace_listed_data(obj, key_value, value, record) {
+        return Some(stored);
+    }
     if super::try_existing_own_data_overwrite(obj, key, value) {
         return Some(value);
     }
     None
+}
+
+/// Step 2 on an ordinary, all-default, default-prototype layout: `key_value`
+/// found in the layout's list by content, its slot overwritten in place.
+unsafe fn replace_listed_data(
+    obj: *mut ObjectHeader,
+    key_value: f64,
+    value: f64,
+    record: Option<super::shapes::ShapeRecordRef>,
+) -> Option<f64> {
+    let record = record?;
+    if !(record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
+        && record.summary() == 0
+        && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
+        && record.logical_key_count() != 0)
+    {
+        return None;
+    }
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(
+        crate::JSValue::from_bits(key_value.to_bits()),
+        &mut scratch,
+    )?;
+    let slot = record.own_data_slot_of_value(key_value.to_bits(), bytes)??;
+    super::shape_store::store_proven_own_slot(obj, record, slot as usize, value).then_some(value)
 }
 
 /// Step 2 for a key whose content was never interned. No key-add edge names

@@ -15,7 +15,7 @@ impl<'a> FuncEmitCtx<'a> {
             // Every evaluation of a class in a function body is fresh, the first one
             // included, so no evaluation is the shared class.
             Expr::ClassIsFirstEvaluation { value, .. } => {
-                self.emit_expr(func, value);
+                self.with_tdz_suppressed(|ctx| ctx.emit_expr(func, value));
                 func.instruction(&Instruction::Drop);
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
             }
@@ -33,11 +33,12 @@ impl<'a> FuncEmitCtx<'a> {
                 // ClassDefinitionEvaluation order: the binding, the computed names in
                 // source order, then static fields and blocks in source order.
                 let ctor_slot = self.class_ctor_slot(template);
+                let (base, init) = self.builtin_base_init(template);
                 self.emit_class_bridge(
                     func,
                     "class_eval_begin",
                     template,
-                    &[&Expr::Number(ctor_slot)],
+                    &[&Expr::Number(ctor_slot), &base, &Expr::Number(init)],
                 );
                 match evaluation_owner {
                     Some(owner) => {
@@ -64,7 +65,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 if !captured_args.is_empty() {
                     let caps = Expr::Array(captured_args.clone(), None);
-                    self.emit_class_bridge(func, "class_eval_caps", template, &[&caps]);
+                    self.with_tdz_suppressed(|ctx| {
+                        ctx.emit_class_bridge(func, "class_eval_caps", template, &[&caps])
+                    });
                     func.instruction(&Instruction::Drop);
                 }
                 for step in static_init_order {
@@ -113,16 +116,20 @@ impl<'a> FuncEmitCtx<'a> {
                 ..
             } => {
                 let method = self.computed_fn_slot(class_name, Some(method_name));
-                let proto_kind = self
+                let idx = self
                     .emitter
                     .class_computed_map
                     .get(&(class_name.clone(), method_name.clone()))
-                    .map_or(0.0, |&idx| self.emitter.fn_proto_code(idx));
+                    .copied();
+                let proto_kind = idx.map_or(0.0, |idx| self.emitter.fn_proto_code(idx));
+                let length = idx
+                    .and_then(|idx| self.emitter.fn_lengths.get(&idx))
+                    .map_or(0.0, |&l| f64::from(l));
                 self.emit_define_computed(
                     func,
                     class_name,
                     key_expr,
-                    (COMPUTED_METHOD, proto_kind),
+                    (COMPUTED_METHOD, proto_kind, length),
                     *is_static,
                     [method, -1.0],
                 );
@@ -141,7 +148,7 @@ impl<'a> FuncEmitCtx<'a> {
                     func,
                     class_name,
                     key_expr,
-                    (COMPUTED_ACCESSOR, 0.0),
+                    (COMPUTED_ACCESSOR, 0.0, 0.0),
                     *is_static,
                     [getter, setter],
                 );
@@ -166,14 +173,14 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// `class_define_computed(class, ctorSlot, key, kind, isStatic, a, b, protoKind)`,
-    /// `protoKind` being a method's `fn_proto_code`.
+    /// `class_define_computed(class, ctorSlot, key, kind, isStatic, a, b, protoKind, length)`,
+    /// `protoKind` and `length` being a method's `fn_proto_code` and `length`.
     fn emit_define_computed(
         &mut self,
         func: &mut Function,
         class_name: &str,
         key_expr: &Expr,
-        (kind, proto_kind): (f64, f64),
+        (kind, proto_kind, length): (f64, f64, f64),
         is_static: bool,
         slots: [f64; 2],
     ) {
@@ -190,6 +197,7 @@ impl<'a> FuncEmitCtx<'a> {
                 &Expr::Number(slots[0]),
                 &Expr::Number(slots[1]),
                 &Expr::Number(proto_kind),
+                &Expr::Number(length),
             ],
         );
     }

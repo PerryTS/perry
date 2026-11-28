@@ -95,13 +95,6 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         ctx.with_env_stack = saved_with_envs;
         return Ok(wrap_with_gets(&name, fallback?, with_envs));
     }
-    // A class body has its own immutable lexical binding for the class name.
-    // It shadows an outer local of the same name; only a parameter/local
-    // introduced inside the method body may shadow it in turn.
-    let nearer_local = ctx
-        .local_decl_scope_depth(&name)
-        .zip(ctx.current_class_scope_depth)
-        .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
     // A repeatedly evaluated named class expression has a real lexical value,
     // not merely its shared template ClassRef. Keep that value in a
     // compiler-private local so its own members use this evaluation and a
@@ -110,10 +103,12 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     if let Some(binding_id) = ctx.resolve_class_self_binding(&name) {
         return Ok(Expr::LocalGet(binding_id));
     }
-    if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) && !nearer_local {
-        if let Some(current) = ctx.current_class.clone() {
-            return Ok(Expr::ClassRef(current));
-        }
+    // A class body has its own immutable lexical binding for the class name,
+    // visible in nested classes (heritage and body) too. It shadows an outer
+    // local of the same name; only a local introduced inside that class scope
+    // may shadow it in turn.
+    if let Some(class) = ctx.resolve_class_inner_binding(&name) {
+        return Ok(Expr::ClassRef(class));
     }
     // A class declared in the current function body lexically shadows a
     // same-named binding from an OUTER scope. Resolution normally checks

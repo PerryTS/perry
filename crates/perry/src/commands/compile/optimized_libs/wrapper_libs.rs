@@ -4,6 +4,27 @@ use crate::OutputFormat;
 
 use super::super::rust_target_triple;
 
+fn archive_name(
+    binding: &super::super::well_known::WellKnownBinding,
+    target: Option<&str>,
+    instrumented: bool,
+) -> String {
+    let plain =
+        super::super::well_known::ext_staticlib_filename(&binding.lib, rust_target_triple(target));
+    super::features::variant_archive_name_for(&plain, instrumented)
+}
+
+pub(crate) fn links_better_sqlite3(libs: &[PathBuf], target: Option<&str>) -> bool {
+    let Some(binding) = super::super::well_known::lookup_well_known("better-sqlite3") else {
+        return false;
+    };
+    [false, true].into_iter().any(|instrumented| {
+        let name = archive_name(binding, target, instrumented);
+        libs.iter()
+            .any(|lib| lib.file_name() == Some(std::ffi::OsStr::new(&name)))
+    })
+}
+
 /// #2532 / #3954 — the prebuilt `perry-ext-*` wrapper archives a program's
 /// routed modules link (its `routed_modules`).
 ///
@@ -38,11 +59,7 @@ pub(crate) fn resolve_prebuilt_ext_libs(
         if !seen.insert(binding.lib.clone()) {
             continue;
         }
-        let filename =
-            super::variant_archive_name(&super::super::well_known::ext_staticlib_filename(
-                &binding.lib,
-                rust_target_triple(target),
-            ));
+        let filename = archive_name(binding, target, super::instrumented_variant_requested());
         // An npm install ships the ext archives in their own package, fetched
         // the first time a compile needs one (never otherwise).
         let found = match super::super::library_search::locate_or_fetch(&filename, target) {

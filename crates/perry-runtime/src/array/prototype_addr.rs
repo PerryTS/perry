@@ -285,10 +285,15 @@ pub(crate) fn note_realm_restricted_callee_pair(addr: usize) {
     }
 }
 
-/// One builtin's realm intrinsics: its constructor and its prototype.
+/// One builtin's realm intrinsics: its constructor, its prototype and, for
+/// a runtime family that declares one, the layout its instances are born on.
 struct IntrinsicEntry {
     prototype: Cell<usize>,
     constructor: Cell<usize>,
+    /// The ShapeId of the family's declared instance layout, minted from its
+    /// key list when the family's prototype is created (0: none declared).
+    /// A pointer-free word: the shape record is held for the agent's life.
+    instance_layout: Cell<u32>,
 }
 
 fn intrinsic_entry(identity: crate::object::BuiltinConstructorIdentity) -> &'static IntrinsicEntry {
@@ -311,6 +316,32 @@ pub(crate) fn note_realm_intrinsic(
     if constructor != 0 && entry.constructor.get() == 0 {
         entry.constructor.set(constructor);
     }
+}
+
+/// Declare the instance layout `word` of family `identity`, whose prototype
+/// `prototype` is being created. The realm that owns the entry declares it
+/// (the first one populated on the thread, as for the prototype and
+/// constructor cells); `false`, storing nothing, for any other realm's
+/// prototype.
+pub(crate) fn note_realm_instance_layout(
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: usize,
+    word: u32,
+) -> bool {
+    let entry = intrinsic_entry(identity);
+    let owner = entry.prototype.get();
+    if entry.instance_layout.get() != 0 || (owner != 0 && owner != prototype) {
+        return false;
+    }
+    entry.instance_layout.set(word);
+    true
+}
+
+/// The declared instance layout of family `identity` in this realm, 0 while
+/// the family has not been created.
+#[inline]
+pub(crate) fn realm_instance_layout(identity: crate::object::BuiltinConstructorIdentity) -> u32 {
+    intrinsic_entry(identity).instance_layout.get()
 }
 
 /// This realm's intrinsic prototype of `identity`, or 0 when the realm has

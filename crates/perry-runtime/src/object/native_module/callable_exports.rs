@@ -219,6 +219,9 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
             );
         }
+    } else if export_module_name == "process" {
+        let decorated = unsafe { nm_attach_process(property_name, value.get_nanbox_f64(), 0) };
+        value.set_nanbox_f64(decorated);
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
@@ -412,9 +415,12 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
         }
     } else {
         match (module, prop) {
+            ("url", "parse") => realm_native_url_parse_metadata!(name),
+            ("url", "resolve") => realm_native_url_resolve_metadata!(name),
             ("url", "resolveObject") => realm_native_url_resolveObject_metadata!(name),
             ("http", "_connectionListener") => realm_native_http_connectionListener_metadata!(name),
             ("module", "runMain") => realm_native_module_runMain_metadata!(name),
+            ("process", "hrtime.bigint") => "bigint",
             _ => prop,
         }
     }
@@ -1685,6 +1691,38 @@ pub(crate) unsafe fn nm_attach_stream(
     value
 }
 
+/// The `process` members' own properties, at both places a `process`
+/// callable is minted (`bound_native_callable_export_value` and the
+/// statically named export declarations).
+pub(crate) unsafe fn nm_attach_process(property_name: &str, value: f64, _addr: usize) -> f64 {
+    if property_name == "hrtime" {
+        attach_process_hrtime_bigint(value)
+    } else {
+        value
+    }
+}
+
+/// `process.hrtime` carries `bigint` as an own function member, as in Node
+/// (`hrtime.bigint = hrtimeBigInt`: writable, enumerable, configurable), so a
+/// `process.hrtime` read as a value (`const p = process; p.hrtime.bigint()`)
+/// holds what the direct `process.hrtime.bigint()` lowering calls. Decorated
+/// where the one `hrtime` callable is minted ([`nm_attach_process`]).
+fn attach_process_hrtime_bigint(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let hrtime = scope.root_nanbox_f64(value);
+    let bigint = scope.root_nanbox_f64(bound_native_callable_export_value(
+        "process",
+        "hrtime.bigint",
+    ));
+    crate::closure::closure_define_data_with_attrs(
+        crate::value::js_nanbox_get_pointer(hrtime.get_nanbox_f64()) as usize,
+        "bigint",
+        bigint.get_nanbox_f64(),
+        crate::object::PropertyAttrs::new(true, true, true),
+    );
+    hrtime.get_nanbox_f64()
+}
+
 /// Ensure the public `ChildProcess` constructor has its prototype. The direct
 /// codegen path can create the bound constructor without installing the module
 /// attach hook first.
@@ -1822,13 +1860,18 @@ pub(crate) unsafe fn nm_attach_crypto(
     value
 }
 
-#[allow(unused_mut)]
+/// A perf_hooks constructor minted by its static export body (a member read
+/// such as `perf_hooks.PerformanceObserver.supportedEntryTypes` before any
+/// `new`) gets the prototype and statics `bound_native_callable_export_value`
+/// gives it: whichever path mints the constructor first is the only one that
+/// decorates it (#15223).
 #[inline(always)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
-    _property_name: &str,
+    property_name: &str,
     value: f64,
-    _closure_addr: usize,
+    closure_addr: usize,
 ) -> f64 {
+    crate::perf_hook_slots::attach_perf_hooks_constructor(property_name, value, closure_addr);
     value
 }
 

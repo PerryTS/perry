@@ -727,7 +727,12 @@ pub(in crate::object) unsafe fn web_url_construct(
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             let input_ptr = crate::url_hooks::url_coerce_string(input);
-            let url = if let Some(base) = args.get(1).copied() {
+            // An `undefined` base is an omitted one (Web-IDL `optional`).
+            let base = args
+                .get(1)
+                .copied()
+                .filter(|b| b.to_bits() != crate::value::TAG_UNDEFINED);
+            let url = if let Some(base) = base {
                 let base_ptr = crate::url_hooks::url_coerce_string(base);
                 crate::url_hooks::url_new_with_base(input_ptr, base_ptr)
             } else {

@@ -1115,6 +1115,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "IMMEDIATE") {
         return crate::codegen_abi::native_layout_word("IMMEDIATE", 1);
     }
+    if same(name, "INCOMING_MESSAGE") {
+        return crate::codegen_abi::native_layout_word("INCOMING_MESSAGE", 1);
+    }
     if same(name, "INCOMING_MESSAGE_PROTOTYPE") {
         return crate::codegen_abi::native_layout_word("INCOMING_MESSAGE_PROTOTYPE", 1);
     }
@@ -1195,9 +1198,6 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "RECORD_F20_0") {
         return crate::codegen_abi::native_layout_word("RECORD_F20_0", 0);
-    }
-    if same(name, "RECORD_F21_0") {
-        return crate::codegen_abi::native_layout_word("RECORD_F21_0", 0);
     }
     if same(name, "RECORD_F28_0") {
         return crate::codegen_abi::native_layout_word("RECORD_F28_0", 0);

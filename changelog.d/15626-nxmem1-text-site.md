@@ -1,0 +1,1 @@
+- **wpfacts: unbounded summary instances and quadratic HandRaise scan.** Solver-made calls (such as the `apply` in a self-recursive `arguments` wrapper) each got a fresh summary instance since #15572, growing without bound. They are now keyed by the program-text site. The HandRaise sink lookup is an exact per-(node, region) count instead of a scan over all node rules.

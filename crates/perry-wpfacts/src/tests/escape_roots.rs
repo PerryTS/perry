@@ -177,11 +177,23 @@ fn a_top_seeded_into_a_field_of_an_escaped_prototype_names_the_prototype() {
         !victims.is_empty(),
         "the VICTIM instance never escaped:\n{dump}"
     );
+    // `external` is foreign code: what it is handed may be given back as a
+    // function foreign code made (`Model::foreign_fn_value`), so the call
+    // of `g` is a call of foreign code, which may also build a `VICTIM`
+    // through the escaped `VICTIM.prototype`: that instance's first hop is
+    // its own prototype. Every escape still names a prototype root, and
+    // one names `HOLDER.prototype`.
+    assert!(
+        victims
+            .iter()
+            .any(|v| tok_name(field(v, "via")) == "proto:t.ts:HOLDER"),
+        "no VICTIM instance's escape names HOLDER.prototype:\n{dump}"
+    );
     for v in victims {
         let via = tok_name(field(v, "via"));
         assert!(
-            via.contains("HOLDER") && via.starts_with("proto:"),
-            "a VICTIM instance's escape names {via:?}, not HOLDER.prototype's: {v}\n{dump}"
+            via.starts_with("proto:"),
+            "a VICTIM instance's escape names {via:?}, no prototype: {v}\n{dump}"
         );
         assert!(
             first(field(v, "via")).is_some(),

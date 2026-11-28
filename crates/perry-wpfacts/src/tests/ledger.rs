@@ -307,12 +307,15 @@ cause_test!(
     "a",
     r#"const c: any = structuredClone({ a: 1 }); console.log(c.a);"#
 );
+// A class getter under a computed key may answer `p.v`, so `p.v.w` reads
+// what it returns. (Was `globalThis[g()].w`: a computed read of the global object now
+// reads its declared members and the program's stores, R-GLOBAL, no ⊤.)
 cause_test!(
     computed_key,
     "computed-key",
     "property",
     "w",
-    r#"const g: any = (globalThis as any)[process.argv[2]]; console.log((globalThis as any)[g()].w);"#
+    r#"const k: string = process.argv[2]; class P { get [k]() { return JSON.parse(process.argv[3]); } } const p: any = new P(); console.log(p.v.w);"#
 );
 cause_test!(
     unseen escaped_object_field,

@@ -21,9 +21,9 @@ pub(super) fn alloc_response(
             type_name: "default".to_string(),
             url: String::new(),
             redirected: false,
-            cached_headers_id: None,
-            cached_body_stream_id: None,
-            body_stream_id: None,
+            cached_headers: 0,
+            cached_body_stream: None,
+            body_stream: None,
         },
     );
     id
@@ -79,7 +79,8 @@ pub(super) unsafe fn response_init(
 }
 
 /// new Response(body, statusOpt, statusTextPtrOpt, headersHandleOpt)
-/// - body_ptr: StringHeader for the body, or null for ""
+/// - body_ptr: StringHeader for the body, or null (no body, or the stream /
+///   bytes `js_response_body_init_ptr` handed over out of band)
 /// - status: f64 (200 default)
 /// - status_text_ptr: StringHeader for statusText, or null for ""
 /// - headers_handle: f64 numeric handle from js_headers_new, or 0
@@ -95,49 +96,39 @@ pub unsafe extern "C" fn js_response_new(
     // string argument still read afterwards.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let status_text = (!status_text_ptr.is_null()).then(|| scope.root_string_ptr(status_text_ptr));
-    let body_stream_id = take_pending_fetch_body_stream_id();
+    let pending_bytes = take_pending_fetch_body_bytes();
+    let body_stream = take_pending_fetch_body_stream();
     // Consume before validation so a throwing constructor cannot leak body
     // metadata into the next Response construction on this thread.
     let body_content_type = take_pending_fetch_body_content_type();
     // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
-    let body_opt = dispatch::body_bytes_from_header(body_ptr);
-    let body_present = body_opt.is_some() || body_stream_id.is_some();
+    // A binary body arrives as bytes with a null pointer.
+    let body_opt = dispatch::body_bytes_from_header(body_ptr).or(pending_bytes);
+    let body_present = body_opt.is_some() || body_stream.is_some();
     let body = body_opt.unwrap_or_default();
     let status_text_ptr = status_text.map_or(std::ptr::null(), |h| h.get_raw_const_ptr());
     let (status_u16, status_text) = response_init(status, status_text_ptr, body_present);
-    let headers_id = handle_id(headers_handle);
-    let registered = (headers_id != 0)
-        .then(|| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&headers_id)
-                .map(|record| record.store.clone())
-        })
-        .flatten();
-    // Non-literal Response init objects can deliver a plain HeadersInit value
-    // here. Preserve those records instead of treating them as missing handles.
-    let mut headers = registered
-        .or_else(|| headers_store_from_record_value(headers_handle))
-        .unwrap_or_default();
+    // `init.headers` is any HeadersInit (a Headers object, a record, an
+    // iterable of pairs, a Proxy) or absent (`undefined`, or the 0.0
+    // sentinel codegen passes when the init names no headers): copy it the
+    // way `new Headers(init)` would, which throws for `null` as node does.
+    let mut headers = match headers_handle.to_bits() {
+        0 | TAG_UNDEFINED => HeadersStore::default(),
+        _ => headers::headers_store_from_init(headers_handle),
+    };
     if let Some(content_type) = body_content_type {
         if headers.get("content-type").is_none() {
             headers.set("content-type", content_type);
         }
     }
-    // A Response owns a private Headers list. The constructor input may be an
-    // existing Headers object, so retaining its registry id would make
-    // mutations alias in both directions instead of copying the initializer.
-    let response_headers_id = (headers_id != 0).then(|| alloc_headers(headers.clone()));
+    // A Response owns a private copy of the list: an init Headers object is
+    // copied, never shared, and `response.headers` is born on its first read.
     let id = alloc_response(status_u16, status_text, headers, body, body_present);
-    if response_headers_id.is_some() || body_stream_id.is_some() {
+    if body_stream.is_some() {
         if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {
-            if let Some(headers_id) = response_headers_id {
-                resp.cached_headers_id = Some(headers_id);
-            }
-            if let Some(stream_id) = body_stream_id {
-                resp.body_stream_id = Some(stream_id);
-                resp.cached_body_stream_id = Some(stream_id);
+            if let Some(stream_id) = body_stream {
+                resp.body_stream = Some(stream_id);
+                resp.cached_body_stream = Some(stream_id);
             }
         }
     }
@@ -166,7 +157,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|resp| (resp.body_present && resp.body_used, resp.body_stream_id));
+        .map(|resp| (resp.body_present && resp.body_used, resp.body_stream));
     let Some((consumed, stream_id)) = state else {
         return f64::from_bits(TAG_UNDEFINED);
     };
@@ -178,14 +169,13 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     {
         unsafe { throw_fetch_type_error("Response.clone: Body has already been consumed.") };
     }
-    let teed =
-        stream_id.map(|stream_id| unsafe { crate::streams::tee_readable_stream_ids(stream_id) });
+    let teed = stream_id.map(|stream_id| unsafe { crate::streams::tee_readable_stream(stream_id) });
     let cloned = {
         let mut guard = FETCH_RESPONSES.lock().unwrap();
         guard.get_mut(&id).map(|resp| {
             let cloned_stream_id = teed.map(|(original, cloned)| {
-                resp.body_stream_id = Some(original);
-                resp.cached_body_stream_id = Some(original);
+                resp.body_stream = Some(original);
+                resp.cached_body_stream = Some(original);
                 cloned
             });
             FetchResponse {
@@ -199,9 +189,9 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 type_name: resp.type_name.clone(),
                 url: resp.url.clone(),
                 redirected: resp.redirected,
-                cached_headers_id: None,
-                cached_body_stream_id: cloned_stream_id,
-                body_stream_id: cloned_stream_id,
+                cached_headers: 0,
+                cached_body_stream: cloned_stream_id,
+                body_stream: cloned_stream_id,
             }
         })
     };

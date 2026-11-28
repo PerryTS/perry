@@ -1,8 +1,5 @@
-//! URL parsing + relative resolution + URL-object construction.
-
-use super::*;
-
-use super::search_params::{create_url_search_params_object, parse_query_string};
+//! The URL object's slot indices, the `Invalid URL` error, and the
+//! hand-rolled parser URLPattern matches with.
 
 /// WHATWG "special scheme": has a host, and its parser treats `\` as a path
 /// separator (`foo:`, `mailto:`, `data:` paths keep it).
@@ -396,7 +393,10 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
     }
 }
 
-/// Field indices for URL object
+/// Slot indices of the URL object (layout `URL_COMPONENTS`). Slot 0 holds the
+/// href; the slot of each component holds the offset in href where that
+/// component starts (see `super::href`), and `URL_SEARCH_PARAMS` the
+/// URLSearchParams object once `searchParams` was read.
 pub(crate) const URL_HREF: u32 = 0;
 pub(crate) const URL_PROTOCOL: u32 = 1;
 pub(crate) const URL_HOST: u32 = 2;
@@ -407,278 +407,20 @@ pub(crate) const URL_SEARCH: u32 = 6;
 pub(crate) const URL_HASH: u32 = 7;
 pub(crate) const URL_ORIGIN: u32 = 8;
 pub(crate) const URL_SEARCH_PARAMS: u32 = 9;
-// Issue #650: username + password fields. Pre-fix `u.username` /
-// `u.password` returned undefined for `https://user:pass@example.com`
-// URLs because parse_url's authority-component decomposition didn't split
-// userinfo out of `host`. Post-processing in create_url_object extracts
-// userinfo before the object is built.
 pub(crate) const URL_USERNAME: u32 = 10;
 pub(crate) const URL_PASSWORD: u32 = 11;
-pub(crate) const URL_FIELD_COUNT: u32 = 12;
 
-/// Percent-encode bytes outside the printable ASCII range (`< 0x20` and
-/// `>= 0x80`). Mirrors the practical effect of the WHATWG path / query
-/// percent-encode set for the common case of Unicode literals in URLs —
-/// e.g. `/café/` → `/caf%C3%A9/`, `?q=á` → `?q=%C3%A1`. ASCII percent
-/// sequences in the input pass through untouched.
-pub(crate) fn encode_non_ascii(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        if !(0x20..0x7F).contains(&b) {
-            out.push_str(&format!("%{:02X}", b));
-        } else {
-            out.push(b as char);
-        }
+/// Throw Node's WHATWG-URL parse failure: `TypeError("Invalid URL")` with own
+/// `code` = `ERR_INVALID_URL`, `input`, and `base` when one was given.
+pub(crate) fn throw_invalid_url(input: &str, base: Option<&str>) -> ! {
+    let mut props = vec![("code", "ERR_INVALID_URL"), ("input", input)];
+    if let Some(base) = base {
+        props.push(("base", base));
     }
-    out
-}
-
-/// Create a URL object from a string
-pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
-    let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(url_string);
-    let pathname = super::url_class::percent_encode_path(&pathname);
-    let search = encode_non_ascii(&search);
-    let hash = encode_non_ascii(&hash);
-
-    // Issue #650: extract userinfo (`user:pass@`) from `host`. parse_url
-    // leaves it as a prefix on host/hostname because the WHATWG authority
-    // component decomposition (userinfo@host:port) wasn't implemented;
-    // pre-fix `host`/`hostname`/`origin` all carried the userinfo prefix
-    // and `username`/`password` came back undefined. This post-processing
-    // pulls the userinfo back out before the object is built. Done here
-    // (not in parse_url itself) to keep parse_url's existing 7-tuple
-    // signature stable for resolve_url and the unit tests — only the
-    // create_url_object path needs the split.
-    let mut username = String::new();
-    let mut password = String::new();
-    if let Some(at_idx) = host.rfind('@') {
-        let userinfo = host[..at_idx].to_string();
-        if let Some(colon_idx) = userinfo.find(':') {
-            username = userinfo[..colon_idx].to_string();
-            password = userinfo[colon_idx + 1..].to_string();
-        } else {
-            username = userinfo;
-        }
-        let rest = host[at_idx + 1..].to_string();
-        host = rest.clone();
-        // Re-derive hostname from the cleaned host (drop port if present).
-        hostname = if let Some(port_idx) = rest.rfind(':') {
-            let p = &rest[port_idx + 1..];
-            if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() {
-                rest[..port_idx].to_string()
-            } else {
-                rest
-            }
-        } else {
-            rest
-        };
-    }
-
-    // WHATWG host canonicalization (#2974): special schemes lowercase the
-    // host and IDNA/punycode-encode Unicode labels (`bücher.example` →
-    // `xn--bcher-kva.example`, `EXAMPLE.COM` → `example.com`). Numeric /
-    // IPv4-shorthand hosts also canonicalize to dotted-quad. We reuse the
-    // `url`-crate-backed `whatwg_canonicalize_host` (reparses `http://<host>/`),
-    // which is the same path the hostname setter uses. Only special hierarchical
-    // schemes get host canonicalization; opaque schemes have no host, and
-    // `file:` is one of them for this purpose too (`file://SERVER/x` → `server`).
-    let is_special = is_special_url_scheme(&protocol);
-    if is_special && !hostname.is_empty() {
-        if let Some(canon) = super::whatwg_canonicalize_host(&hostname) {
-            hostname = canon.clone();
-            host = if port.is_empty() {
-                canon
-            } else {
-                format!("{}:{}", canon, port)
-            };
-        }
-    }
-
-    // Construct the full href (now includes userinfo when present, per
-    // WHATWG: `scheme://[user[:pass]@]host[:port][/path][?query][#frag]`).
-    let userinfo_prefix = if !username.is_empty() || !password.is_empty() {
-        if password.is_empty() {
-            format!("{}@", username)
-        } else {
-            format!("{}:{}@", username, password)
-        }
-    } else {
-        String::new()
-    };
-    let href = if protocol == "file:" {
-        format!("{}//{}{}{}{}", protocol, host, pathname, search, hash)
-    } else if host.is_empty() {
-        // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
-        format!("{}{}{}{}", protocol, pathname, search, hash)
-    } else {
-        format!(
-            "{}//{}{}{}{}{}",
-            protocol, userinfo_prefix, host, pathname, search, hash
-        )
-    };
-
-    // Calculate origin (intentionally excludes userinfo per WHATWG spec —
-    // origin is the "registered domain" identity, not the credentials).
-    let origin = if protocol == "file:" {
-        "null".to_string() // file: URLs have "null" origin
-    } else if host.is_empty() {
-        "null".to_string()
-    } else {
-        format!("{}//{}", protocol, host)
-    };
-
-    // Component storage and its intrinsic prototype are declared at startup.
-    let obj = unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(
-            crate::object::runtime_layouts::URL_COMPONENTS::desc(),
-        );
-        // GC_STORE_AUDIT(POINTER_FREE): immutable runtime family brand.
-        (*obj).class_id = crate::object::runtime_layouts::URL_CLASS_ID;
-        obj
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
-
-    // The declared private slots hold URL state. Public names remain on
-    // URL.prototype; expandos append after the private slots without seeding
-    // a tombstone layout on the first write.
-
-    // Set all the URL properties
-    let set_string = |field, text: &str| {
-        let value = create_string_f64(text);
-        let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
-        js_object_set_field_f64(obj, field, value);
-    };
-    set_string(URL_HREF, &href);
-    set_string(URL_PROTOCOL, &protocol);
-    set_string(URL_HOST, &host);
-    set_string(URL_HOSTNAME, &hostname);
-    set_string(URL_PORT, &port);
-    set_string(URL_PATHNAME, &pathname);
-    set_string(URL_SEARCH, &search);
-    set_string(URL_HASH, &hash);
-    set_string(URL_ORIGIN, &origin);
-    set_string(URL_USERNAME, &username);
-    set_string(URL_PASSWORD, &password);
-    // Build a real URLSearchParams object from the search string (parsed
-    // lazily below). Storing a string here would break `url.searchParams.get()`
-    // because the URLSearchParams method runtime functions interpret the
-    // receiver as `*mut ObjectHeader` and would deref a StringHeader
-    // instead — see issue #111.
-    let params_entries = parse_query_string(&search);
-    let params_obj = create_url_search_params_object(params_entries);
-    let params_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(params_obj as i64));
-    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
-    js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_h.get_nanbox_f64());
-    // Adopt: subsequent mutations on `url.searchParams` should sync back.
-    let params_obj =
-        crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
-    js_object_set_field_f64(
-        params_obj,
-        super::search_params::URL_SEARCH_PARAMS_OWNER,
-        obj_h.get_nanbox_f64(),
-    );
-
-    // %URL.prototype%, not `globalThis.URL.prototype`: a module-level
-    // `function URL` shadowing the global made every native URL inherit the
-    // user function's prototype, so `.hostname` & co. read undefined (#11585).
-    // The global read only materializes the builtin the first time.
-    let intrinsic =
-        || crate::object::URL_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
-    let proto = if intrinsic() != 0 {
-        crate::value::js_nanbox_pointer(intrinsic())
-    } else {
-        // Materializes the builtin (which records the intrinsic) on first use.
-        let global = crate::object::builtin_prototype_value("URL");
-        match intrinsic() {
-            0 => global,
-            ptr => crate::value::js_nanbox_pointer(ptr),
-        }
-    };
-    debug_assert_ne!(proto.to_bits(), crate::value::TAG_UNDEFINED);
-    crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader
-}
-
-/// Build and throw a `TypeError` matching Node's WHATWG-URL parser's
-/// "Invalid URL" exception. Used by `new URL(...)` when the input doesn't
-/// look like a parseable absolute URL.
-pub(crate) fn throw_invalid_url(input: &str) -> ! {
-    let msg = format!("Invalid URL: {}", input);
-    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_INVALID_URL");
-    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
-}
-
-/// Issue #650: re-derive the URL's `href` field from the current
-/// component fields after a setter has mutated one of them. Mirrors the
-/// composition logic in `create_url_object`. Caller must hold a non-null
-/// URL object.
-pub(crate) unsafe fn rebuild_url_href(url: *mut ObjectHeader) {
-    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
-    let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
-    let pathname = get_string_content(crate::object::js_object_get_field_f64(url, URL_PATHNAME));
-    let search = get_string_content(crate::object::js_object_get_field_f64(url, URL_SEARCH));
-    let hash = get_string_content(crate::object::js_object_get_field_f64(url, URL_HASH));
-    let username = get_string_content(crate::object::js_object_get_field_f64(url, URL_USERNAME));
-    let password = get_string_content(crate::object::js_object_get_field_f64(url, URL_PASSWORD));
-
-    let userinfo_prefix = if !username.is_empty() || !password.is_empty() {
-        if password.is_empty() {
-            format!("{}@", username)
-        } else {
-            format!("{}:{}@", username, password)
-        }
-    } else {
-        String::new()
-    };
-    let href = if protocol == "file:" {
-        format!("{}//{}{}{}{}", protocol, host, pathname, search, hash)
-    } else if host.is_empty() {
-        // Opaque schemes (`mailto:`, `data:`, `urn:`) — keep the scheme prefix.
-        format!("{}{}{}{}", protocol, pathname, search, hash)
-    } else {
-        format!(
-            "{}//{}{}{}{}{}",
-            protocol, userinfo_prefix, host, pathname, search, hash
-        )
-    };
-    js_object_set_field_f64(url, URL_HREF, create_string_f64(&href));
-}
-
-pub(crate) unsafe fn rebuild_url_origin(url: *mut ObjectHeader) {
-    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
-    let host = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOST));
-    let origin = if protocol == "file:" || host.is_empty() {
-        "null".to_string()
-    } else {
-        format!("{}//{}", protocol, host)
-    };
-    js_object_set_field_f64(url, URL_ORIGIN, create_string_f64(&origin));
-}
-
-/// Recompose `host` (`hostname[:port]`) from the URL's `hostname` and `port`
-/// fields, stripping default ports for known hierarchical schemes.
-pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
-    let protocol = get_string_content(crate::object::js_object_get_field_f64(url, URL_PROTOCOL));
-    let hostname = get_string_content(crate::object::js_object_get_field_f64(url, URL_HOSTNAME));
-    let mut port = get_string_content(crate::object::js_object_get_field_f64(url, URL_PORT));
-    let default_port = match protocol.as_str() {
-        "http:" | "ws:" => "80",
-        "https:" | "wss:" => "443",
-        "ftp:" => "21",
-        _ => "",
-    };
-    if !default_port.is_empty() && port == default_port {
-        port.clear();
-        js_object_set_field_f64(url, URL_PORT, create_string_f64(""));
-    }
-    let host = if port.is_empty() {
-        hostname
-    } else {
-        format!("{}:{}", hostname, port)
-    };
-    js_object_set_field_f64(url, URL_HOST, create_string_f64(&host));
-    rebuild_url_origin(url);
+    crate::exception::throw_core(crate::error::CoreError::type_error_with_own_strings(
+        b"Invalid URL",
+        &props,
+    ));
 }
 
 /// Validate that `s` looks like a parseable absolute URL — has a scheme

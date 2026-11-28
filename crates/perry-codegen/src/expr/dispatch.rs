@@ -887,7 +887,7 @@ pub(crate) fn math_operand_is_proven_number(ctx: &FnCtx<'_>, expr: &Expr) -> boo
         && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
 }
 
-/// `js_math_to_number(value)` with the plain-double case decided inline: a
+/// `js_number_coerce(value)` (ToNumber) with the plain-double case decided inline: a
 /// value outside Perry's tag band already is the Number the call would
 /// return, so only tagged values (int32 boxes, strings, objects, …) take the
 /// coercing call.
@@ -902,7 +902,7 @@ pub(crate) fn emit_math_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
     ctx.current_block = slow_idx;
     let coerced = ctx
         .block()
-        .call(DOUBLE, "js_math_to_number", &[(DOUBLE, raw)]);
+        .call(DOUBLE, "js_number_coerce", &[(DOUBLE, raw)]);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = merge_idx;

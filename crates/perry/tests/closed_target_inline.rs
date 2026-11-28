@@ -1,7 +1,8 @@
 //! A call site the whole-program facts close over its receiver classes calls
 //! exactly the bodies those classes resolve to; such a body that fits the
-//! guarded-specialization budget joins the early inliner (`alwaysinline` in
-//! the pre-optimization IR), so the call boundary disappears. Nothing is
+//! guarded-specialization budget and records no frame joins the early inliner
+//! (`alwaysinline` in the pre-optimization IR), so the call boundary
+//! disappears. Nothing is
 //! admitted without the proof: a method reachable only through a receiver
 //! the facts cannot close, in a program that rewrites the prototype, keeps
 //! its call boundary. Both programs are compared with Node for semantics.
@@ -139,13 +140,19 @@ fn definition<'a>(ir: &'a str, class: &str, method: &str) -> &'a str {
 fn facts_closed_targets_enter_the_early_inliner() {
     let built = build_and_run("test_gap_cls5_closed_target_inline.ts");
     assert_eq!(built.perry_stdout, built.node_stdout);
-    for method in ["describe", "scaled"] {
-        let line = definition(&built.ir, "Shape", method);
-        assert!(
-            line.contains(" alwaysinline "),
-            "Shape.{method} is the facts-closed target of a proven site and must join the early inliner:\n{line}"
-        );
-    }
+    // The closed site calls `scaled`'s signature entry, the body it inlines.
+    let line = definition(&built.ir, "Shape", "scaled$sig");
+    assert!(
+        line.contains(" alwaysinline "),
+        "Shape.scaled is the facts-closed target of a proven site and must join the early inliner:\n{line}"
+    );
+    // `describe` allocates its string, so an error below it records its
+    // frame: a closed target that is not frame-silent keeps its call.
+    let line = definition(&built.ir, "Shape", "describe");
+    assert!(
+        !line.contains(" alwaysinline "),
+        "Shape.describe allocates and must keep its frame:\n{line}"
+    );
     // Overrides the loops never reach stay out of line.
     for (class, method) in [("Circle", "area"), ("Rect", "area")] {
         let line = definition(&built.ir, class, method);

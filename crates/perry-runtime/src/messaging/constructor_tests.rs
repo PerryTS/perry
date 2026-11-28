@@ -4,19 +4,22 @@ fn assert_rejected(action: impl FnOnce() -> f64, code: Option<&str>, message: &s
     let thrown = crate::exception::catch_js_throw(action).expect_err("constructor must reject");
     let scope = crate::gc::RuntimeHandleScope::new();
     let error = scope.root_nanbox_f64(thrown);
-    let ptr = JSValue::from_bits(error.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::error::ErrorHeader>()
-        .cast_mut();
+    let ptr = || {
+        JSValue::from_bits(error.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::error::ErrorHeader>()
+            .cast_mut()
+    };
+    // The code lookup allocates, so the error is re-read after it.
     assert_eq!(
-        crate::node_submodules::diagnostics::error_code_for_error(ptr),
+        crate::node_submodules::diagnostics::error_code_for_error(ptr()).as_deref(),
         code
     );
     assert_eq!(
-        crate::string::string_as_str(crate::error::js_error_get_name(ptr)),
+        crate::string::string_as_str(crate::error::js_error_get_name(ptr())),
         "TypeError"
     );
     assert_eq!(
-        crate::string::string_as_str(crate::error::js_error_get_message(ptr)),
+        crate::string::string_as_str(crate::error::js_error_get_message(ptr())),
         message
     );
 }

@@ -1,0 +1,1 @@
+`server.close(callback)` on `node:http`, `node:https` and `node:http2` servers emits `'close'` and calls back after the last connection has closed, as Node does. A request in flight, a half-received request and an upgraded socket all hold it, so a graceful shutdown that exits in the callback no longer drops responses.

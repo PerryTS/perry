@@ -1,6 +1,7 @@
 //! Server liveness is maintained when its existing state changes. No handle
 //! enumeration and no remembered active bit: the state is the authority.
 use super::{deferred_events::server_is_active, HttpServer};
+use crate::server::client_error::ClientError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -45,6 +46,17 @@ impl HttpServer {
         let before = server_is_active(self);
         self.listening = listening;
         self.finish_activity_change(before);
+    }
+
+    /// Mutate the queued `'clientError'`s, which keep the server active.
+    pub(crate) fn with_client_errors<R>(
+        &mut self,
+        f: impl FnOnce(&mut std::collections::VecDeque<ClientError>) -> R,
+    ) -> R {
+        let before = server_is_active(self);
+        let result = f(&mut self.pending_client_errors);
+        self.finish_activity_change(before);
+        result
     }
 
     pub(crate) fn set_refed(&mut self, refed: bool) {
@@ -94,7 +106,7 @@ mod tests {
             queue_deferred_listening_emit(&mut server);
             assert_eq!(count.load(Ordering::Relaxed), 1);
             server.set_listening(false);
-            queue_deferred_close_emit(&mut server, 0);
+            queue_deferred_close_emit(&mut server);
             let handle = perry_ffi::register_handle(server);
             assert_eq!(drain_deferred_listen_for::<HttpServer, _>(handle, |s| s), 0);
             assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -103,10 +115,45 @@ mod tests {
             assert!(perry_ffi::drop_handle(handle));
             assert!(!perry_ffi::handle_exists(handle));
 
+            let mut server = HttpServer::with_handler(0);
+            server.with_client_errors(|errors| {
+                errors.push_back(ClientError {
+                    socket: 0.0,
+                    code: "HPE_INVALID_EOF_STATE".into(),
+                    kind: crate::server::client_error::ClientErrorKind::Timeout,
+                    read_ended: true,
+                })
+            });
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            server.with_client_errors(|errors| errors.clear());
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+
             // Removal must also release an active server, including wrappers.
             let mut server = HttpServer::with_handler(0);
             server.set_listening(true);
             let handle = perry_ffi::register_handle(server);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert!(perry_ffi::drop_handle(handle));
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    /// `close(cb)` on a server whose transport still drains owes nothing yet:
+    /// the pump finds no emit, and the callback alone keeps no loop alive.
+    #[test]
+    fn a_close_callback_waits_for_the_drained_transport() {
+        on_private_agent(|| {
+            let count = current_count();
+            let mut server = HttpServer::with_handler(0);
+            // A slot no drain in this test reaches with a live closure.
+            register_close_callback(&mut server, 8);
+            let handle = perry_ffi::register_handle(server);
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+            assert_eq!(drain_deferred_close_for::<HttpServer, _>(handle, |s| s), 0);
+            let server = perry_ffi::get_handle_mut::<HttpServer>(handle).unwrap();
+            assert_eq!(server.deferred_close_cbs, [8]);
+            assert_eq!(server.listeners["close"], [8]);
+            queue_deferred_close_emit(server);
             assert_eq!(count.load(Ordering::Relaxed), 1);
             assert!(perry_ffi::drop_handle(handle));
             assert_eq!(count.load(Ordering::Relaxed), 0);
@@ -163,8 +210,12 @@ mod tests {
         message.listeners.insert("data".into(), vec![1]);
         let request = perry_ffi::register_handle(message);
         let response = perry_ffi::register_handle(ServerResponse::new());
-        finalize_request_handles_deferred(request, response, None);
-        let message = perry_ffi::get_handle::<IncomingMessage>(request)
+        finalize_request_handles_deferred(
+            crate::server::request::handle_to_pointer_f64(request),
+            crate::server::request::handle_to_pointer_f64(response),
+            None,
+        );
+        let message = crate::server::request::message(request)
             .expect("the collector, not the exchange, releases the request");
         assert_eq!(message.method, "POST");
         assert!(message.close_emitted && message.destroyed && message.complete);
@@ -185,10 +236,32 @@ pub(crate) fn new_session_count(active: bool) -> Arc<AtomicUsize> {
 
 impl crate::server::http2_server::Http2SessionHandle {
     pub(crate) fn mark_closed(&mut self) {
+        self.mark_destroyed();
+        self.closed = true;
+    }
+
+    /// The `'close'` listeners to run, in registration order. Each
+    /// `close(cb)` callback is Node's `once('close', cb)`: its own entry is
+    /// removed before it runs, and an `on('close', cb)` of the same function
+    /// stays.
+    pub(crate) fn take_close_listeners(&mut self) -> Vec<i64> {
+        let once = std::mem::take(&mut self.close_callbacks);
+        let listeners = self.listeners.entry("close".into()).or_default();
+        let snapshot = listeners.clone();
+        for callback in once {
+            if let Some(at) = listeners.iter().position(|&l| l == callback) {
+                listeners.remove(at);
+            }
+        }
+        snapshot
+    }
+
+    /// Node's `destroy()`: `destroyed` without `closed`, which only
+    /// `close()` sets.
+    pub(crate) fn mark_destroyed(&mut self) {
         if self.session_type == 1 && !self.closed && !self.destroyed {
             self.activity_count.fetch_sub(1, Ordering::Relaxed);
         }
-        self.closed = true;
         self.destroyed = true;
     }
 }

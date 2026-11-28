@@ -42,12 +42,13 @@ fn top_beside_builtin_fn() -> Vec<usize> {
     })
 }
 
-/// A store through ⊤ with an unknown key (`unknown()[k] = 1`) may write any
-/// key onto a builtin prototype; a member the native `f` lacks (`f.zap`) is
-/// then the opaque member: `intrinsic_miss` -> `opaque_member` when the
-/// store comes first, `replay_native_missing` when it is seen later.
+/// A program store of a ⊤ value under an unknown key onto a builtin
+/// prototype by name (`Function.prototype[k] = unknown()`; P-N1, owner
+/// 2026-11-23: a store into ⊤ itself writes no builtin prototype); a member
+/// the native `f` lacks (`f.zap`) then reads what was stored: ⊤ beside no
+/// builtin function, when the store comes first and when it is seen later.
 fn written_member(store_first: bool) -> String {
-    let store = "unknown()[process.argv[2]] = 1;\n";
+    let store = "(Function.prototype as any)[process.argv[2]] = unknown();\n";
     format!(
         "declare function unknown(): any;\n\
          class R {{ v: any; constructor(v: any) {{ this.v = v; }} }}\n\

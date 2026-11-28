@@ -426,9 +426,21 @@ pub(crate) extern "C" fn error_prototype_to_string_thunk(
         );
     }
 
-    let name = error_to_string_property(this_value, b"name", "Error");
-    let message = error_to_string_property(this_value, b"message", "");
-    let result = if name.is_empty() {
+    // Each property read allocates its key; the receiver is re-read after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this_value);
+    // Node's internal errors override `toString` with `Name [CODE]: message`.
+    let gc_header = unsafe { raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    let code = if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_ERROR {
+        crate::node_submodules::error_code_for_error(raw.cast())
+    } else {
+        None
+    };
+    let name = error_to_string_property(this.get_nanbox_f64(), b"name", "Error");
+    let message = error_to_string_property(this.get_nanbox_f64(), b"message", "");
+    let result = if let Some(code) = code {
+        format!("{name} [{code}]: {message}")
+    } else if name.is_empty() {
         message
     } else if message.is_empty() {
         name
@@ -586,10 +598,6 @@ pub(crate) unsafe fn generic_array_like_to_vec(args_array: f64) -> Vec<f64> {
     // Spec `ToLength` runs `ToIntegerOrInfinity`, which itself runs
     // `ToNumber` — and `ToNumber(BigInt)` is a `TypeError`, not an implicit
     // narrowing conversion (test262 length-property-is-bigint-value).
-    // `js_number_coerce` doesn't special-case BigInt, so reject it here first.
-    if JSValue::from_bits(len_val.to_bits()).is_bigint() {
-        throw_type_error_message(b"Cannot convert a BigInt value to a number");
-    }
     let len_num = crate::builtins::js_number_coerce(len_val);
     let len = if len_num.is_nan() {
         0

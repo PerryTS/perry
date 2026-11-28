@@ -668,19 +668,26 @@ fn native_instanceof(
     // guard sees `false` and skips the fallback, escaping a bare sentinel.
     const CLASS_ID_RESPONSE: u32 = 0xFFFF0028;
     const CLASS_ID_REQUEST: u32 = 0xFFFF0029;
-    const CLASS_ID_HEADERS: u32 = 0xFFFF002A;
+    const CLASS_ID_HEADERS: u32 = crate::native_class_ids::HEADERS;
     const CLASS_ID_BLOB: u32 = 0xFFFF0026;
     const CLASS_ID_FILE: u32 = 0xFFFF002F;
+    // A Headers is an ordinary object whose payload cell names its family
+    // (a subclass instance carries the same cell).
+    if class_id == CLASS_ID_HEADERS {
+        return if crate::object::global_fetch::is_headers_object(value) {
+            true_val
+        } else {
+            false_val
+        };
+    }
     if class_id == CLASS_ID_RESPONSE
         || class_id == CLASS_ID_REQUEST
-        || class_id == CLASS_ID_HEADERS
         || class_id == CLASS_ID_BLOB
         || class_id == CLASS_ID_FILE
     {
         let want = match class_id {
             CLASS_ID_RESPONSE => 1u8,
             CLASS_ID_REQUEST => 2,
-            CLASS_ID_HEADERS => 3,
             CLASS_ID_BLOB => 4,
             _ => 5, // CLASS_ID_FILE
         };

@@ -385,6 +385,11 @@ pub struct LoweringContext {
     /// binding name (the synthetic dedup key it receives is not the
     /// user-visible name). Consumed (taken) at the start of lowering.
     pub(crate) pending_class_inner_name: Option<String>,
+    /// Inner-name bindings of the classes lexically enclosing the class being
+    /// lowered, outermost first: (inner name, class key, scope depth). A
+    /// nested class's heritage and body still see an enclosing class's own
+    /// name, exactly like any other binding of that enclosing class scope.
+    pub(crate) enclosing_class_inner_names: Vec<(String, String, Option<usize>)>,
     /// Active lexical self-bindings for named class expressions that can be
     /// evaluated more than once. The source name is deliberately separate
     /// from the compiler-private local so the binding remains visible only
@@ -1085,6 +1090,12 @@ pub struct LoweringContext {
     /// function body (it evaluates to a fresh class object per evaluation);
     /// consumed by the next `lower_class_from_ast`.
     pub(crate) pending_fresh_class_expr: bool,
+    /// Set by `lower_class_expr` with `pending_fresh_class_expr`: the local
+    /// that holds this evaluation's class object, which `this` in a static
+    /// field initializer reads (ClassDefinitionEvaluation: the class being
+    /// defined is this evaluation, not the shared template). Consumed by the
+    /// next `lower_class_from_ast`.
+    pub(crate) pending_class_static_this: Option<LocalId>,
     /// #6604/#6654: capturing class EXPRESSIONS lowered while the CURRENT
     /// function body is being lowered —
     /// `(per_evaluation_owner_local, captured_outer_ids)`,

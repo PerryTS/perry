@@ -40,8 +40,9 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             keepalive: false,
             duplex: "half".to_string(),
             signal: f64::from_bits(TAG_UNDEFINED),
-            cached_headers_id: None,
+            cached_headers: 0,
             body_error: None,
+            read_body_stream_id: None,
         }
     });
     let signal_root = scope.root_nanbox_f64(request.signal);
@@ -52,7 +53,8 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     );
     let mut body_error = request.body_error.is_some();
     request.headers = request_headers_snapshot(&request);
-    request.cached_headers_id = None;
+    request.cached_headers = 0;
+    request.read_body_stream_id = None;
     request.body_used = false;
 
     // Re-read the rooted init after allocating the key: a getter may allocate
@@ -101,15 +103,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     }
     let headers = field(b"headers");
     if headers.to_bits() != TAG_UNDEFINED {
-        let headers_root = scope.root_nanbox_f64(headers);
-        let handle = js_headers_from_value(headers_root.get_nanbox_f64());
-        let _headers_pin = lifecycle::pin_handles(&[handle]);
-        request.headers = HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&handle_id(handle))
-            .map(|h| h.store.clone())
-            .unwrap_or_default();
+        request.headers = headers::headers_store_from_init(headers);
     }
     if let Some(value) = string_field(b"integrity") {
         request.integrity = value;
@@ -209,7 +203,8 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         } else {
             let outer_content_type = take_pending_fetch_body_content_type();
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
-            let stream = take_pending_fetch_body_stream_id();
+            let pending_bytes = take_pending_fetch_body_bytes();
+            let stream = take_pending_fetch_body_stream();
             if stream.is_some() {
                 if request.keepalive {
                     throw_fetch_type_error("keepalive");
@@ -232,7 +227,8 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
                 None
             } else {
                 dispatch::body_bytes_from_header(ptr)
-            };
+            }
+            .or(pending_bytes);
             request.body = match stream.map(drain_body_stream) {
                 Some((drained, error)) => {
                     if let Some(error) = error {

@@ -1,5 +1,5 @@
 //! `HeadersStore` — the insertion-ordered (lowercase-name, value) list behind
-//! every `Headers` handle.
+//! every `Headers` object, and `HeadersPayload`, the record the object owns.
 //!
 //! Split out of `fetch/mod.rs` to keep that file under the 2000-line cap
 //! (`scripts/check_file_size.sh`). Nothing about the types changed; the
@@ -12,42 +12,25 @@ pub(super) struct HeadersStore {
     pub(super) entries: Vec<(String, String)>,
 }
 
-/// A `HEADERS_REGISTRY` entry: the header list plus the handle's bound-method
-/// closures (`headers.get` / `.entries` / …).
-///
-/// The closures are GC heap values, and the Fetch root scanner only visits
-/// them inside the registry. `HeadersStore` is also embedded, unscanned, in
-/// `FetchResponse::headers` and `RequestRecord::headers`, so the cache lives
-/// in this registry-only wrapper instead: no copy, `mem::take` or move of a
-/// `HeadersStore` can carry live closure bits into an unscanned slot. The type
-/// is deliberately not `Clone`; copying a record means copying its `store`.
-#[derive(Default)]
-pub(super) struct HeadersRecord {
-    pub(super) props: u64,
+/// The native record a `Headers` object owns (`HEADERS_FAMILY`, the payload
+/// cell in the object's `native_state` slot). Plain Rust data only: the
+/// object itself carries every JS value (expandos are its own properties).
+pub(crate) struct HeadersPayload {
     pub(super) store: HeadersStore,
-    pub(super) method_values: std::collections::HashMap<&'static str, u64>,
+    /// WHATWG guard "immutable" (`Response.error()` / `Response.redirect()`
+    /// headers): `set` / `append` / `delete` throw a TypeError.
+    pub(super) immutable: bool,
 }
 
-impl From<HeadersStore> for HeadersRecord {
-    fn from(store: HeadersStore) -> Self {
-        Self {
-            props: 0,
-            store,
-            method_values: Default::default(),
-        }
-    }
-}
-
-impl std::ops::Deref for HeadersRecord {
-    type Target = HeadersStore;
-    fn deref(&self) -> &HeadersStore {
-        &self.store
-    }
-}
-
-impl std::ops::DerefMut for HeadersRecord {
-    fn deref_mut(&mut self) -> &mut HeadersStore {
-        &mut self.store
+impl HeadersStore {
+    /// The heap bytes the list retains: the payload's external bytes.
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.entries.capacity() * std::mem::size_of::<(String, String)>()
+            + self
+                .entries
+                .iter()
+                .map(|(k, v)| k.capacity() + v.capacity())
+                .sum::<usize>()
     }
 }
 

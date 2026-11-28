@@ -654,22 +654,14 @@ fn emit_uncaught_backtrace() {
 ///
 /// # Every read off `eh` happens BEFORE the stack is materialised
 ///
-/// `js_error_get_stack` allocates: since #9486 the string is built on first
-/// read, not at construction. That allocation is a GC point, and an
-/// evacuating scavenge moves the error out from under `eh` — a plain Rust
-/// local, which perry's collector neither scans nor pins, so afterwards it
-/// names from-space. Reading `(*eh).message` there to resolve the `ERR_*`
-/// code is an unsound read whose result is whatever the collector left in the
-/// vacated cell, and the address it yields is then used as a side-table key.
-/// Reading everything first costs nothing and needs no root, which is why
-/// this is an ordering fix rather than a `RuntimeHandleScope`.
-///
-/// (Before #9486 the stack came from a plain field load, so no GC point
-/// existed between the reads at all.)
+/// `js_error_get_stack` allocates: the string is built on first read, not at
+/// construction. That allocation is a GC point, and an evacuating scavenge
+/// moves the error out from under `eh`, a plain Rust local, so afterwards it
+/// names from-space. The stack already carries Node's `Name [CODE]: message`
+/// head for an internal error.
 pub(crate) unsafe fn uncaught_native_error_report(eh: *mut crate::error::ErrorHeader) -> String {
     let name_str = string_header_to_string((*eh).name);
     let msg_str = string_header_to_string((*eh).message);
-    let code = crate::node_submodules::error_code_for_error(eh);
     // Nothing may read `eh` past this line.
     let stack_str = string_header_to_string(crate::error::js_error_get_stack(eh));
 
@@ -679,16 +671,7 @@ pub(crate) unsafe fn uncaught_native_error_report(eh: *mut crate::error::ErrorHe
         &name_str
     };
     if !stack_str.is_empty() {
-        match code {
-            Some(code) => {
-                let frames = stack_str
-                    .split_once('\n')
-                    .map(|(_, frames)| format!("\n{frames}"))
-                    .unwrap_or_default();
-                format!("{name_display} [{code}]: {msg_str}{frames}")
-            }
-            None => stack_str,
-        }
+        stack_str
     } else if msg_str.is_empty() {
         name_display.to_string()
     } else {

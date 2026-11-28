@@ -380,14 +380,28 @@ pub(crate) fn index_operand_across(arr: *const ArrayHeader, v: f64) -> (f64, *co
     if (v.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
         return (v, arr);
     }
-    index_operand_across_slow(arr, v)
+    operand_across_slow(arr, v, crate::builtins::js_number_coerce)
+}
+
+/// [`index_operand_across`] for a `length` operand, whose ToNumber throws
+/// for a BigInt or a Symbol.
+#[inline]
+pub(crate) fn length_operand_across(arr: *const ArrayHeader, v: f64) -> (f64, *const ArrayHeader) {
+    if (v.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return (v, arr);
+    }
+    operand_across_slow(arr, v, crate::builtins::js_number_coerce)
 }
 
 #[inline(never)]
-fn index_operand_across_slow(arr: *const ArrayHeader, v: f64) -> (f64, *const ArrayHeader) {
+fn operand_across_slow(
+    arr: *const ArrayHeader,
+    v: f64,
+    to_number: extern "C" fn(f64) -> f64,
+) -> (f64, *const ArrayHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_const_ptr(arr);
-    receiver.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(v))
+    receiver.across_const::<ArrayHeader, _>(|| to_number(v))
 }
 
 pub(crate) fn array_slice_value_to_index(value: f64) -> i32 {

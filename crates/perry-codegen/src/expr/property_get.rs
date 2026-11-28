@@ -1404,43 +1404,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
                 }
-                // #6003: `class_name == "Headers"` only means the NATIVE
-                // fetch Headers when the user hasn't defined their own
-                // `class Headers` — a user class of that name owns the
-                // receiver type, so fall through to the user-class
-                // getter/method dispatch below.
-                if receiver_class_is_proven
-                    && class_name == "Headers"
-                    && !ctx.classes.contains_key(&class_name)
-                    && matches!(
-                        property.as_str(),
-                        "append"
-                            | "delete"
-                            | "entries"
-                            | "forEach"
-                            | "get"
-                            | "getSetCookie"
-                            | "has"
-                            | "keys"
-                            | "set"
-                            | "Symbol.iterator"
-                            | "@@iterator"
-                            | "values"
-                    )
-                {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_headers_method_value",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
-                }
                 if receiver_class_is_proven
                     && class_name == "ClientRequest"
                     && is_http_client_request_method_name(property)

@@ -189,7 +189,7 @@ mod mock_dispatch_own_pin_tests {
             crate::closure::js_closure_alloc(crate::fn_info!(churn_then_check_self, 0), 0);
         let id = schedule_mock_callback_timer(
             closure as i64,
-            10.0,
+            10,
             Vec::new(),
             CallbackTimerKind::Timeout,
         )

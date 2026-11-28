@@ -156,6 +156,7 @@ pub(crate) fn invalidate_buffer_view_pointer(
             view.pointer_state = BufferViewPointerState::Invalidated {
                 reason: reason.clone(),
             };
+            view.inline_until_exposed = false;
         }
         downgrade_buffer_alias(ctx, affected_id, reason.clone());
     }
@@ -414,6 +415,7 @@ pub(crate) fn update_buffer_view_for_assignment(
                 // can be the view form (`new Uint8Array(buffer)`), so the
                 // inline-storage proof is not re-established here.
                 storage_inline_proven: false,
+                inline_until_exposed: false,
                 length_fixed: false,
             },
         );

@@ -289,10 +289,12 @@ pub(crate) fn install_life(reached: fn(usize, usize), before: fn(), after: fn())
     LIFE_AFTER_MINOR.set(after);
 }
 
+/// The observers: the `[gc-log]` line, the trigger-site and charge reports,
+/// the verifiers that run at a collection's edges, the cycle trace. Each one
+/// acts only when its knob is on, and none of them selects the collector
+/// body: that is [`install_collector`].
 pub(crate) fn install() {
     LOG_BURST_BOUNDARY.set(super::allocation_pacing::report_burst_boundary);
-    MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);
-    CYCLE_STEP.set(GcCycleState::start_diagnostic_step);
     SITE_TRIGGER_DECISION.set(super::diag_sites::trigger_decision);
     SITE_SET_FULL_SITE.set(super::diag_sites::set_full_site);
     SITE_TAKE_FULL_SITE.set(super::diag_sites::take_full_site);
@@ -312,4 +314,19 @@ pub(crate) fn install() {
     EMIT_TRACE.set(emit_trace_impl);
     BEGIN_CHARGE.set(begin_charge_impl);
     END_CHARGE.set(super::diag_sites::ChargeProbe::end);
+}
+
+/// The diagnostic collector body: every later minor runs
+/// `gc_collect_minor_with_diagnostics::<true>` and every later budgeted cycle
+/// the diagnostic step (`PERRY_GC_DIAG`'s phases and scanner profile, the
+/// survival census, `PERRY_GC_TRACE`'s per-phase trace, the evacuation and
+/// mark verifiers). A cycle already in progress keeps the continuation it
+/// selected at its first step. Installed by a GC diagnostics knob set while
+/// compiling, or by the first heap snapshot or `process.report` the program
+/// takes: referencing those APIs alone does not change how it collects
+/// (NXGC1: on nextjs-hello the diagnostic root visitor was 2% of every
+/// request).
+pub(crate) fn install_collector() {
+    MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);
+    CYCLE_STEP.set(GcCycleState::start_diagnostic_step);
 }

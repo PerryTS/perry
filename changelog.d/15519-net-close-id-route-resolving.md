@@ -1,0 +1,1 @@
+Closing a `fetch` client connection while its host name is still resolving abandons the connect: the lookup's answer no longer opens a connection nobody owns, so an aborted `fetch` to a host name no longer keeps the process alive.

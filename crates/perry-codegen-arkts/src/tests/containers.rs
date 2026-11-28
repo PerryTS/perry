@@ -245,6 +245,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
         vec![
             Expr::String("Go".into()),
             Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 0 as perry_hir::types::FuncId,
                 params: vec![],
@@ -343,6 +344,7 @@ fn state_set_in_closure_rewrites_to_settext() {
     });
     // Closure body: Stmt::Expr(count.set(5))
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
@@ -535,6 +537,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
@@ -627,6 +630,21 @@ fn wheel_picker_uses_native_looping_text_picker() {
     assert!(r
         .ets_source
         .contains("TextPicker({ range: [], value: '' }).canLoop(true)"));
+    assert!(r
+        .ets_source
+        .contains("perryEntry.invokeCallback1(0, index)"));
+    assert_eq!(r.callbacks.len(), 1);
+}
+
+#[test]
+fn radio_group_falls_back_to_the_wheel_picker() {
+    let mut m = empty_module();
+    m.init
+        .push(app_with_body(nmc("RadioGroup", vec![closure_stub()])));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r
+        .ets_source
+        .contains("TextPicker({ range: [], value: '' })"));
     assert!(r
         .ets_source
         .contains("perryEntry.invokeCallback1(0, index)"));
@@ -823,6 +841,19 @@ fn section_with_title_and_children() {
 }
 
 #[test]
+fn disclosure_is_an_expanded_section() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "Disclosure",
+        vec![Expr::String("More details".into())],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r
+        .ets_source
+        .contains("Text('More details').fontSize(14).fontColor('#888888')"));
+}
+
+#[test]
 fn string_literal_escaping() {
     assert_eq!(arkts_string_lit("hi"), "'hi'");
     assert_eq!(arkts_string_lit("he's there"), "'he\\'s there'");
@@ -898,6 +929,7 @@ fn media_call_inside_button_closure_also_triggers_glue() {
     // walker must descend into Closure bodies via stmt_uses → Closure.
     let mut m = empty_module();
     let play_closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],

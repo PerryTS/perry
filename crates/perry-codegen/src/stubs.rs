@@ -691,7 +691,11 @@ mod tests {
             brands: Vec::new(),
             attrs: Vec::new(),
         };
-        let ll = static_shape_seed_ll(&[(0x1000_0042, shape)]);
+        let ll = static_shape_seed_ll_impl(
+            &[(0x1000_0042, shape)],
+            true,
+            Some("x86_64-unknown-linux-gnu"),
+        );
         assert!(ll.contains("c\"\\75\\00\\76\\00\""), "{ll}");
         // The row: rep, request, names, atoms, list, no bodies, 4 packed
         // bytes, 2 keys, live 3.

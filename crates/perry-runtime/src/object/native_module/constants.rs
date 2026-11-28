@@ -205,6 +205,24 @@ pub(crate) unsafe fn selected_native_module_constant(
     selected_normalized_constant(module_name, property, namespace_obj, is_cjs_default_object)
 }
 
+/// Is `value` the `path` namespace object a member read came through (its
+/// `import * as` or CommonJS default form)?
+fn is_path_namespace(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let obj = v.as_pointer::<ObjectHeader>();
+    !obj.is_null()
+        && unsafe {
+            (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                && matches!(
+                    read_native_module_name(obj).as_deref(),
+                    Some("path" | "path.default")
+                )
+        }
+}
+
 /// Normalization precedes literal specialization: an out-of-line alias lookup
 /// would hide the module name from LLVM and retain every module's match arm.
 #[inline(always)]
@@ -567,6 +585,12 @@ pub(crate) unsafe fn selected_normalized_constant(
                 "path",
                 "toNamespacedPath",
             )),
+            // The host's flavor is the namespace itself (`path.posix ===
+            // path` on POSIX, `path.win32 === path` on Windows).
+            "posix" if cfg!(not(windows)) && is_path_namespace(namespace_obj) => {
+                Some(namespace_obj)
+            }
+            "win32" if cfg!(windows) && is_path_namespace(namespace_obj) => Some(namespace_obj),
             "posix" => cjs_default_export_value("path.posix"),
             "win32" => cjs_default_export_value("path.win32"),
             _ => None,

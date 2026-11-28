@@ -126,18 +126,6 @@ macro_rules! two_operand_value_entry {
 }
 
 two_operand_value_entry!(
-    /// `path.join(a, b)` over NaN-boxed operands — see the module docs.
-    js_path_join_value => super::js_path_join,
-    *mut StringHeader,
-    KEEP_PATH_JOIN_VALUE
-);
-two_operand_value_entry!(
-    /// `path.win32.join(a, b)` over NaN-boxed operands.
-    js_path_win32_join_value => super::js_path_win32_join,
-    *mut StringHeader,
-    KEEP_PATH_WIN32_JOIN_VALUE
-);
-two_operand_value_entry!(
     /// The `path.resolve` fold step over NaN-boxed operands — the issue's
     /// headline repro, `path.resolve(base, computedShortString)`.
     js_path_resolve_join_value => super::js_path_resolve_join,
@@ -239,22 +227,17 @@ mod tests {
     /// be read correctly afterwards — in both SSO/heap orders.
     #[test]
     fn both_operands_survive_the_materialisation_window() {
+        let join = |a: f64, b: f64| {
+            let args = [a, b];
+            read_native_path(unsafe { crate::path::join::js_path_join_values(args.as_ptr(), 2) })
+        };
+        assert_eq!(join(sso_string("/r"), sso_string("s1")), "/r/s1");
         assert_eq!(
-            read_native_path(js_path_join_value(sso_string("/r"), sso_string("s1"))),
-            "/r/s1"
-        );
-        assert_eq!(
-            read_native_path(js_path_join_value(
-                heap_string("/root-that-is-long"),
-                sso_string("s1")
-            )),
+            join(heap_string("/root-that-is-long"), sso_string("s1")),
             "/root-that-is-long/s1"
         );
         assert_eq!(
-            read_native_path(js_path_join_value(
-                sso_string("/r"),
-                heap_string("segment-longer-than-sso")
-            )),
+            join(sso_string("/r"), heap_string("segment-longer-than-sso")),
             "/r/segment-longer-than-sso"
         );
         assert_eq!(

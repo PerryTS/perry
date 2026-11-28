@@ -54,12 +54,22 @@ fn chunk_byte_len(value: f64) -> usize {
     bytes.len()
 }
 
+/// node's `read()` on an empty buffer: after EOF (`state.ended`,
+/// `state.length === 0`) it calls `endReadable`, so the reader that asked —
+/// typically a `'readable'` listener woken by the EOF — gets `'end'`. Before
+/// EOF it just returns `null`.
+fn read_found_buffer_empty(stream: f64) {
+    if stream_hidden_ended(stream) {
+        cancel_readable_event(stream);
+        refresh_readable_aborted_flag(stream);
+        mark_disturbed(stream);
+        schedule_readable_end(stream);
+    }
+}
+
 pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
-        }
+        read_found_buffer_empty(stream);
         return f64::from_bits(TAG_NULL);
     }
     if readable_object_mode(stream) {
@@ -86,10 +96,7 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     };
     let len = rooted_array_len(&values);
     if len == 0 {
-        if stream_hidden_ended(s.get_nanbox_f64()) {
-            cancel_readable_event(s.get_nanbox_f64());
-            refresh_readable_aborted_flag(s.get_nanbox_f64());
-        }
+        read_found_buffer_empty(s.get_nanbox_f64());
         return f64::from_bits(TAG_NULL);
     }
 
@@ -207,6 +214,9 @@ pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
     };
     super::read_ahead(s.get_nanbox_f64(), taking);
     if size <= 0.0 {
+        if get_hidden_value(s.get_nanbox_f64(), hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
+            read_found_buffer_empty(s.get_nanbox_f64());
+        }
         return f64::from_bits(TAG_NULL);
     }
     let requested = size as usize;
@@ -214,10 +224,7 @@ pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
         .unwrap_or(0.0)
         .max(0.0) as usize;
     if available == 0 {
-        if stream_hidden_ended(s.get_nanbox_f64()) {
-            cancel_readable_event(s.get_nanbox_f64());
-            refresh_readable_aborted_flag(s.get_nanbox_f64());
-        }
+        read_found_buffer_empty(s.get_nanbox_f64());
         return f64::from_bits(TAG_NULL);
     }
     if readable_encoding_tag(s.get_nanbox_f64()).is_some() {

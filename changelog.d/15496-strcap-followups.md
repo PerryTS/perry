@@ -1,0 +1,1 @@
+`child_process` pump paths (failed-spawn close, stdin drain, Windows spawn close) now run each callback and listener as its own uncaught-exception turn, and a read `Request` body is a closed, disturbed, locked `ReadableStream` like in Node. `fetch(request)` moves the Request's body out and rejects a used Request with Node's `TypeError`.

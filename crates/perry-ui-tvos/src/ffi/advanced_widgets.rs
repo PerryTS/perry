@@ -281,6 +281,25 @@ pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
 
+/// RadioGroup shares Picker's API; the radio buttons exist on the web target only, so
+/// this backend shows a picker, which never calls `on_change`.
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_create(on_change: f64) -> i64 {
+    perry_ui_picker_create(on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_add_item(handle: i64, title_ptr: i64) {
+    perry_ui_picker_add_item(handle, title_ptr);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_set_selected(handle: i64, index: i64) {
+    perry_ui_picker_set_selected(handle, index);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_radio_group_get_selected(handle: i64) -> i64 {
+    perry_ui_picker_get_selected(handle)
+}
+
 /// Create a TabBar. Returns widget handle.
 #[no_mangle]
 pub extern "C" fn perry_ui_tabbar_create(on_change: f64) -> i64 {
@@ -309,6 +328,13 @@ pub extern "C" fn perry_ui_form_create() -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_ui_section_create(title_ptr: i64) -> i64 {
     widgets::form::section_create(title_ptr as *const u8)
+}
+
+/// The collapsible `<details>` exists on the web target only; here a Disclosure is a
+/// Section, always expanded.
+#[no_mangle]
+pub extern "C" fn perry_ui_disclosure_create(title_ptr: i64) -> i64 {
+    perry_ui_section_create(title_ptr)
 }
 
 /// Create a NavigationStack. Returns widget handle.

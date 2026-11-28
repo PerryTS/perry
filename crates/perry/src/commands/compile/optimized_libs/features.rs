@@ -107,6 +107,27 @@ pub(crate) fn gc_diagnostics_requested() -> bool {
         })
 }
 
+/// Install the diagnostic collector body from the first collection on
+/// (perry-runtime `js_runtime_install_gc_diagnostics`): a knob whose output
+/// that body produces (`PERRY_GC_DIAG`, `PERRY_GC_VERIFY_EVACUATION`,
+/// `PERRY_GC_TRACE`) on while compiling. `PERRY_GC_LOG`'s line is an observer
+/// and needs only the diagnostics install, so a build compiled for it
+/// collects with the same body as one without. Without such a knob the body
+/// waits for the program's first heap snapshot or `process.report`.
+pub(crate) fn gc_collector_diagnostics_requested() -> bool {
+    gc_trace_requested()
+        || ["PERRY_GC_DIAG", "PERRY_GC_VERIFY_EVACUATION"]
+            .iter()
+            .any(|knob| {
+                std::env::var(knob).is_ok_and(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "on" | "yes"
+                    )
+                })
+            })
+}
+
 /// Whether this compile asks for `PERRY_GC_TRACE` output (the telemetry and
 /// typed-feedback JSON, which only the instrumented archives carry).
 /// Shared with the build-level no-op cache so the cache uses the same decision

@@ -203,8 +203,8 @@ impl SH for Expr {
             Expr::FsAppendFileSync(a, b) => { tag(h, 87); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::FsReadFileBinary(e) => { tag(h, 88); e.as_ref().hash(h); }
             Expr::FsRmRecursive(e) => { tag(h, 89); e.as_ref().hash(h); }
-            Expr::PathJoin(a, b) => { tag(h, 90); a.as_ref().hash(h); b.as_ref().hash(h); }
-            Expr::PathWin32Join(a, b) => { tag(h, 462); a.as_ref().hash(h); b.as_ref().hash(h); }
+            Expr::PathJoin(es) => { tag(h, 90); es.hash(h); }
+            Expr::PathWin32Join(es) => { tag(h, 462); es.hash(h); }
             Expr::PathWin32 { method, args } => { tag(h, 11222); (*method as u32).hash(h); for a in args { a.hash(h); } }
             Expr::PathDirname(e) => { tag(h, 91); e.as_ref().hash(h); }
             Expr::PathBasename(e) => { tag(h, 92); e.as_ref().hash(h); }
@@ -583,7 +583,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, construct_only, .. } => { tag(h, 382); construct_only.hash(h); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
+            Expr::Closure { func_id, params, type_params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, construct_only, .. } => { tag(h, 382); construct_only.hash(h); func_id.hash(h); params.hash(h); type_params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }

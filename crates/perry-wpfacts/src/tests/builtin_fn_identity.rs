@@ -557,7 +557,7 @@ fn restoring_the_declared_global_value_does_not_expose_its_members() {
             declare function external(x:any):void;
             const o:any={{field:1}};
             function load(){{external(o);}}
-            const unknown:any=(globalThis as any)[process.argv[2]];
+            declare function opaque(): any; const unknown:any=opaque();
             {change}
             Object.keys(load as any);
             console.log(o.field); // RETAINED-GLOBAL
@@ -671,7 +671,7 @@ fn inherited_typed_array_statics_have_one_identity_per_function() {
 }
 
 #[test]
-fn exposure_keeps_the_native_body_and_opens_its_missing_members() {
+fn exposure_keeps_the_native_body_and_its_missing_members_absent() {
     for exposed in ["t", "[1][process.argv[2]??'map']"] {
         verdict(
             &timer_source(
@@ -693,7 +693,11 @@ fn exposure_keeps_the_native_body_and_opens_its_missing_members() {
                 console.log(o.field); // EXPOSED-MEMBER
             "#
             );
-            verdict(&src, "// EXPOSED-MEMBER", "field", false);
+            // `t` handed to unknown code or not: unknown code adds no member
+            // to an intrinsic it is handed (owner premise 2026-11-19, rule
+            // R1), so `t.zap` stays absent, the call throws and `o` reaches
+            // no one.
+            verdict(&src, "// EXPOSED-MEMBER", "field", true);
         }
     }
 }
@@ -798,14 +802,17 @@ fn an_extracted_native_call_method_retains_the_string_replace_result() {
 }
 
 #[test]
-fn cxid3_unknown_code_can_replace_the_json_function_before_a_length_read() {
+fn cxid3_unknown_code_replaces_no_json_function_before_a_length_read() {
     let src = r#"
 const ns = JSON;
 new Function("ns", process.argv[2])(ns);
 const value = ns.stringify(0).slice(1);
 console.log(value.length); // DYNAMIC-LENGTH
 "#;
-    verdict(src, "// DYNAMIC-LENGTH", "length", false);
+    // Owner 2026-11-19 (unknown code handed a value writes no member of an
+    // intrinsic) and 2026-11-18 R-GLOBAL step 3 (nor any member of an
+    // intrinsic namespace): `ns.stringify` stays the native.
+    verdict(src, "// DYNAMIC-LENGTH", "length", true);
 }
 
 #[test]

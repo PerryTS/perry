@@ -464,20 +464,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // it also carries the unique registration key for collision-renamed
             // declarations (`h$0`) and named class expressions. All other
             // identifiers continue through the ordinary scope-local rename map.
-            let nearest_local_is_inside_class_binding = ctx
-                .local_decl_scope_depth(ident.sym.as_ref())
-                .zip(ctx.current_class_scope_depth)
-                .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
-            let is_current_class_self = ctx.current_class_inner_name.as_deref()
-                == Some(ident.sym.as_str())
-                && ctx.current_class.is_some()
-                && !nearest_local_is_inside_class_binding;
+            let class_inner_binding = ctx.resolve_class_inner_binding(ident.sym.as_ref());
+            let is_current_class_self = class_inner_binding.is_some();
             // #10359: a re-dispatched `globalThis.<name>` is the global's own
             // name — never a collision-renamed or enclosing user class key.
             let mut class_name = if force_global_intrinsic {
                 source_class_name.to_string()
-            } else if is_current_class_self {
-                ctx.current_class.clone().unwrap()
+            } else if let Some(class) = class_inner_binding {
+                class
             } else {
                 ctx.resolve_class_name(source_class_name)
             };
@@ -1606,14 +1600,33 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 )?
                 .unwrap());
             }
-            // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
+            // Handle TextDecoder constructor: new TextDecoder(label?, opts?).
+            // Options that are not a plain object literal construct through
+            // the runtime `TextDecoder`, which reads them with [[Get]].
             if class_name == "TextDecoder" && !shadowed_by_user_binding {
-                return Ok(lower_url_encoding_constructor(
-                    ctx,
-                    "TextDecoder",
-                    new_expr.args.as_deref(),
-                )?
-                .unwrap());
+                if let Some(decoder) =
+                    lower_url_encoding_constructor(ctx, "TextDecoder", new_expr.args.as_deref())?
+                {
+                    return Ok(decoder);
+                }
+                // `new globalThis.TextDecoder(...)` reaches here with a bare
+                // callee a same-named user binding would capture.
+                if force_global_intrinsic {
+                    let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                    return Ok(global_property_new_dynamic(
+                        "TextDecoder",
+                        args,
+                        new_byte_offset,
+                    ));
+                }
+                let callee = lower_expr(ctx, &new_expr.callee)?;
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    byte_end: 0,
+                    callee: Box::new(callee),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
             }
 
             // Handle Uint8Array constructor

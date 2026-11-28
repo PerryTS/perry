@@ -122,6 +122,10 @@ A numeric slider.
 
 A dropdown selection control. Items are added with `pickerAddItem`.
 
+```typescript,no-test
+{{#include ../../examples/ui/widgets/picker.ts}}
+```
+
 ## WheelPicker
 
 A wheel-style selector for long sequential lists such as hours, minutes, or
@@ -137,16 +141,36 @@ for (let hour = 0; hour < 24; hour++) {
 }
 ```
 
+## RadioGroup
+
+Radio buttons for a short list where every choice should stay visible. It
+takes Picker's API: items are added with `radioGroupAddItem`, and `onChange`
+receives the chosen index. The web target renders a `<fieldset>` of radio
+buttons, which `widgetSetAccessibilityLabel` names; native backends show a
+Picker, and visionOS its wheel picker.
+
 ```typescript,no-test
-{{#include ../../examples/ui/widgets/picker.ts}}
+import { RadioGroup, radioGroupAddItem } from "perry/ui";
+
+const urgency = RadioGroup((index) => console.log("urgency:", index));
+radioGroupAddItem(urgency, "Today");
+radioGroupAddItem(urgency, "This week");
+radioGroupAddItem(urgency, "Any time");
 ```
+
+- `radioGroupGetSelected` returns -1 on the web and Windows until something is
+  chosen. The other native targets report the first item, 0, once they have items.
+- tvOS never calls `onChange`, and HarmonyOS shows no added items.
+- On macOS two items cannot share a title: the later one replaces the earlier.
 
 ## ImageFile / ImageSymbol
 
 Two distinct constructors:
 
 - `ImageFile(path)` — image from a file path
-- `ImageSymbol(name)` — SF Symbol glyph name (macOS/iOS only)
+- `ImageSymbol(name)` — SF Symbol glyph name on macOS and iOS. On the web target it draws
+  `symbols/<name>.svg` from beside the page, tinted by `imageSetTint`; the app ships those files
+  (see [WebAssembly / Web](../platforms/wasm.md#symbols)).
 
 ```typescript,no-test
 {{#include ../../examples/ui/widgets/image_symbol.ts}}
@@ -180,6 +204,26 @@ Group controls into labelled sections. Perry has no `Form()` widget — use a
 
 ```typescript,no-test
 {{#include ../../examples/ui/widgets/sections.ts}}
+```
+
+`Disclosure(title)` is a section the reader can collapse: the title is always
+shown, and the children attached with `widgetAddChild` show when it is
+expanded. The web target renders `<details>`/`<summary>`, collapsed at first.
+Native backends show `Section(title)`, always expanded, with no control to
+collapse it and with the limits of `Section`:
+
+- macOS: the children are not laid out and overlap, and `widgetReorderChild` and
+  `widgetClearChildren` do nothing.
+- iOS, tvOS, visionOS and Android: the title is the first child, so
+  `widgetReorderChild` counts it and `widgetClearChildren` removes it.
+- GTK4: `widgetReorderChild` does nothing.
+- watchOS: the title is not drawn.
+
+```typescript,no-test
+import { Disclosure, Text, widgetAddChild } from "perry/ui";
+
+const more = Disclosure("More details");
+widgetAddChild(more, Text("Bring gloves and a raincoat."));
 ```
 
 ## Mobile widgets (issue #553)
@@ -470,6 +514,23 @@ OAuth / callback-interception pattern and the per-platform notes.
 
 These are linked from their own pages where richer examples exist.
 
+## Label
+
+`Label(text, field)` captions a form field. On the web target it is a
+`<label for>` bound to the field (or to the first input, textarea or select
+inside a composite widget such as a `Toggle`), so tapping the caption focuses
+the field and a screen reader announces the caption as the field's name. Two
+`Label`s for one field are read together in document order, and
+`widgetSetAccessibilityLabel` wins over any `Label`, whichever is set first. Native
+backends show `text` as a `Text` and give the field that name, replacing one set
+before; tapping the caption does not focus the field. On Windows and HarmonyOS it
+is only a `Text`.
+
+```typescript,no-test
+const phone = TextField("0912 345 678", (value: string) => {});
+VStack(4, [Label("Phone", phone), phone]);
+```
+
 ## Common widget helpers
 
 Every widget handle accepts these:
@@ -483,9 +544,10 @@ Every widget handle accepts these:
 | `widgetSetOpacity(w, alpha)` | Opacity in [0, 1] |
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
-| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
+| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop and web) |
+| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; `accessibilityLabel` on Apple targets; content description on Android, where it replaces a text field's value: use `Label`; GTK4 accessible label; no-op on Windows and HarmonyOS) |
 | `widgetSetOnClick(w, cb)` | Click handler |
-| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
+| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop and web) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
 | `setPadding(w, value)` / `setPadding(w, top, left, bottom, right)` | Padding around contents |
 | `widgetSetBorderColor(w, r, g, b, a)` / `widgetSetBorderWidth(w, n)` | Border |

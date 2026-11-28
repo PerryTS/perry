@@ -1,0 +1,1 @@
+`node:http` and `node:https` servers emit `'clientError'` for parse failures, half-received requests, request timeouts and socket errors, and without a listener answer 400, 408 or 431 as Node does. `createServer({ ServerResponse })` constructs each HTTP/1 response from the given class, and a live server is `instanceof http.Server` / `https.Server`.

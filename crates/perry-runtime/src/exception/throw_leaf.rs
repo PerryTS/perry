@@ -159,6 +159,16 @@ pub fn throw_program_value(v: f64) -> ! {
     super::raise_thrown(v, ThrowKind::ProgramValue)
 }
 
+/// [`throw_program_value`] for crates that reach the runtime only through its
+/// C ABI (`perry_ffi::throw_program_value`). `C-unwind` for the same reason as
+/// `js_throw`: the throw may leave through the system unwinder.
+crate::fn_info!(#[realm(throws = passes(0))] declare
+#[no_mangle]
+pub extern "C-unwind" fn js_throw_program_value(v: f64) -> ! {
+    throw_program_value(v)
+}
+);
+
 /// Throw any other value (an error-like object built outside the error
 /// constructors, a marker).
 #[cold]

@@ -94,10 +94,48 @@ fn symbol(index: u32) -> u64 {
     value.to_bits()
 }
 
+/// Is `owner` an object one of this module's families births: an ordinary
+/// GC object (its attributes live in its own key list) of a family class id?
+/// Those answer their own state keys from their layout ([`get_slot`],
+/// [`set_slot`], [`has`]); every other owner (a program subclass instance,
+/// a borrowed-method receiver, a DOMException error cell) takes the generic
+/// property paths.
+#[inline]
+fn family_owner(owner: *mut ObjectHeader) -> bool {
+    use crate::native_class_ids as ids;
+    unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(owner as usize).is_some_and(|h| {
+            let h = h.as_ref();
+            h.obj_type == crate::gc::GC_TYPE_OBJECT
+                && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        }) && matches!(
+            (*owner).class_id,
+            ids::ABORT_SIGNAL
+                | ids::ABORT_CONTROLLER
+                | ids::EVENT_TARGET
+                | ids::EVENT
+                | ids::CUSTOM_EVENT
+        )
+    }
+}
+
 pub(crate) fn get_slot(owner: *mut ObjectHeader, index: u32) -> f64 {
     let key = SYMBOLS.with(|symbols| symbols.borrow()[index as usize]);
     if key == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // The own-property step of [[Get]], answered from the owner's layout: an
+    // own data property is its slot. An absent key (the chain), an accessor
+    // or any other owner takes the generic path below.
+    if family_owner(owner) {
+        if let Some(bits) = unsafe {
+            crate::object::shaped_symbols::own_data_value(
+                owner,
+                (key & crate::value::POINTER_MASK) as usize,
+            )
+        } {
+            return f64::from_bits(bits);
+        }
     }
     if !KEYS[index as usize].1 {
         return unsafe {
@@ -118,6 +156,22 @@ pub(crate) fn get_slot(owner: *mut ObjectHeader, index: u32) -> f64 {
 }
 
 pub(crate) fn set_slot(owner: *mut ObjectHeader, index: u32, value: f64) {
+    // OrdinarySet's own writable data property step, answered from the
+    // owner's layout: one slot store. Nothing allocates before it.
+    let present = SYMBOLS.with(|symbols| symbols.borrow()[index as usize]);
+    if present != 0
+        && family_owner(owner)
+        && unsafe {
+            crate::object::shaped_symbols::store_own_data(
+                owner,
+                (present & crate::value::POINTER_MASK) as usize,
+                value.to_bits(),
+                KEYS[index as usize].1,
+            )
+        }
+    {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(owner);
     let value = scope.root_nanbox_f64(value);
@@ -176,6 +230,18 @@ pub(crate) fn link(owner: *mut ObjectHeader, name: &str) -> *mut ObjectHeader {
 
 pub(crate) fn has(owner: *mut ObjectHeader, index: u32) -> bool {
     let key = SYMBOLS.with(|symbols| symbols.borrow()[index as usize]);
+    if key != 0 && family_owner(owner) {
+        if unsafe {
+            crate::object::shaped_symbols::own_entry(
+                owner,
+                (key & crate::value::POINTER_MASK) as usize,
+            )
+        }
+        .is_some()
+        {
+            return true;
+        }
+    }
     key != 0
         && unsafe {
             crate::object::shaped_symbols::entry(
@@ -199,6 +265,181 @@ pub(crate) fn initialize_target(owner: *mut ObjectHeader, signal: bool) {
         (HANDLERS, crate::value::TAG_UNDEFINED),
     ] {
         owner.with_mut_ptr(|ptr| set_slot(ptr, index, f64::from_bits(value)));
+    }
+}
+
+/// A family's declared instance layout: its instances are ordinary objects
+/// of `class_id` on the realm's `%X.prototype%` (`identity`), whose own keys
+/// are the state keys of `slots` in that order, slot `i` holding key `i`'s
+/// birth value. A public key is node's symbol-keyed own data property; an
+/// internal one is a private entry, unreachable from JS ([`KEYS`]).
+pub(crate) struct Birth {
+    class_id: u32,
+    identity: crate::object::BuiltinConstructorIdentity,
+    slots: &'static [(u32, u64)],
+}
+
+const TARGET_SLOTS: [(u32, u64); 4] = [
+    (LISTENERS, crate::value::TAG_UNDEFINED),
+    (MAX_LISTENERS, 0x4024_0000_0000_0000), // 10.0
+    (WARNED, crate::value::TAG_FALSE),
+    (HANDLERS, crate::value::TAG_UNDEFINED),
+];
+const SIGNAL_SLOTS: [(u32, u64); 7] = [
+    (LISTENERS, crate::value::TAG_UNDEFINED),
+    (MAX_LISTENERS, 0), // 0.0
+    (WARNED, crate::value::TAG_FALSE),
+    (HANDLERS, crate::value::TAG_UNDEFINED),
+    (SIGNAL_ABORTED, crate::value::TAG_FALSE),
+    (SIGNAL_REASON, crate::value::TAG_UNDEFINED),
+    (COMPOSITE, crate::value::TAG_FALSE),
+];
+/// Event's keys in the order its constructor defines them. `type` (slot 0)
+/// and, for a CustomEvent, `detail` (slot 11) are stored by the birth's
+/// caller; `bubbles`, `cancelable` and `composed` (slots 1-3) come from the
+/// options.
+const EVENT_SLOTS: [(u32, u64); 11] = [
+    (TYPE, crate::value::TAG_UNDEFINED),
+    (BUBBLES, crate::value::TAG_FALSE),
+    (CANCELABLE, crate::value::TAG_FALSE),
+    (COMPOSED, crate::value::TAG_FALSE),
+    (DEFAULT_PREVENTED, crate::value::TAG_FALSE),
+    (TARGET, crate::value::TAG_NULL),
+    (TRUSTED, crate::value::TAG_FALSE),
+    (TIMESTAMP, 0), // 0.0
+    (STOPPED, crate::value::TAG_FALSE),
+    (DISPATCHED, crate::value::TAG_FALSE),
+    (PASSIVE, crate::value::TAG_FALSE),
+];
+const CUSTOM_EVENT_SLOTS: [(u32, u64); 12] = [
+    EVENT_SLOTS[0],
+    EVENT_SLOTS[1],
+    EVENT_SLOTS[2],
+    EVENT_SLOTS[3],
+    EVENT_SLOTS[4],
+    EVENT_SLOTS[5],
+    EVENT_SLOTS[6],
+    EVENT_SLOTS[7],
+    EVENT_SLOTS[8],
+    EVENT_SLOTS[9],
+    EVENT_SLOTS[10],
+    (DETAIL, crate::value::TAG_NULL),
+];
+/// The slots of an Event birth its caller fills: `type`, the three options,
+/// and a CustomEvent's `detail`.
+pub(crate) const EVENT_TYPE_SLOT: usize = 0;
+pub(crate) const EVENT_DETAIL_SLOT: usize = 11;
+
+pub(crate) const EVENT_TARGET_BIRTH: Birth = Birth {
+    class_id: crate::native_class_ids::EVENT_TARGET,
+    identity: crate::object::BuiltinConstructorIdentity::EventTarget,
+    slots: &TARGET_SLOTS,
+};
+pub(crate) const ABORT_SIGNAL_BIRTH: Birth = Birth {
+    class_id: crate::native_class_ids::ABORT_SIGNAL,
+    identity: crate::object::BuiltinConstructorIdentity::AbortSignal,
+    slots: &SIGNAL_SLOTS,
+};
+pub(crate) const ABORT_CONTROLLER_BIRTH: Birth = Birth {
+    class_id: crate::native_class_ids::ABORT_CONTROLLER,
+    identity: crate::object::BuiltinConstructorIdentity::AbortController,
+    slots: &[(CONTROLLER_SIGNAL, crate::value::TAG_UNDEFINED)],
+};
+pub(crate) const EVENT_BIRTH: Birth = Birth {
+    class_id: crate::native_class_ids::EVENT,
+    identity: crate::object::BuiltinConstructorIdentity::Event,
+    slots: &EVENT_SLOTS,
+};
+pub(crate) const CUSTOM_EVENT_BIRTH: Birth = Birth {
+    class_id: crate::native_class_ids::CUSTOM_EVENT,
+    identity: crate::object::BuiltinConstructorIdentity::CustomEvent,
+    slots: &CUSTOM_EVENT_SLOTS,
+};
+
+#[cfg(test)]
+pub(crate) fn birth_slots(birth: &'static Birth) -> &'static [(u32, u64)] {
+    birth.slots
+}
+
+/// Declare the instance layout of the family whose prototype `proto` (named
+/// `name`) is being created: mint it from the family's key list and note it
+/// in the realm's entry for the family. Every instance, the first included,
+/// is born on it ([`born`]). Nothing for a prototype that is not one of
+/// these families'.
+pub(crate) fn declare(name: &str, proto: *mut ObjectHeader) {
+    let birth = match name {
+        "EventTarget" => &EVENT_TARGET_BIRTH,
+        "AbortSignal" => &ABORT_SIGNAL_BIRTH,
+        "AbortController" => &ABORT_CONTROLLER_BIRTH,
+        "Event" => &EVENT_BIRTH,
+        "CustomEvent" => &CUSTOM_EVENT_BIRTH,
+        _ => return,
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let mut keys = [(0usize, 0u8); 12];
+    for (key, &(index, _)) in keys.iter_mut().zip(birth.slots) {
+        let entry = if KEYS[index as usize].1 {
+            crate::object::shaped_symbols::PRIVATE_ENTRY
+                | crate::object::key_attrs::ENTRY_NON_ENUMERABLE
+        } else {
+            0
+        };
+        // The state symbols are rooted by SYMBOLS for the agent's life.
+        *key = ((symbol(index) & crate::value::POINTER_MASK) as usize, entry);
+    }
+    let word = unsafe {
+        crate::object::shaped_symbols::declare_instance_layout(proto, &keys[..birth.slots.len()])
+    };
+    crate::array::note_realm_instance_layout(birth.identity, proto as usize, word.0);
+}
+
+/// The realm's declared layout of `birth`'s family. A family not created yet
+/// is created here (its prototype's creation declares the layout).
+#[inline]
+fn layout(birth: &Birth) -> crate::codegen_abi::LayoutWord {
+    match crate::array::realm_instance_layout(birth.identity) {
+        0 => create_family(birth),
+        word => crate::codegen_abi::LayoutWord(word),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn create_family(birth: &Birth) -> crate::codegen_abi::LayoutWord {
+    let _ = crate::array::intrinsic_prototype_addr(birth.identity);
+    match crate::array::realm_instance_layout(birth.identity) {
+        0 => {
+            eprintln!(
+                "Perry internal error: the realm created no instance layout for family {:?}",
+                birth.identity
+            );
+            std::process::abort();
+        }
+        word => crate::codegen_abi::LayoutWord(word),
+    }
+}
+
+/// A fresh instance of `birth`'s family on its declared layout, holding
+/// the family's birth values: one allocation, the stamp, the slot stores.
+pub(crate) fn born(birth: &Birth) -> *mut ObjectHeader {
+    born_with(birth, &[])
+}
+
+/// [`born`] with the first `leading.len()` birth values replaced by
+/// `leading` (pointer-free words). Can collect, before anything is stored.
+pub(crate) fn born_with(birth: &Birth, leading: &[u64]) -> *mut ObjectHeader {
+    let word = layout(birth);
+    let mut values = [0u64; 12];
+    for (value, &(_, bits)) in values.iter_mut().zip(birth.slots) {
+        *value = bits;
+    }
+    values[..leading.len()].copy_from_slice(leading);
+    unsafe {
+        crate::object::shaped_symbols::born_on_layout(
+            birth.class_id,
+            word,
+            &values[..birth.slots.len()],
+        )
     }
 }
 

@@ -76,22 +76,21 @@ fn declared_typed_array_class_f64(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
 /// every miss (a different kind, out-of-line or detached storage) to the
 /// memory-safe helper.
 ///
-/// The guard only pays off while the elements are where the load reads them,
-/// so the view must still prove that: inline storage, and a cached pointer
-/// that no `.buffer` exposure or storage change has invalidated. Exposing
-/// `.buffer` moves the elements out of line (#10516), the kind cache then
-/// tags the address as external storage, and every guarded read would miss
-/// into the helper, which costs more than the plain call. Likewise the view
-/// must have the typed-array object layout the load reads; a buffer-layout
-/// view (a perry `Uint8Array`, whose length sits 8 bytes before its data)
-/// keeps its own lane.
+/// The guard only pays off while the elements are where the load reads them:
+/// inline storage, and a cached pointer that no `.buffer` exposure or storage
+/// change has invalidated. Exposing `.buffer` moves the elements out of line
+/// (#10516), the kind cache then tags the address as external storage, and
+/// every guarded read would miss into the helper, which costs more than the
+/// plain call. A view that was only handed to code that may read `.buffer`
+/// (`inline_until_exposed`) is taken anyway, as a view-less receiver is: the
+/// exposure is unproven. Likewise the view must have the typed-array object
+/// layout the load reads; a buffer-layout view (a perry `Uint8Array`, whose
+/// length sits 8 bytes before its data) keeps its own lane.
 fn view_leaves_receiver_to_guarded_read(view: &crate::native_value::BufferViewSlot) -> bool {
     let serves_itself = view.alias.allows_noalias() && view.scope_idx.is_some();
-    !serves_itself
-        && view.native_owned.is_none()
-        && view.storage_inline_proven
-        && view.pointer_state.is_stable()
-        && view.length_slot.is_some()
+    let storage_inline =
+        (view.storage_inline_proven && view.pointer_state.is_stable()) || view.inline_until_exposed;
+    !serves_itself && view.native_owned.is_none() && storage_inline && view.length_slot.is_some()
 }
 
 fn checked_typed_array_f64_kind(

@@ -1121,6 +1121,26 @@ pub fn synthesize_class_captures(
         for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
             ctor.body.insert(early_insert_at + i, stmt);
         }
+        // The early stash adds the capture keys ahead of every constructor
+        // store: their fields go where the stash runs, after the field
+        // definitions and before the constructor-store reservations
+        // (`settle_reservations` orders a capture with the definitions), so
+        // the class's key order is the order construction adds the keys in.
+        let (caps, rest): (Vec<ClassField>, Vec<ClassField>) = std::mem::take(fields)
+            .into_iter()
+            .partition(|f| f.origin.is_capture() && f.key_expr.is_none() && f.init.is_none());
+        let at = rest
+            .iter()
+            .position(|f| {
+                matches!(
+                    f.origin,
+                    crate::ClassFieldOrigin::ConstructorStore | crate::ClassFieldOrigin::Declared
+                )
+            })
+            .unwrap_or(rest.len());
+        let mut rest = rest;
+        rest.splice(at..at, caps);
+        *fields = rest;
     }
     insert_stashes_before_returns(&mut ctor.body, &late_stashes);
     for stmt in late_stashes {

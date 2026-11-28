@@ -110,6 +110,19 @@ pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
+/// A link connect resolved its hostname, before the first attempt: `data`/`len`
+/// borrow the addresses as text, one per line.
+pub const NET_LOOKUP: i32 = 10;
+/// A multi-address link connect started, failed or timed out an attempt:
+/// `user` is the `NET_ATTEMPT_*` kind, `data`/`len` borrow the address as
+/// text, `conn` is the port, and a failure carries Node's error triple.
+pub const NET_ATTEMPT: i32 = 11;
+/// `NET_ATTEMPT` kind: an attempt started.
+pub const NET_ATTEMPT_START: u64 = 0;
+/// `NET_ATTEMPT` kind: an attempt failed.
+pub const NET_ATTEMPT_FAILED: u64 = 1;
+/// `NET_ATTEMPT` kind: an attempt timed out.
+pub const NET_ATTEMPT_TIMEOUT: u64 = 2;
 
 /// One completion, in the shape a separately linked binding can read.
 ///
@@ -204,6 +217,31 @@ impl NetCompletion {
         } else {
             bytes.as_ptr()
         };
+        c
+    }
+
+    pub(super) fn attempt(
+        id: i64,
+        kind: u64,
+        address: &str,
+        port: u16,
+        err: Option<NodeError>,
+    ) -> Self {
+        let mut c = match err {
+            Some(err) => Self::error(id, 0, 0, err, false),
+            None => Self::blank(NET_ATTEMPT, id),
+        };
+        c.kind = NET_ATTEMPT;
+        c.user = kind;
+        c.conn = i64::from(port);
+        c.len = address.len();
+        c.data = address.as_ptr();
+        c
+    }
+
+    pub(super) fn lookup(id: i64, addresses: &str) -> Self {
+        let mut c = Self::data(id, addresses.as_bytes());
+        c.kind = NET_LOOKUP;
         c
     }
 

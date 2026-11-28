@@ -7,6 +7,7 @@ pub mod background;
 pub mod clipboard;
 pub mod crash_log;
 pub mod deeplinks;
+mod display_link;
 pub mod drag_drop;
 pub mod ffi;
 pub mod file_dialog;

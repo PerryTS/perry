@@ -107,6 +107,44 @@ fn throw_unknown_encoding(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
 }
 
+/// Node's `bidirectionalIndexOf` arguments for a `Buffer` receiver of
+/// `indexOf` / `lastIndexOf` / `includes`: `(start, encoding_tag)`.
+///
+/// A string `byteOffset` is the encoding. Any other offset is `+byteOffset`;
+/// NaN (`undefined`, `{}`, `"x"` …) searches the whole buffer: from 0 for
+/// `indexOf`, from `len` for `lastIndexOf` (an empty needle answers `len`;
+/// the search clamps any other needle into the data). The encoding applies to a
+/// string needle only, and there an unknown encoding name throws
+/// `ERR_UNKNOWN_ENCODING`.
+fn node_buffer_search_args(args: &[f64], len: i32, last: bool) -> (i32, i32) {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let is_any_string = |v: f64| JSValue::from_bits(v.to_bits()).is_any_string();
+    let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+    let (offset, encoding) = if is_any_string(arg(1)) {
+        (undefined, arg(1))
+    } else {
+        (arg(1), arg(2))
+    };
+    let offset = crate::builtins::js_number_coerce(offset);
+    let start = if offset.is_nan() {
+        if last {
+            len
+        } else {
+            0
+        }
+    } else {
+        crate::array::array_slice_value_to_index(offset)
+    };
+    // A non-string encoding (`undefined`, a number) searches as utf8.
+    if !is_any_string(arg(0)) || !is_any_string(encoding) {
+        return (start, 0);
+    }
+    if crate::buffer::js_buffer_is_encoding(encoding) == 0 {
+        throw_unknown_encoding(encoding);
+    }
+    (start, crate::buffer::js_encoding_tag_from_value(encoding))
+}
+
 /// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
 /// target, answered from the one view classification
 /// ([`super::view_brand::view_brand`]), and only for a view that carries the
@@ -815,6 +853,12 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
     };
     let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
     let i32_num = |n: i32| n as f64;
+    if let Some(value) = crate::buffer::dispatch_numeric_read(buf_f64, method_name, args) {
+        return value;
+    }
+    if let Some(next_offset) = crate::buffer::dispatch_numeric_write(buf_f64, method_name, args) {
+        return next_offset;
+    }
 
     match method_name {
         "length" => crate::buffer::js_buffer_length(buf_ptr) as f64,
@@ -1096,46 +1140,48 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                 i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
             }
         }
-        "indexOf" => {
-            let enc = if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
-            } else {
-                0
-            };
-            i32_num(crate::buffer::js_buffer_index_of_enc(
-                buf_f64,
-                arg_or_zero(0),
-                arg_i32(1),
-                enc,
-            ))
-        }
-        "lastIndexOf" => {
+        "indexOf" | "lastIndexOf" | "includes" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-            let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
-            let enc = if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
+            let last = method_name == "lastIndexOf";
+            let (start, enc) = if crate::buffer::is_node_buffer(addr) {
+                node_buffer_search_args(args, len, last)
             } else {
-                0
+                // `%TypedArray%.prototype` search methods: ToIntegerOrInfinity,
+                // so a NaN `fromIndex` is 0.
+                let start = if args.len() >= 2 {
+                    arg_i32(1)
+                } else if last {
+                    len - 1
+                } else {
+                    0
+                };
+                let enc = if args.len() >= 3 {
+                    crate::buffer::js_encoding_tag_from_value(args[2])
+                } else {
+                    0
+                };
+                (start, enc)
             };
-            i32_num(crate::buffer::js_buffer_last_index_of_enc(
-                buf_f64,
-                arg_or_zero(0),
-                start,
-                enc,
-            ))
-        }
-        "includes" => {
-            let enc = if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
-            } else {
-                0
-            };
-            i32_bool(crate::buffer::js_buffer_includes_enc(
-                buf_f64,
-                arg_or_zero(0),
-                arg_i32(1),
-                enc,
-            ))
+            match method_name {
+                "indexOf" => i32_num(crate::buffer::js_buffer_index_of_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+                "lastIndexOf" => i32_num(crate::buffer::js_buffer_last_index_of_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+                _ => i32_bool(crate::buffer::js_buffer_includes_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+            }
         }
         // `buf.at(i)` — supports negative indices like Array.prototype.at.
         "at" => {
@@ -1160,134 +1206,6 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         "swap64" => {
             crate::buffer::js_buffer_swap64(buf_f64);
             buf_f64
-        }
-        "readUInt8" | "readUint8" => crate::buffer::js_buffer_read_uint8(buf_f64, arg_i32(0)),
-        "readInt8" => crate::buffer::js_buffer_read_int8(buf_f64, arg_i32(0)),
-        "readUInt16BE" | "readUint16BE" => {
-            crate::buffer::js_buffer_read_uint16_be(buf_f64, arg_i32(0))
-        }
-        "readUInt16LE" | "readUint16LE" => {
-            crate::buffer::js_buffer_read_uint16_le(buf_f64, arg_i32(0))
-        }
-        "readInt16BE" => crate::buffer::js_buffer_read_int16_be(buf_f64, arg_i32(0)),
-        "readInt16LE" => crate::buffer::js_buffer_read_int16_le(buf_f64, arg_i32(0)),
-        "readUInt32BE" | "readUint32BE" => {
-            crate::buffer::js_buffer_read_uint32_be(buf_f64, arg_i32(0))
-        }
-        "readUInt32LE" | "readUint32LE" => {
-            crate::buffer::js_buffer_read_uint32_le(buf_f64, arg_i32(0))
-        }
-        "readInt32BE" => crate::buffer::js_buffer_read_int32_be(buf_f64, arg_i32(0)),
-        "readInt32LE" => crate::buffer::js_buffer_read_int32_le(buf_f64, arg_i32(0)),
-        "readFloatBE" => crate::buffer::js_buffer_read_float_be(buf_f64, arg_i32(0)),
-        "readFloatLE" => crate::buffer::js_buffer_read_float_le(buf_f64, arg_i32(0)),
-        "readDoubleBE" => crate::buffer::js_buffer_read_double_be(buf_f64, arg_i32(0)),
-        "readDoubleLE" => crate::buffer::js_buffer_read_double_le(buf_f64, arg_i32(0)),
-        "readBigInt64BE" => crate::buffer::js_buffer_read_bigint64_be(buf_f64, arg_i32(0)),
-        "readBigInt64LE" => crate::buffer::js_buffer_read_bigint64_le(buf_f64, arg_i32(0)),
-        "readBigUInt64BE" | "readBigUint64BE" => {
-            crate::buffer::js_buffer_read_biguint64_be(buf_f64, arg_i32(0))
-        }
-        "readBigUInt64LE" | "readBigUint64LE" => {
-            crate::buffer::js_buffer_read_biguint64_le(buf_f64, arg_i32(0))
-        }
-        "writeUInt8" | "writeUint8" => {
-            crate::buffer::js_buffer_write_uint8(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 1) as f64
-        }
-        "writeInt8" => {
-            crate::buffer::js_buffer_write_int8(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 1) as f64
-        }
-        "writeUInt16BE" | "writeUint16BE" => {
-            crate::buffer::js_buffer_write_uint16_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 2) as f64
-        }
-        "writeUInt16LE" | "writeUint16LE" => {
-            crate::buffer::js_buffer_write_uint16_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 2) as f64
-        }
-        "writeInt16BE" => {
-            crate::buffer::js_buffer_write_int16_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 2) as f64
-        }
-        "writeInt16LE" => {
-            crate::buffer::js_buffer_write_int16_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 2) as f64
-        }
-        "writeUInt32BE" | "writeUint32BE" => {
-            crate::buffer::js_buffer_write_uint32_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeUInt32LE" | "writeUint32LE" => {
-            crate::buffer::js_buffer_write_uint32_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeInt32BE" => {
-            crate::buffer::js_buffer_write_int32_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeInt32LE" => {
-            crate::buffer::js_buffer_write_int32_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeFloatBE" => {
-            crate::buffer::js_buffer_write_float_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeFloatLE" => {
-            crate::buffer::js_buffer_write_float_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 4) as f64
-        }
-        "writeDoubleBE" => {
-            crate::buffer::js_buffer_write_double_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        "writeDoubleLE" => {
-            crate::buffer::js_buffer_write_double_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        "writeBigInt64BE" => {
-            crate::buffer::js_buffer_write_bigint64_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        "writeBigInt64LE" => {
-            crate::buffer::js_buffer_write_bigint64_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        "writeBigUInt64BE" | "writeBigUint64BE" => {
-            crate::buffer::js_buffer_write_biguint64_be(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        "writeBigUInt64LE" | "writeBigUint64LE" => {
-            crate::buffer::js_buffer_write_biguint64_le(buf_f64, arg_or_zero(0), arg_i32(1));
-            (arg_i32(1) + 8) as f64
-        }
-        // Variable byteLength forms (Node-spec: byteLength 1..=6).
-        // ObjectId / BSON drivers rely on these for the 3-byte counter.
-        "readUIntBE" | "readUintBE" => {
-            crate::buffer::js_buffer_read_uint_be(buf_f64, arg_i32(0), arg_i32(1))
-        }
-        "readUIntLE" | "readUintLE" => {
-            crate::buffer::js_buffer_read_uint_le(buf_f64, arg_i32(0), arg_i32(1))
-        }
-        "readIntBE" => crate::buffer::js_buffer_read_int_be(buf_f64, arg_i32(0), arg_i32(1)),
-        "readIntLE" => crate::buffer::js_buffer_read_int_le(buf_f64, arg_i32(0), arg_i32(1)),
-        "writeUIntBE" | "writeUintBE" => {
-            crate::buffer::js_buffer_write_uint_be(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
-            (arg_i32(1) + arg_i32(2)) as f64
-        }
-        "writeUIntLE" | "writeUintLE" => {
-            crate::buffer::js_buffer_write_uint_le(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
-            (arg_i32(1) + arg_i32(2)) as f64
-        }
-        "writeIntBE" => {
-            crate::buffer::js_buffer_write_int_be(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
-            (arg_i32(1) + arg_i32(2)) as f64
-        }
-        "writeIntLE" => {
-            crate::buffer::js_buffer_write_int_le(buf_f64, arg_or_zero(0), arg_i32(1), arg_i32(2));
-            (arg_i32(1) + arg_i32(2)) as f64
         }
         // ── Object.prototype fallbacks on Buffer instances ──
         // safer-buffer (loaded by express) probes Buffer instances with

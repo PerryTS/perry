@@ -43,8 +43,6 @@ pub use headers::*;
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
 // this file under the 2,000-line lint gate. Same child-module/`use super::*`
 // contract as `headers`.
-mod headers_method_value;
-pub(crate) use headers_method_value::headers_bound_method_value;
 
 // Untyped handle dispatch helpers (`dispatch_request_method`,
 // `dispatch_response_property`, …) — split out to keep this file under the
@@ -267,7 +265,7 @@ fn alloc_fetch_handle_id() -> usize {
 /// The registries and `FREE_FETCH_HANDLE_IDS` are process-global and the free
 /// list is LIFO, so an id one test releases is handed straight to whichever
 /// concurrent test allocates next. A test asserting "the full trace released
-/// my id" (`!HEADERS_REGISTRY.contains_key(&id)`) then sees ANOTHER test's
+/// my id" (`!BLOB_REGISTRY.contains_key(&id)`) then sees ANOTHER test's
 /// record under the same number and fails although reclamation worked. The
 /// id band is shared by design; the tests take turns on it.
 #[cfg(test)]
@@ -345,22 +343,23 @@ struct FetchResponse {
     type_name: String,
     url: String,
     redirected: bool,
-    /// Cached Headers handle id, allocated on first `response.headers`
-    /// access. None until a property/method dispatcher needs to expose
-    /// the headers as a Headers instance. Subsequent reads of `.headers`
-    /// return the same id (preserves `res.headers === res.headers`).
-    cached_headers_id: Option<usize>,
+    /// The `response.headers` Headers object (NaN-boxed bits, 0 = not yet
+    /// read), born on the first read so repeat reads return the same object
+    /// (`res.headers === res.headers`). Once born it is the authority for
+    /// the list. A GC edge: visited by the Fetch scanner and, during a full
+    /// mark, through the record's live id (`lifecycle::observe`).
+    cached_headers: u64,
     /// Cached ReadableStream handle id for `response.body`, allocated on
     /// first read so repeat `.body` reads return the same stream (the spec
     /// requires a stable `ReadableStream`; getting a fresh unlocked stream
     /// each time would silently un-lock a reader). None for an empty body —
     /// `Response.body` is `ReadableStream | null` (#1650).
-    cached_body_stream_id: Option<usize>,
+    cached_body_stream: Option<crate::streams::RsRef>,
     /// Original ReadableStream body passed to `new Response(stream, init)`.
     /// Unlike buffered bodies, this must stay lazy: constructing a Response
     /// must not synchronously drain a producer whose chunks appear only after
     /// downstream pulls (TanStack Start / React SSR relies on that).
-    body_stream_id: Option<usize>,
+    body_stream: Option<crate::streams::RsRef>,
 }
 
 /// Return the one `Headers` registry handle that backs `response.headers`.
@@ -372,45 +371,39 @@ struct FetchResponse {
 /// response through that Headers view, so losing the handle also lost its
 /// `Set-Cookie` header when the response crossed a module boundary.
 fn response_headers_handle(resp_id: usize) -> f64 {
-    let mut responses = FETCH_RESPONSES.lock().unwrap();
-    let Some(response) = responses.get_mut(&resp_id) else {
-        return f64::from_bits(TAG_UNDEFINED);
+    let (store, immutable) = {
+        let responses = FETCH_RESPONSES.lock().unwrap();
+        let Some(response) = responses.get(&resp_id) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        if response.cached_headers != 0 {
+            return f64::from_bits(response.cached_headers);
+        }
+        (response.headers.clone(), response.type_name == "error")
     };
-    if let Some(id) = response.cached_headers_id {
-        return handle_to_f64(id);
+    // Allocate with the registry unlocked (a collection locks it).
+    let headers = headers::headers_object(store, immutable);
+    if let Some(response) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
+        response.cached_headers = headers.to_bits();
     }
-    let id = alloc_headers(response.headers.clone());
-    response.cached_headers_id = Some(id);
-    handle_to_f64(id)
+    headers
 }
 
 /// Snapshot the observable Headers backing, including mutations made through
 /// `response.headers`, for operations such as `Response.clone()`.
 fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
-    response
-        .cached_headers_id
-        .and_then(|id| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&id)
-                .map(|record| record.store.clone())
-        })
+    (response.cached_headers != 0)
+        .then(|| headers::headers_store_of(f64::from_bits(response.cached_headers)))
+        .flatten()
         .unwrap_or_else(|| response.headers.clone())
 }
 
 /// Snapshot the observable Request headers, including mutations made through
-/// the lazily cached `request.headers` object.
+/// the lazily born `request.headers` object.
 fn request_headers_snapshot(request: &RequestRecord) -> HeadersStore {
-    request
-        .cached_headers_id
-        .and_then(|id| {
-            HEADERS_REGISTRY
-                .lock()
-                .unwrap()
-                .get(&id)
-                .map(|record| record.store.clone())
-        })
+    (request.cached_headers != 0)
+        .then(|| headers::headers_store_of(f64::from_bits(request.cached_headers)))
+        .flatten()
         .unwrap_or_else(|| request.headers.clone())
 }
 
@@ -418,7 +411,7 @@ thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
     // An async-iterable BodyInit (NaN-boxed bits, 0 = none). The classifier
     // only stashes it: converting it runs the iterator's JS, so that happens
-    // in `take_pending_fetch_body_stream_id`, whose callers must not hold
+    // in `take_pending_fetch_body_stream`, whose callers must not hold
     // unrooted heap pointers across the call. Visited by the fetch GC scanner.
     static PENDING_FETCH_BODY_ITERABLE: Cell<u64> = const { Cell::new(0) };
     // Codegen coerces BodyInit to a StringHeader before js_response_new, so
@@ -426,6 +419,12 @@ thread_local! {
     // Response constructor to install Fetch's default Content-Type.
     static PENDING_FETCH_BODY_CONTENT_TYPE: Cell<Option<&'static str>> =
         const { Cell::new(None) };
+    // A binary BodyInit (Buffer / typed array / ArrayBuffer / Blob /
+    // IncomingMessage) copied to its raw bytes. Carried here, like a stream
+    // body, instead of as a StringHeader: a body may be longer than the
+    // maximum string length, which only `text()` / `json()` refuse.
+    static PENDING_FETCH_BODY_BYTES: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 pub(super) const BODY_CONTENT_TYPE_TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
@@ -438,6 +437,17 @@ pub(super) fn reset_pending_fetch_body_init() {
     PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(0));
     PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.set(0));
     PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.set(None));
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(None));
+}
+
+pub(super) fn set_pending_fetch_body_bytes(bytes: Option<Vec<u8>>) {
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(bytes));
+}
+
+/// The bytes of a binary body classified by `js_response_body_init_ptr`
+/// (which then returned a null body pointer), if any.
+fn take_pending_fetch_body_bytes() -> Option<Vec<u8>> {
+    PENDING_FETCH_BODY_BYTES.with(|pending| pending.replace(None))
 }
 
 fn set_pending_fetch_body_iterable(value: f64) {
@@ -458,20 +468,15 @@ fn take_pending_fetch_body_content_type() -> Option<&'static str> {
     PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.replace(None))
 }
 
-fn take_pending_fetch_body_stream_id() -> Option<usize> {
+fn take_pending_fetch_body_stream() -> Option<crate::streams::RsRef> {
     let stream = PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
-        let id = pending.get();
-        pending.set(0);
-        if id != 0 && crate::streams::js_stream_handle_kind(id) == 1 {
-            Some(id)
-        } else {
-            None
-        }
+        let stream = crate::streams::RsRef(pending.replace(0));
+        (stream.0 != 0 && crate::streams::is_readable_stream(stream)).then_some(stream)
     });
     let iterable = PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.replace(0));
     stream.or_else(|| {
         (iterable != 0).then(|| unsafe {
-            crate::streams::stream_id(crate::streams::js_readable_stream_from_iterable(
+            crate::streams::RsRef::from_value(crate::streams::js_readable_stream_from_iterable(
                 f64::from_bits(iterable),
             ))
         })
@@ -480,9 +485,9 @@ fn take_pending_fetch_body_stream_id() -> Option<usize> {
 
 /// Drain a body stream, returning the error it ended with (if any) alongside
 /// the bytes it produced before that.
-fn drain_body_stream(stream_id: usize) -> (Vec<u8>, Option<f64>) {
-    let bytes = crate::streams::drain_readable_into_bytes(stream_id);
-    (bytes, crate::streams::readable_stream_error(stream_id))
+fn drain_body_stream(stream: crate::streams::RsRef) -> (Vec<u8>, Option<f64>) {
+    let bytes = crate::streams::drain_readable_into_bytes(stream);
+    (bytes, crate::streams::readable_stream_error(stream))
 }
 
 /// Strict decode of a Web Fetch HANDLE_TAG value; numbers and heap addresses
@@ -757,11 +762,13 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let form_data_content_type = form_data_body
         .as_ref()
         .map(|(_, content_type)| content_type.clone());
+    let pending_bytes = take_pending_fetch_body_bytes();
     let body_bytes = form_data_body
         .map(|(body, _)| body)
-        .or_else(|| fetch_request_body_bytes(body_ptr));
+        .or_else(|| fetch_request_body_bytes(body_ptr))
+        .or(pending_bytes);
     // Last: may run an async-iterable body's JS (the strings above are owned).
-    let body_bytes = take_pending_fetch_body_stream_id()
+    let body_bytes = take_pending_fetch_body_stream()
         .map(crate::streams::drain_readable_into_bytes)
         .or(body_bytes);
     let mut inputs = match request_handle::resolve_fetch_inputs(
@@ -869,7 +876,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
         .lock()
         .unwrap()
         .get(&response_id)
-        .and_then(|r| r.body_stream_id);
+        .and_then(|r| r.body_stream);
     let stream_unusable = stream_id.is_some_and(|id| {
         let (locked, disturbed) = crate::streams::readable_body_state(id);
         locked || disturbed
@@ -886,7 +893,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
             return Err(BODY_ALREADY_USED_MESSAGE);
         }
         resp.body_used = true;
-        (std::mem::take(&mut resp.body), resp.body_stream_id)
+        (std::mem::take(&mut resp.body), resp.body_stream)
     };
     if let Some(stream_id) = stream_id {
         return Ok(crate::streams::drain_readable_into_bytes(stream_id));
@@ -913,8 +920,7 @@ pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runti
 /// order for non-index object keys; `serde_json::Value` uses a sorted map in
 /// this build and silently reordered them (#10392).
 unsafe fn parse_json_body(body: &[u8]) -> Result<JSValue, f64> {
-    let text = String::from_utf8_lossy(body);
-    let text_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let text_ptr = perry_runtime::buffer::utf8_string_or_too_long_error(body)?;
     perry_runtime::json::js_json_parse_result(text_ptr)
 }
 
@@ -1043,7 +1049,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 mod headers_store;
-use headers_store::{HeadersRecord, HeadersStore};
+use headers_store::{HeadersPayload, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
     pub(super) props: u64,
@@ -1066,17 +1072,21 @@ struct RequestRecord {
     keepalive: bool,
     duplex: String,
     signal: f64,
-    /// Cached Headers handle id, allocated on first `request.headers` read so
-    /// repeat reads return the same handle (preserves `req.headers ===
-    /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
-    cached_headers_id: Option<usize>,
+    /// The `request.headers` Headers object (NaN-boxed bits, 0 = not yet
+    /// read), born on the first read so repeat reads return the same object
+    /// (`req.headers === req.headers`). Mirrors
+    /// `FetchResponse::cached_headers` (#1649).
+    cached_headers: u64,
     /// The error the body's stream ended with; consuming the body rejects
     /// with it. A GC root, visited with `signal`.
     body_error: Option<f64>,
+    /// `request.body` once the body was read: the stream that read it,
+    /// closed, disturbed and still locked to its reader (Node's
+    /// `fullyReadBody`), allocated on the first `.body` read after use so
+    /// repeat reads return the same stream.
+    read_body_stream_id: Option<crate::streams::RsRef>,
 }
 
-static HEADERS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, HeadersRecord>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static REQUEST_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, RequestRecord>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 pub(crate) static BLOB_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, BlobData>>> =
@@ -1109,15 +1119,6 @@ pub(crate) fn alloc_blob(mut data: BlobData) -> usize {
     data.props = 0;
     let id = alloc_fetch_handle_id();
     BLOB_REGISTRY.lock().unwrap().insert(id, data);
-    id
-}
-
-fn alloc_headers(store: HeadersStore) -> usize {
-    let id = alloc_fetch_handle_id();
-    HEADERS_REGISTRY
-        .lock()
-        .unwrap()
-        .insert(id, HeadersRecord::from(store));
     id
 }
 
@@ -1258,10 +1259,13 @@ unsafe fn blob_text_impl(handle: f64) -> *mut perry_runtime::Promise {
         .get(&id)
         .map(|b| b.body.clone())
         .unwrap_or_default();
-    let s = String::from_utf8_lossy(&body).into_owned();
-    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-    let val = JSValue::string_ptr(str_ptr);
-    perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
+    match perry_runtime::buffer::utf8_string_or_too_long_error(&body) {
+        Ok(str_ptr) => {
+            let val = JSValue::string_ptr(str_ptr);
+            perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
+        }
+        Err(error) => perry_runtime::js_promise_reject(promise, error),
+    }
     promise
 }
 
@@ -1331,23 +1335,21 @@ pub use body_clone::*;
 /// and caches the id so `req.headers === req.headers`. Caller must have
 /// already verified `req_id` is a live Request. (#1649)
 fn request_headers_handle(req_id: usize) -> f64 {
-    if let Some(id) = REQUEST_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&req_id)
-        .and_then(|r| r.cached_headers_id)
-    {
-        return handle_to_f64(id);
-    }
-    let store = match REQUEST_REGISTRY.lock().unwrap().get(&req_id) {
-        Some(r) => r.headers.clone(),
-        None => return f64::from_bits(TAG_UNDEFINED),
+    let store = {
+        let requests = REQUEST_REGISTRY.lock().unwrap();
+        let Some(request) = requests.get(&req_id) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        if request.cached_headers != 0 {
+            return f64::from_bits(request.cached_headers);
+        }
+        request.headers.clone()
     };
-    let new_id = alloc_headers(store);
-    if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get_mut(&req_id) {
-        req.cached_headers_id = Some(new_id);
+    let headers = headers::headers_object(store, false);
+    if let Some(request) = REQUEST_REGISTRY.lock().unwrap().get_mut(&req_id) {
+        request.cached_headers = headers.to_bits();
     }
-    handle_to_f64(new_id)
+    headers
 }
 
 /// `request.headers` — returns a NaN-boxed `Headers` handle (Web Fetch spec).
@@ -1415,21 +1417,49 @@ pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
     js_string_from_bytes(method.as_ptr(), method.len() as u32)
 }
 
-/// req.body — returns a string body or null. NaN-boxed return.
+/// req.body — the unread body as a string, the read body's stream, or null.
+/// NaN-boxed return.
 #[no_mangle]
 pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
+    request_body_value(handle_id(handle))
+}
+
+/// `request.body` of the Request record `id` (both the typed getter and the
+/// dynamic property read). A read body is a `ReadableStream` that is closed,
+/// disturbed and locked, as Node leaves it after `text()` and friends, so
+/// `getReader()` on it throws and `bodyUsed` agrees with it; it used to be the
+/// emptied bytes as `""`.
+pub(super) fn request_body_value(id: usize) -> f64 {
+    enum Body {
+        Bytes(Vec<u8>),
+        Stream(crate::streams::RsRef),
+        ReadNoStream,
+    }
     // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
     let body = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
-        Some(req) => match &req.body {
-            Some(b) => b.clone(),
-            None => return f64::from_bits(TAG_NULL),
+        Some(req) => match (&req.body, req.body_used, req.read_body_stream_id) {
+            (None, _, _) => return f64::from_bits(TAG_NULL),
+            (Some(_), true, Some(stream)) => Body::Stream(stream),
+            (Some(_), true, None) => Body::ReadNoStream,
+            (Some(b), false, _) => Body::Bytes(b.clone()),
         },
         None => return f64::from_bits(TAG_NULL),
     };
-    let s = js_string_from_bytes(body.as_ptr(), body.len() as u32);
-    f64::from_bits(JSValue::string_ptr(s).bits())
+    match body {
+        Body::Bytes(body) => {
+            let s = js_string_from_bytes(body.as_ptr(), body.len() as u32);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        Body::Stream(stream) => crate::streams::stream_value(stream.0),
+        Body::ReadNoStream => {
+            let stream = crate::streams::alloc_read_body_stream();
+            if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get_mut(&id) {
+                req.read_body_stream_id = Some(stream);
+            }
+            crate::streams::stream_value(stream.0)
+        }
+    }
 }
 
 /// request.bodyUsed -> boolean
@@ -1476,8 +1506,9 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 keepalive: req.keepalive,
                 duplex: req.duplex.clone(),
                 signal: req.signal,
-                cached_headers_id: None,
+                cached_headers: 0,
                 body_error: req.body_error,
+                read_body_stream_id: None,
             })
         })
     };
@@ -1501,14 +1532,16 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, RequestBodyError> {
     let req = guard
         .get_mut(&id)
         .ok_or(RequestBodyError::Message("Invalid request handle"))?;
-    let body = match &req.body {
-        Some(body) => body.clone(),
-        None => return Ok(Vec::new()),
-    };
+    if req.body.is_none() {
+        return Ok(Vec::new());
+    }
     if req.body_used {
         return Err(RequestBodyError::Message(BODY_ALREADY_USED_MESSAGE));
     }
     req.body_used = true;
+    // Reading consumes the body: the reader owns the bytes and the record
+    // keeps only the fact that a (now used) body was present.
+    let body = req.body.as_mut().map(std::mem::take).unwrap_or_default();
     match req.body_error {
         Some(error) => Err(RequestBodyError::Thrown(error)),
         None => Ok(body),
@@ -1542,12 +1575,13 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     match consume_request_body(handle) {
-        Ok(body) => {
-            let text = String::from_utf8_lossy(&body).to_string();
-            let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-            let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
-            perry_runtime::js_promise_resolve(promise, result_nan);
-        }
+        Ok(body) => match perry_runtime::buffer::utf8_string_or_too_long_error(&body) {
+            Ok(result_str) => {
+                let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
+                perry_runtime::js_promise_resolve(promise, result_nan);
+            }
+            Err(error) => perry_runtime::js_promise_reject(promise, error),
+        },
         Err(err) => reject_request_body(promise, err),
     }
     promise

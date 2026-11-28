@@ -673,36 +673,3 @@ pub(crate) fn arm_crypto_generate_key_async(
     arg_group.release(ctx);
     Ok(result)
 }
-
-/// `crypto.generateKeyPairSync(type, options)` → { publicKey, privateKey }.
-pub(crate) fn arm_crypto_generate_key_pair_sync(
-    ctx: &mut FnCtx<'_>,
-    _callee: &Expr,
-    args: &[Expr],
-) -> Result<String> {
-    if args.is_empty() {
-        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-    }
-    let (arg_values, arg_group) =
-        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-    let type_box = arg_values[0].clone();
-    let opts_box = if args.len() >= 2 {
-        Some(arg_values[1].clone())
-    } else {
-        None
-    };
-    let blk = ctx.block();
-    let type_handle = unbox_ffi_str_arg(blk, &type_box);
-    let opts_handle = match &opts_box {
-        Some(b) => unbox_ffi_str_arg(blk, b),
-        None => "0".to_string(),
-    };
-    // Returns an already-NaN-boxed object (POINTER_TAG).
-    let result = blk.call(
-        DOUBLE,
-        "js_crypto_generate_key_pair_sync",
-        &[(I64, &type_handle), (I64, &opts_handle)],
-    );
-    arg_group.release(ctx);
-    Ok(result)
-}

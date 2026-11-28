@@ -451,6 +451,7 @@ fn a_read_after_a_store_to_the_argument_local_is_bound_first() {
 #[test]
 fn a_read_inside_a_closure_is_not_scanned_as_early() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 77,
         params: Vec::new(),

@@ -1036,6 +1036,7 @@ fn try_extract(
             .collect();
         sh.closure_names.push((func_id, name));
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0, /* compiler-split region plumbing, not a source site */
             func_id,
             params,

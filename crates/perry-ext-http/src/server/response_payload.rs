@@ -292,7 +292,8 @@ pub(crate) fn add_listener(handle: i64, method: &'static [u8], event: &str, call
     unsafe { perry_ffi::runtime_call(owner.get(), method, &[event.get(), cb.get()]) };
     owner.get()
 }
-/// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`.
+/// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`, on a
+/// response marked `destroyed`.
 pub(crate) fn emit_close(handle: i64) {
     // Each property operation can run JS and move the response: re-read it.
     let roots = TransientRootScope::enter();
@@ -301,8 +302,22 @@ pub(crate) fn emit_close(handle: i64) {
     if field(h(), b"_closed").is_some_and(truthy) {
         return;
     }
+    set_field(h(), b"destroyed", bool_value(true));
     set_field(h(), b"_closed", bool_value(true));
     emit(h(), "close");
+}
+/// `'finish'`, after node's `resOnFinish` (registered before any program
+/// listener): an unread request body is dumped.
+pub(crate) fn emit_finish(handle: i64) {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    if let Some(req) = field(handle, b"req") {
+        let req = (req.to_bits() & PTR_MASK) as i64;
+        if super::request_payload::is_request(req) {
+            super::request_payload::dump_unread(req);
+        }
+    }
+    emit((owner.get().to_bits() & PTR_MASK) as i64, "finish");
 }
 /// Whether the response's `'close'` has fired.
 pub(crate) fn close_emitted(handle: i64) -> bool {
@@ -466,7 +481,7 @@ extern "C" fn flushed(
         return f64::from_bits(TAG_UNDEFINED);
     }
     run_end_callbacks(h());
-    emit(h(), "finish");
+    emit_finish(h());
     f64::from_bits(TAG_UNDEFINED)
 }
 /// The heap response's final socket write: node finishes (the queued write

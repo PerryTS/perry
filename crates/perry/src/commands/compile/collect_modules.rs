@@ -831,7 +831,26 @@ fn collect_module_one(
     if !ctx.patched_builtins.dynamic_code_reach.is_empty() {
         perry_hir::eval_classifier::note_dynamic_function_reachable();
     }
+    // `PERRY_NODE_NS_REPORT=1`: the node-core namespace writes each module
+    // adds (the reason a `node-ns-call` line reads generic).
+    let node_ns_report = std::env::var_os("PERRY_NODE_NS_REPORT").is_some();
+    let node_before: std::collections::BTreeSet<(String, String)> = if node_ns_report {
+        ctx.patched_builtins
+            .iter()
+            .filter(|(k, _)| k.starts_with("node:"))
+            .cloned()
+            .collect()
+    } else {
+        Default::default()
+    };
     perry_hir::scan_patched_builtins(dynamic_ast, &mut ctx.patched_builtins);
+    if node_ns_report {
+        for (k, m) in ctx.patched_builtins.iter() {
+            if k.starts_with("node:") && !node_before.contains(&(k.clone(), m.clone())) {
+                eprintln!("node-ns-write {k}:{m} {source_file_path}");
+            }
+        }
+    }
     // Global reach first seen here: modules lowered before it bound their
     // namespace calls unguarded (`patched_builtins::namespace_call_guarded`).
     let guarded_now = ctx

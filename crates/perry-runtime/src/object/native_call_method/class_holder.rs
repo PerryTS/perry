@@ -266,9 +266,12 @@ unsafe fn chain_method_admitting(
         } else {
             key_position(record.keys_view(), record.logical_key_count(), key)
         };
-        if shadowed && position.is_none() {
+        let in_overflow = || {
             let t = crate::object::overflow::table(holder);
-            if !t.is_null() && crate::object::overflow::find_bytes(t, key.bytes).is_some() {
+            !t.is_null() && crate::object::overflow::find_bytes(t, key.bytes).is_some()
+        };
+        if shadowed && position.is_none() {
+            if in_overflow() {
                 return ChainMethod::Get { holder };
             }
         } else if let Some(pos) = position {
@@ -292,7 +295,9 @@ unsafe fn chain_method_admitting(
                 crate::object::js_object_get_field(holder, pos).bits()
             };
             if value == crate::value::TAG_HOLE {
-                if !shadowed {
+                // A shadowed holder's layout key redefined after a delete
+                // lives in its overflow.
+                if !shadowed || in_overflow() {
                     return ChainMethod::Get { holder };
                 }
             } else {
@@ -917,5 +922,7 @@ pub(crate) unsafe fn call_class_instance_member(
     )
 }
 
+#[cfg(test)]
+mod overflow_redefine_tests;
 #[cfg(test)]
 mod selection_tests;

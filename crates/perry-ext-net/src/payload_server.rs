@@ -197,7 +197,17 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
         result.and_then(|_| tl::link_accept_start(&mut *core, server))
     };
     if let Err(failure) = result {
-        let error = socket::error(&failure.code, &failure.message());
+        let (address, port) = match &path {
+            Some(path) => (path.as_str(), -1),
+            None => (host.as_str(), port as i32),
+        };
+        let errno = if failure.errno != 0 {
+            failure.errno
+        } else {
+            tl::errno_for_code(&failure.code)
+        };
+        let error =
+            super::payload_io::listen_error_value(&failure.code, errno, "listen", address, port);
         events::queue_emit(owner.get(), "error", &[error]);
         close(owner.get(), p::undefined());
         return owner.get();
@@ -817,6 +827,11 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
             socket::destroy(child.get(), error);
             return;
         }
+    }
+    // Node's constructor `read(0)`: the accepted socket reads before its
+    // `connection` listeners run, so pausing there keeps the read going.
+    if !pause_on_connect {
+        socket::flow(child.get());
     }
     let child_snapshot = super::payload_io::snapshot(child_link);
     let child_resource = scope.root_nanbox(provider::resource(child.get()));

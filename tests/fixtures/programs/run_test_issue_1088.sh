@@ -9,8 +9,8 @@
 # Assertions:
 #   * `--output-type staticlib` produces an `ar` archive whose only entry
 #     point is `perry_module_init` (no `T main` symbol — would collide).
-#   * A C host program linked against the archive + libperry_runtime.a +
-#     libperry_stdlib.a can call `perry_module_init`, `perry_poll`,
+#   * A C host program linked with exactly the archives and `link_args` of
+#     the linkdeps sidecar can call `perry_module_init`, `perry_poll`,
 #     `perry_has_work`, `perry_next_wake_ms`, and `perry_set_wake_callback`.
 #   * After registering a wake callback, `js_notify_main_thread()` from the
 #     same thread fires it.
@@ -30,7 +30,7 @@ fi
 
 PERRY_BIN="${PERRY_BIN:-./target/release/perry}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TS_SRC="$WORKSPACE_ROOT/tests/parity/language/module/test_issue_1088_staticlib.ts"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/perry-1088.XXXXXX")"
 STATIC_LIB="$WORK_DIR/libperry_tslib.a"
@@ -90,22 +90,10 @@ echo "[1088] compiling staticlib..."
 PERRY_ALLOW_PERRY_FEATURES=1 "$PERRY_BIN" "$TS_SRC" -o "$STATIC_LIB" \
     --output-type staticlib >/dev/null
 
-# The runtime + stdlib archives that the codegen auto-optimized; the host has
-# to bring these along at its own link step. Pick the most recent
-# perry-auto-* dir — `perry compile` keeps the path opaque, so we scan.
-AUTO_DIR="$(ls -td "$WORKSPACE_ROOT"/target/perry-auto-*/release 2>/dev/null | head -n 1)"
-if [[ -z "$AUTO_DIR" ]]; then
-    AUTO_DIR="$WORKSPACE_ROOT/target/release"
+if [[ ! -f "$STATIC_LIB" ]]; then
+    echo "[1088] FAIL — missing $STATIC_LIB" >&2
+    exit 1
 fi
-RUNTIME_LIB="$AUTO_DIR/libperry_runtime.a"
-STDLIB_LIB="$AUTO_DIR/libperry_stdlib.a"
-
-for lib in "$STATIC_LIB" "$RUNTIME_LIB" "$STDLIB_LIB"; do
-    if [[ ! -f "$lib" ]]; then
-        echo "[1088] FAIL — missing $lib" >&2
-        exit 1
-    fi
-done
 
 echo "[1088] checking archive contents..."
 if nm "$STATIC_LIB" 2>&1 | grep -qE '^[0-9a-f]+ T _?main$'; then
@@ -137,14 +125,16 @@ if ! grep -q '"entry_symbol": "perry_module_init"' "$MANIFEST"; then
 fi
 
 echo "[1088] linking host smoke..."
-cc -o "$HOST_EXE" "$C_SRC" \
-    "$STATIC_LIB" "$RUNTIME_LIB" "$STDLIB_LIB" \
-    -framework Foundation \
-    -framework CoreFoundation \
-    -framework Security \
-    -framework SystemConfiguration \
-    -lc++ \
-    >/dev/null 2>&1
+LINK_INPUTS=()
+while IFS= read -r arg; do
+    LINK_INPUTS+=("$arg")
+done < <(python3 - "$MANIFEST" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+print(manifest["archive"], *(a["path"] for a in manifest["link_archives"]), *manifest["link_args"], sep="\n")
+PY
+)
+cc -o "$HOST_EXE" "$C_SRC" "${LINK_INPUTS[@]}"
 
 echo "[1088] running host..."
 OUTPUT="$("$HOST_EXE" 2>&1)"

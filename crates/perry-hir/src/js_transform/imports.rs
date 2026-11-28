@@ -1014,7 +1014,7 @@ pub fn transform_expr(
         Expr::FsReadFileSync(e) | Expr::FsExistsSync(e) | Expr::FsMkdirSync(e) | Expr::FsUnlinkSync(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::FsWriteFileSync(a, b) | Expr::FsAppendFileSync(a, b) | Expr::PathJoin(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) | Expr::PathWin32Join(a, b) | Expr::MathPow(a, b) | Expr::MathImul(a, b) => {
+        Expr::FsWriteFileSync(a, b) | Expr::FsAppendFileSync(a, b) | Expr::PathMatchesGlob(a, b) | Expr::PathResolveJoin(a, b) | Expr::MathPow(a, b) | Expr::MathImul(a, b) => {
             transform_expr(a, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(b, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
@@ -1032,7 +1032,7 @@ pub fn transform_expr(
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::PathWin32 { args, .. } => {
+        Expr::PathJoin(args) | Expr::PathWin32Join(args) | Expr::PathWin32 { args, .. } => {
             for arg in args {
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }

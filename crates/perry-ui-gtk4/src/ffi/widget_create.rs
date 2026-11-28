@@ -28,10 +28,53 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    let handle = perry_ui_text_create(text_ptr);
+    widgets::set_labelled_by(field, handle);
+    handle
+}
+
+/// Set the name a screen reader announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    widgets::set_accessibility_label(handle, text_ptr as *const u8);
+}
+
 /// Create a Button.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)
+}
+
+/// A Link is its text; a click opens its URL.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    use gtk4::prelude::*;
+    let href = unsafe { perry_ffi::copy_string_from_raw(href_ptr as *const u8) };
+    let handle = perry_ui_text_create(text_ptr);
+    if let Some(widget) = widgets::get_widget(handle) {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_pressed(move |_, n_press, _, _| {
+            if n_press == 1 {
+                perry_ui::link::open_link(&href, super::system_weather::perry_system_open_url);
+            }
+        });
+        widget.add_controller(gesture);
+    }
+    handle
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 /// Create a VStack container.
@@ -125,6 +168,13 @@ pub extern "C" fn perry_ui_form_create() -> i64 {
 #[no_mangle]
 pub extern "C" fn perry_ui_section_create(title_ptr: i64) -> i64 {
     widgets::form::section_create(title_ptr as *const u8)
+}
+
+/// The collapsible `<details>` exists on the web target only; here a Disclosure is a
+/// Section, always expanded.
+#[no_mangle]
+pub extern "C" fn perry_ui_disclosure_create(title_ptr: i64) -> i64 {
+    perry_ui_section_create(title_ptr)
 }
 
 /// Create a ZStack (overlay container).

@@ -30,6 +30,24 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     })
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    catch_panic("perry_ui_label_create", || {
+        let handle = widgets::text::create(text_ptr as *const u8);
+        widgets::set_label_for(handle, field);
+        handle
+    })
+}
+
+/// Set the name a screen reader announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    catch_panic_void("perry_ui_widget_set_accessibility_label", || {
+        widgets::set_accessibility_label(handle, text_ptr as *const u8);
+    });
+}
+
 /// `Text(content, id)` — create + register for `setText(id, value)`.
 /// Other platforms export this; Android was missing it, so dlopen of apps
 /// that use reactive Text ids failed with:
@@ -68,6 +86,28 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     catch_panic("perry_ui_button_create", || {
         widgets::button::create(label_ptr as *const u8, on_press)
     })
+}
+
+/// A Link is its text; a tap opens its URL.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    catch_panic("perry_ui_link_create", || {
+        let href = unsafe { app::str_from_header(href_ptr as *const u8) };
+        let handle = widgets::text::create(text_ptr as *const u8);
+        let open = perry_ui::link::open_link_callback(href, super::perry_system_open_url);
+        widgets::set_on_click(handle, open);
+        handle
+    })
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 #[no_mangle]

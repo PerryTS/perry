@@ -38,6 +38,9 @@ mod header_brand_tests;
 mod iter;
 mod mutate;
 mod numeric;
+mod numeric_offset;
+mod numeric_read;
+mod numeric_write;
 mod own_props;
 pub(crate) mod pool;
 mod query;
@@ -139,7 +142,10 @@ pub use query::{
 };
 
 // ---- Re-exports: toString / print / length / to-array ----
-pub(crate) use encode::buf_bytes_to_utf8_string;
+pub use encode::utf8_string_or_too_long_error;
+pub(crate) use encode::{
+    buf_bytes_to_utf8_string, decode_bytes_to_string, try_utf8_string, StringTooLong,
+};
 pub use encode::{
     buffer_to_array, js_buffer_length, js_buffer_print, js_buffer_to_string,
     js_buffer_to_string_range, js_value_to_string_with_encoding,
@@ -193,6 +199,8 @@ pub use numeric::{
     js_buffer_write_uint32_le, js_buffer_write_uint8, js_buffer_write_uint_be,
     js_buffer_write_uint_le,
 };
+pub(crate) use numeric_read::dispatch_numeric_read;
+pub(crate) use numeric_write::dispatch_numeric_write;
 
 // ---- Re-exports: hex / base64 codec helpers ----
 pub use coding::{

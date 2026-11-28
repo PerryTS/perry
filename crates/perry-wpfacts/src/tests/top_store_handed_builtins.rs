@@ -90,34 +90,46 @@ fn a_top_store_writes_no_builtin_object_nothing_handed() {
     check(None, "", "", true);
 }
 
-/// The object handed to unknown code before the lookup: written.
+/// The object handed to unknown code before the lookup: P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+/// built-in prototype, a built-in constructor or the global object, so the
+/// store into ⊤ (`arr[kk] = 1`) writes no built-in object, handed or not
+/// (the dynamic-code arms stay the open control).
 #[test]
-fn a_builtin_object_handed_first_is_written_by_a_top_store() {
+fn a_builtin_object_handed_first_is_not_written_by_a_top_store() {
     for c in cases() {
         let hand = format!("unknown.take2({});", c.hand);
         let src = format!("{PRE}{hand}\n{}", c.body);
         let pf = facts(&src);
-        assert!(!proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
+        // `Object` handed on keeps its members too (owner premise
+        // 2026-11-19, rule R1): `v.inner` is exact on every arm.
+        assert!(proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
     }
 }
 
-/// Handed after the lookup was solved: the parked lookup runs again
-/// (`note_handed_to_unknown`).
+/// Handed after the lookup was solved: P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+/// built-in prototype, a built-in constructor or the global object, so the
+/// store into ⊤ (`arr[kk] = 1`) writes no built-in object, handed or not
+/// (the dynamic-code arms stay the open control).
 #[test]
-fn a_builtin_object_handed_after_the_lookup_is_written_by_a_top_store() {
+fn a_builtin_object_handed_after_the_lookup_is_not_written_by_a_top_store() {
     for c in cases() {
         let hand = format!("unknown.take2({});", c.hand);
         let src = format!("{PRE}{}\n{hand}", c.body);
         let pf = facts(&src);
-        assert!(!proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
+        // `Object` handed on keeps its members too (owner premise
+        // 2026-11-19, rule R1): `v.inner` is exact on every arm.
+        assert!(proven(&pf, c.key), "{}: {src}\n{}", c.what, pf.dump_text());
     }
 }
 
-/// The global object handed: every built-in object is in reach by name.
+/// The global object handed: P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+/// built-in prototype, a built-in constructor or the global object, so the
+/// store into ⊤ (`arr[kk] = 1`) writes no built-in object, handed or not
+/// (the dynamic-code arms stay the open control).
 #[test]
-fn the_global_object_handed_puts_every_builtin_in_reach_of_a_top_store() {
-    check(None, "unknown.take2(globalThis);", "", false);
-    check(None, "", "unknown.take2(globalThis);", false);
+fn the_global_object_handed_puts_no_builtin_in_reach_of_a_top_store() {
+    check(None, "unknown.take2(globalThis);", "", true);
+    check(None, "", "unknown.take2(globalThis);", true);
 }
 
 /// Dynamic code that may run holds the global object
@@ -153,11 +165,15 @@ fn the_folded_global_object_is_handed_only_when_given() {
 /// A sloppy function unknown code calls with a nullish `this` sees the
 /// global object (`sloppy_this`); handing that on hands the global object.
 #[test]
-fn a_sloppy_this_handed_on_puts_every_builtin_in_reach() {
+fn a_sloppy_this_handed_on_puts_no_builtin_in_reach() {
+    // P-N1 (owner 2026-11-23): a value the analysis does not model is never a
+    // built-in prototype, a built-in constructor or the global object, so the
+    // store into ⊤ (`arr[kk] = 1`) writes no built-in object, handed or not
+    // (the dynamic-code arms stay the open control).
     check(
         None,
         "unknown.take3(function (this: any) { unknown.take2(this); });",
         "",
-        false,
+        true,
     );
 }

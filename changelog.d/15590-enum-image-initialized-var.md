@@ -1,0 +1,1 @@
+Fix: a merged enum whose first declaration is an esbuild `var E = (...)(E || {})` keeps its members when a later tsc-form `(...)(E || (E = {}))` adds more; the later IIFE is no longer born from a fresh image.

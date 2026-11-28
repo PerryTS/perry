@@ -342,6 +342,8 @@ pub(crate) fn accessor(
 
 pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
     let _gc = crate::gc::GcSuppressScope::new();
+    // The family's instance layout is declared with its prototype.
+    super::state::declare(name, proto);
     let method = |name: &str,
                   func: *const crate::closure::JsFunctionInfo,
                   arity: u32,

@@ -1843,6 +1843,10 @@ pub struct Model {
     /// literal receiver, with the literal's length in code units: the
     /// native's result is in `[-1, len]` (`string_methods`).
     pub str_index_len: FxHashMap<CallId, i64>,
+    /// Rule CU: `a.charCodeAt(k)` calls whose text proves `k` an index below
+    /// the length of the String `a` holds (`Gen::code_unit_read`): on a
+    /// String receiver the native's result is a code unit, `[0, 65535]`.
+    pub code_unit_calls: crate::pts::FxHashSet<CallId>,
     /// −0 tolerance: spread argument arrays of calls whose callee observes
     /// its arguments: every element of every token they hold is observed.
     pub zs_spread: Vec<NodeId>,
@@ -2497,6 +2501,12 @@ pub struct Model {
     /// The nodes sunk with a writer reason (`Model::writes_any`): a node
     /// sunk with a contract reason first is sunk again at that level.
     pub sunk_writer_nodes: crate::pts::FxHashSet<NodeId>,
+    /// (node, region) -> how many live `Cons::HandRaise { region }` rules
+    /// the node holds: the attached ones minus those D2 detached
+    /// (`detach_foreign`). `sink_node` asks it instead of scanning the
+    /// node's rules, which on a node many native calls sink is one scan
+    /// per sink over a list as long as those calls.
+    pub(crate) hand_raise: FxHashMap<(NodeId, NodeId), u32>,
     /// The escape reasons a builtin contract states (`Model::contract_reason`):
     /// their holder writes a handed value only as that contract says.
     pub contract_reasons: crate::pts::FxHashSet<u32>,

@@ -1117,7 +1117,9 @@ pub enum Expr {
     FsRmRecursive(Box<Expr>),  // fs.rmRecursive(path) -> boolean
 
     // Path operations
-    PathJoin(Box<Expr>, Box<Expr>),        // path.join(a, b) -> string
+    /// `path.join(a, b, ...)` over all of its arguments in one call (two or
+    /// more; zero and one argument lower to `"."` and `PathNormalize`).
+    PathJoin(Vec<Expr>),
     PathDirname(Box<Expr>),                // path.dirname(path) -> string
     PathBasename(Box<Expr>),               // path.basename(path) -> string
     PathBasenameExt(Box<Expr>, Box<Expr>), // path.basename(path, ext) -> string (strips ext suffix)
@@ -1133,7 +1135,8 @@ pub enum Expr {
     PathToNamespacedPath(Box<Expr>), // path.toNamespacedPath(path) -> string, or original non-string
     PathMatchesGlob(Box<Expr>, Box<Expr>), // path.matchesGlob(path, pattern) -> boolean
     PathResolveJoin(Box<Expr>, Box<Expr>), // internal: join with reset-on-absolute (multi-arg resolve)
-    PathWin32Join(Box<Expr>, Box<Expr>),   // path.win32.join(a, b) -> string (issue #810)
+    /// `path.win32.join(a, b, ...)` over all of its arguments (issue #810).
+    PathWin32Join(Vec<Expr>),
     /// All other `path.win32.<method>(args...)` calls. One variant for the
     /// whole sub-namespace to avoid 15× boilerplate across walker/codegen
     /// touch sites; the codegen dispatches on `method` to the right
@@ -2475,6 +2478,9 @@ pub enum Expr {
         byte_offset: u32,
         /// Parameter definitions
         params: Vec<Param>,
+        /// Type parameters the closure declares (`<T>`); a `TypeVar` in its
+        /// signature or body names the nearest enclosing declaration of it.
+        type_params: Vec<crate::types::TypeParam>,
         /// Return type
         return_type: Type,
         /// Function body

@@ -96,12 +96,12 @@ pub(crate) fn install() {
     AFTER_COLD_READ.set(crate::json::traversal_feedback::after_cold_read);
 }
 pub(crate) fn register_roots() {
-    // Scanner registration is per thread; installers run on every gc_init.
-    crate::gc::gc_register_mutable_root_scanner_named(
+    // Scanner registration is per thread and this runs from every installer: register each scanner once.
+    crate::gc::gc_register_mutable_root_scanner_named_once(
         "json_parse_mutable_root_scanner",
         crate::gc::json_parse_mutable_root_scanner,
     );
-    crate::gc::gc_register_mutable_root_scanner_named(
+    crate::gc::gc_register_mutable_root_scanner_named_once(
         "crate::json::raw_json::scan_raw_json_key_root_mut",
         crate::json::raw_json::scan_raw_json_key_root_mut,
     );

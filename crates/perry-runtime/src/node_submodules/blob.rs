@@ -89,8 +89,18 @@ extern "C" fn blob_text_method(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let bytes = captured_blob_bytes(closure);
-    blob_reader_promise_value(bytes_to_text_value(&bytes))
+    blob_text_promise(captured_blob_bytes(closure))
+}
+
+/// `text()` of a Blob or file-backed Blob: node rejects text longer than
+/// `MAX_STRING_LENGTH` with `ERR_STRING_TOO_LONG`.
+fn blob_text_promise(bytes: Vec<u8>) -> f64 {
+    let text = crate::buffer::utf8_string_or_too_long_error(&bytes);
+    drop(bytes);
+    match text {
+        Ok(text) => blob_reader_promise_value(f64::from_bits(JSValue::string_ptr(text).bits())),
+        Err(error) => blob_reader_promise_rejected(error),
+    }
 }
 
 extern "C" fn blob_array_buffer_method(
@@ -149,7 +159,7 @@ extern "C" fn file_blob_text_method(
     _this: crate::closure::JsThis,
 ) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
-        Ok(bytes) => blob_reader_promise_value(bytes_to_text_value(&bytes)),
+        Ok(bytes) => blob_text_promise(bytes),
         Err(reason) => blob_reader_promise_rejected(reason),
     }
 }

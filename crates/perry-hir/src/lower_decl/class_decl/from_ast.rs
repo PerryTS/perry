@@ -15,6 +15,7 @@ pub(crate) fn lower_class_from_ast(
 ) -> Result<Class> {
     // Consume the flag before any nested class in this body is lowered.
     let fresh_class_expr = std::mem::take(&mut ctx.pending_fresh_class_expr);
+    let static_this = ctx.pending_class_static_this.take();
     let synthesized =
         crate::lower_decl::class_field_assign::with_synthesized_constructor(ctx, class);
     let class = synthesized.as_ref().unwrap_or(class);
@@ -35,6 +36,11 @@ pub(crate) fn lower_class_from_ast(
     ctx.current_class = Some(name.to_string());
     let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
+    let enclosing_len = ctx.push_enclosing_class_inner_name(
+        old_inner_name.as_ref(),
+        old_class.as_ref(),
+        old_class_scope_depth,
+    );
     // Only a source identifier creates an inner binding. An anonymous
     // class's inferred display name must not shadow its enclosing variable.
     let explicit_inner_name = ctx.pending_class_inner_name.take();
@@ -482,6 +488,7 @@ pub(crate) fn lower_class_from_ast(
                                 is_static: false,
                                 kind: ClassComputedMemberKind::Method,
                                 source_order: member_index,
+                                names_declaration: false,
                             });
                             continue;
                         }
@@ -614,12 +621,17 @@ pub(crate) fn lower_class_from_ast(
 
     // `this` in static field initializers — see the matching substitution in
     // `lower_class_decl` above.
+    // A fresh evaluation's static `this` is its own class object (the
+    // evaluation owner local), not the shared template.
     for sf in &mut static_fields {
         if let Some(init) = &mut sf.init {
-            crate::analysis::substitute_lexical_this_in_expr(
-                init,
-                &Expr::ClassRef(name.to_string()),
-            );
+            match static_this {
+                Some(self_id) => decl_self_binding::substitute_static_this_with_self(init, self_id),
+                None => crate::analysis::substitute_lexical_this_in_expr(
+                    init,
+                    &Expr::ClassRef(name.to_string()),
+                ),
+            }
         }
     }
 
@@ -633,6 +645,7 @@ pub(crate) fn lower_class_from_ast(
     ctx.current_class = old_class;
     ctx.current_class_scope_depth = old_class_scope_depth;
     ctx.current_class_inner_name = old_inner_name;
+    ctx.enclosing_class_inner_names.truncate(enclosing_len);
     ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
     // Issue #562: restore prior super-ident slot.

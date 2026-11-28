@@ -1405,6 +1405,18 @@ impl WalkerImage {
                 return None;
             }
             let (fstart, encoding) = ci[pos - 1];
+            // A DWARF-mode entry may leave its personality index and LSDA
+            // flag zero: Apple ld copies them into the compact word, ld64.lld
+            // keeps them only in the FDE (CIE personality, FDE LSDA). Both
+            // are valid, so read them from the FDE the entry points at.
+            if encoding & CU_MODE_MASK == CU_MODE_DWARF && encoding & CU_PERSONALITY_MASK == 0 {
+                let off = gimli::EhFrameOffset::from((encoding & CU_DWARF_SECTION_OFFSET) as usize);
+                let fde = self
+                    .eh_frame
+                    .fde_from_offset(&self.bases, off, EhFrame::cie_from_offset)
+                    .ok()?;
+                return Self::fde_lsda(&fde);
+            }
             // Other languages also use non-zero LSDA actions for termination
             // shims and catches. Only Perry's personality describes a JS
             // handler that the single-phase transport may enter directly.
