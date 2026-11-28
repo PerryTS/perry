@@ -798,6 +798,13 @@ impl<'a> Gen<'a> {
         false
     }
 
+    /// `tm` itself takes its parent from a value not settled to one class
+    /// (§17.2): before the solve, no link says which class it is.
+    fn value_parent_pending(&self, tm: TmplId) -> bool {
+        let t = &self.m.tmpls[tm as usize];
+        t.parent_value.is_some() && t.parent.is_none() && !self.m.realm_parent.contains_key(&tm)
+    }
+
     /// `tm` is linked to a realm parent (`Model::realm_parent`) whose declared
     /// construct hands the instance to other code before `tm`'s own keys
     /// are defined.
@@ -985,22 +992,33 @@ impl<'a> Gen<'a> {
                     .collect::<std::collections::BTreeSet<String>>(),
                 _ => continue,
             };
-            // Some class below `tm` defines a followed method.
+            // Some class below `tm` defines a followed method. SITEB5: a
+            // class whose parent is a value not yet settled (`extends v`,
+            // §17.2) has no parent link before the solve: the solve may
+            // settle `v` to `tm` or a class below it, and then its instances
+            // run its own method at the call (10.1.8 [[Get]] from their
+            // prototype, a subclass's first). Every class up to that value
+            // link may be below `tm`, as a class linked by name is.
             let overridden = tms.iter().any(|&d| {
                 let mut cur = Some(d);
                 let mut between = Vec::new();
                 while let Some(x) = cur {
                     if x == tm {
-                        return between.iter().any(|b: &TmplId| {
-                            by_tm
-                                .get(b)
-                                .is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
-                        });
+                        break;
                     }
                     between.push(x);
                     cur = self.m.tmpls[x as usize].parent;
                 }
-                false
+                let below = match cur {
+                    Some(_) => true,
+                    None => between.last().is_some_and(|&top| self.value_parent_pending(top)),
+                };
+                below
+                    && between.iter().any(|b: &TmplId| {
+                        by_tm
+                            .get(b)
+                            .is_some_and(|(_, c)| calls.iter().any(|k| defines(c, k)))
+                    })
             });
             if !overridden {
                 continue;
