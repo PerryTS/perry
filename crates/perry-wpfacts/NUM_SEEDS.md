@@ -50,7 +50,7 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `dump.rs:470` | read/map | read: tests or masks the fact, seeds nothing |
 | `records.rs:448` | read/map | read: R3's immediate-field mask (value records), seeds nothing |
 | `solve/arr_len.rs:42` | seed | array birth length `new Array(k)`: the header length `uitofp` |
-| `solve/lookup.rs:1289` | seed | array `.length` through the chain: header length `uitofp` (array/indexing.rs js_array_length -> u32) |
+| `solve/chain.rs:297` | seed | array `.length` through the chain: header length `uitofp` (array/indexing.rs js_array_length -> u32) |
 | `solve/fields.rs:40` | seed | RegExp `lastIndex` at birth: the Number 0 |
 | `solve/native_value.rs:171` | read/map | read: tests or masks the fact, seeds nothing |
 | `solve/apply.rs:1412` | read/map | read: tests or masks the fact, seeds nothing |

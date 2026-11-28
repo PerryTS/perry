@@ -3,7 +3,7 @@
 // (ECMA-262 13.3.6 EvaluateCall: `this` is the receiver of THIS execution;
 // 10.1.8.1 OrdinaryGet: the callee is that receiver's value of the key;
 // 13.3.7: `super.m()` passes the current `this`). The binding is per
-// receiver token (`bind_via`, solve/lookup.rs): these fixtures pin it. Small
+// receiver token (`bind_via`, solve/this_bind.rs): these fixtures pin it. Small
 // JS, no three.js.
 use super::*;
 use perry_hir::Module;
