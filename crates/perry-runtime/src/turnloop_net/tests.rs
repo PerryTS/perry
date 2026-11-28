@@ -98,11 +98,13 @@ impl Drop for Fixture {
 }
 
 /// One loop iteration's net work: a turn, then the check phase that follows
-/// it in the generated loop (which delivers an EOF parked behind data).
+/// it in the generated loop (which delivers an EOF parked behind data) and the
+/// close-callbacks phase (which delivers `Closed`).
 fn pump() {
     turn_only();
     super::check_phase_begin();
     super::check_phase_end();
+    super::close_phase();
 }
 
 /// A turn with no check phase after it.
@@ -576,6 +578,39 @@ fn unix_domain_sockets_carry_the_same_lifecycle() {
     let _ = std::fs::remove_dir(&dir);
 }
 
+/// An id socket's `Closed` reaches its binding only in the close phase,
+/// newest close first, as a link socket's does.
+#[test]
+fn an_id_sockets_closed_waits_for_the_close_phase_newest_first() {
+    let _fixture = Fixture::start();
+    let (server, client, conn) = connected_pair();
+    super::close(client).expect("close client");
+    super::close(conn).expect("close conn");
+    assert!(super::close_queued());
+    let limit = Instant::now() + Duration::from_secs(5);
+    while !super::close_ready() && Instant::now() < limit {
+        turn_only();
+    }
+    assert_eq!(
+        events().iter().filter(|e| e.kind == NET_CLOSED).count(),
+        0,
+        "the poll phase does not emit it"
+    );
+    super::close(client).expect("a close still owed to the phase is a close in progress");
+    super::close_phase();
+    let closed: Vec<i64> = events()
+        .iter()
+        .filter(|e| e.kind == NET_CLOSED)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(closed, [conn, client]);
+    assert!(!super::close_queued());
+    super::close(server).expect("close listener");
+    assert!(pump_until(|e| e
+        .iter()
+        .any(|e| e.kind == NET_CLOSED && e.id == server)));
+}
+
 #[test]
 fn closing_a_socket_with_queued_writes_clears_its_write_accounting() {
     let _fixture = Fixture::start();
@@ -949,6 +984,62 @@ fn writes_and_end_before_connect_are_delivered_after_it() {
         let _ = super::close(id);
     }
     pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+/// A caller's close while a refused attempt's handle is still closing ends
+/// the connect: no next address is tried, and the socket's `Closed` reaches
+/// the binding from the close phase.
+#[test]
+fn a_close_between_connect_attempts_takes_no_next_attempt() {
+    let _fixture = Fixture::start();
+    let (server, live) = listen_local();
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+        l.local_addr().expect("probe addr")
+    };
+    let client = 2;
+    NET.with(|net| {
+        net.borrow_mut().plans.insert(
+            client,
+            ConnectPlan {
+                subsystem: SUBSYSTEM,
+                nodelay: true,
+                remaining: [dead, live].into_iter().collect(),
+                ..ConnectPlan::default()
+            },
+        )
+    });
+    super::attempt_next_address(client);
+    let retrying = || {
+        NET.with(|net| {
+            net.borrow()
+                .plans
+                .get(&client)
+                .is_some_and(|plan| plan.retrying)
+        })
+    };
+    let limit = Instant::now() + Duration::from_secs(5);
+    while !retrying() && Instant::now() < limit {
+        turn_only();
+    }
+    assert!(
+        retrying(),
+        "the first attempt must be refused: {:?}",
+        events()
+    );
+    super::close(client).expect("close between attempts");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_CLOSED && e.id == client)),
+        "the caller's close must be delivered: {:?}",
+        events()
+    );
+    assert!(!super::is_live(client));
+    assert!(!super::close_queued());
+    assert_eq!(count(NET_ACCEPT, server), 0, "no next attempt connected");
+    super::close(server).expect("close listener");
+    assert!(pump_until(|e| e
+        .iter()
+        .any(|e| e.kind == NET_CLOSED && e.id == server)));
 }
 
 /// CodeRabbit on #11130: a write or `end()` issued while a connect plan is

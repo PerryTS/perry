@@ -630,13 +630,13 @@ pub(crate) fn component_turn_and_take(
 /// STAGED, in its original order, for the next dispatch; the turn's JS-timer
 /// expiry is retired at once, as a dispatch would.
 ///
-/// A `Closed` releases its cell's refs, so it is dispatched after every earlier
-/// completion that `link_of` names the same cell for. The earlier ones that
+/// A `Closed` ends its owner, so it is dispatched after every earlier
+/// completion that `owner_of` names the same owner for. The earlier ones that
 /// `retires_with` it (the closing socket's retired operations) come back with
-/// it, in order; behind any other completion of its cell it stays staged.
-pub(crate) fn take_closed_completions(
+/// it, in order; behind any other completion of its owner it stays staged.
+pub(crate) fn take_closed_completions<K: Eq + std::hash::Hash>(
     select: impl Fn(&turnloop::Completion) -> bool,
-    link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
+    owner_of: impl Fn(&turnloop::Completion) -> Option<K>,
     retires_with: impl Fn(&turnloop::Completion, &turnloop::Completion) -> bool,
 ) -> Vec<turnloop::Completion> {
     if STATE.with(Cell::get) != LoopState::Owner {
@@ -671,7 +671,7 @@ pub(crate) fn take_closed_completions(
             && !crate::turnloop_pool::owns(c.token)
             && !crate::turnloop_post::owns(c.token);
         if net {
-            link_of(c)
+            owner_of(c)
         } else {
             None
         }
@@ -683,14 +683,14 @@ pub(crate) fn take_closed_completions(
 /// Take out of `staged` each item `select` picks, with the earlier items of
 /// its cell, when every one of them `retires_with` it; everything else keeps
 /// its order, and the taken items keep theirs. See [`take_closed_completions`].
-pub(super) fn take_with_retired<T>(
+pub(super) fn take_with_retired<T, K: Eq + std::hash::Hash>(
     staged: &mut Vec<T>,
-    cell_of: impl Fn(&T) -> Option<usize>,
+    cell_of: impl Fn(&T) -> Option<K>,
     select: impl Fn(&T) -> bool,
     retires_with: impl Fn(&T, &T) -> bool,
 ) -> Vec<T> {
     let mut take = vec![false; staged.len()];
-    let mut earlier: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+    let mut earlier: std::collections::HashMap<K, Vec<usize>> = Default::default();
     for (index, item) in staged.iter().enumerate() {
         let Some(cell) = cell_of(item) else {
             continue;
