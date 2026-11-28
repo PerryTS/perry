@@ -304,3 +304,56 @@ fn view_length_after_resize_matches_the_spec_table() {
     // no u32 overflow at the top of the range
     assert_eq!(f(u32::MAX, u32::MAX - 8, 8, false, 2), None);
 }
+
+thread_local! {
+    static SHRINK_ON_VALUE_OF: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `valueOf` that shrinks the resizable buffer in `SHRINK_ON_VALUE_OF` to
+/// two bytes and returns 7.
+extern "C" fn shrinking_value_of(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    resize(SHRINK_ON_VALUE_OF.with(|b| b.get()) as *mut BufferHeader, 2);
+    7.0
+}
+
+#[test]
+fn a_store_whose_value_shrinks_the_buffer_writes_nothing() {
+    // TypedArraySetElement converts the value, then validates the index: a
+    // `valueOf` that shrinks the buffer under `ta[2]` leaves the reserved
+    // bytes past the new length untouched.
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf = resizable::alloc_resizable_array_buffer(8, 8);
+    let _buf = scope.root_nanbox_f64(boxed(buf));
+    SHRINK_ON_VALUE_OF.with(|b| b.set(buf as usize));
+    let ta =
+        crate::typedarray::js_typed_array_new(crate::typedarray::KIND_INT16 as i32, boxed(buf));
+    let _ta = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ta as i64));
+    let value_of = crate::closure::js_closure_alloc(
+        crate::fn_info!(shrinking_value_of, 0; with_declared(0)),
+        0,
+    );
+    let _value_of = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(value_of as i64));
+    let value = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let key = crate::string::js_string_from_bytes(b"valueOf".as_ptr(), 7);
+    value.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            crate::value::js_nanbox_pointer(value_of as i64),
+        )
+    });
+    let boxed_value = value.with_const_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    });
+    crate::typedarray::js_typed_array_set(ta, 2, boxed_value);
+    unsafe {
+        assert_eq!(super::store::length(buf as usize), 2);
+    }
+    let pin = bytes::pin(boxed(buf)).unwrap();
+    let reserved = unsafe { std::slice::from_raw_parts(pin.as_ptr(), 8) };
+    assert_eq!(&reserved[4..6], &[0, 0], "no write past the shrunk length");
+}
