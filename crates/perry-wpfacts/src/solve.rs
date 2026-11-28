@@ -1780,6 +1780,12 @@ impl Model {
                     _ => self.proto_node(root),
                 };
                 self.edge(rn, n);
+                // Rule OPROTO (M1): the bound value is born with its root
+                // target's intrinsic prototypes, so a walk of its chain ends
+                // where the root's does (`collapsed_end`, `chain_link`).
+                if let Some(v) = self.birth_protos.get(&root).cloned() {
+                    self.birth_protos.insert(t, v);
+                }
             }
             // Rule OPROTO (M1): a builtin-made receiver's chain starts at
             // its exact intrinsic prototype (`builtins::intrinsic_proto_seeds`).
