@@ -836,6 +836,9 @@ impl Model {
                 d.rsteps = 0;
             }
         }
+        if let Cons::HandRaise { region } = c {
+            *self.hand_raise.entry((n, region)).or_default() += 1;
+        }
         self.nodes[n as usize].cons.push(c);
         let ci = self.nodes[n as usize].cons.len() as u32 - 1;
         if let Some(s) = self.stop_top.as_mut() {

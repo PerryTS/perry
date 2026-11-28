@@ -713,6 +713,33 @@ fn own_miss_on_an_arguments_object_keeps_its_answer() {
     });
 }
 
+/// A native-alias receiver (`http.Server.call(this)`): a read its list and
+/// chain prove absent still forwards to the native object, so its own miss
+/// declines to the complete read instead of answering from the chain.
+#[test]
+fn own_miss_on_a_native_alias_declines() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+        let addr = || obj.get_raw_mut_ptr::<ObjectHeader>() as usize;
+        set(addr(), "a", 1.0);
+        // A test id in the native handle band; nothing dispatches it here.
+        crate::object::native_this_alias::register_this_to_handle_alias(
+            f64::from_bits(POINTER_TAG | addr() as u64),
+            crate::value::js_nanbox_pointer(0xe1729),
+            false,
+        );
+        for k in ["zz", "timeout", "listen"] {
+            assert_eq!(
+                probe(addr(), k),
+                TAG_HOLE,
+                "{k}: the alias forwards its misses"
+            );
+        }
+    });
+}
+
 /// A Proxy prototype is a boundary: the miss past the receiver declines.
 #[test]
 fn own_miss_before_a_proxy_prototype_declines() {

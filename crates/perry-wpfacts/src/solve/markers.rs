@@ -228,10 +228,15 @@ impl Model {
         // slot (`fetch(url)`: no `init`, no `init.body`) hands nothing.
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            let seen = self.nodes[n as usize]
-                .cons
-                .iter()
-                .any(|x| matches!(x, Cons::HandRaise { region: r } if *r == region));
+            let seen = self.hand_raise.get(&(n, region)).is_some_and(|&k| k != 0);
+            debug_assert_eq!(
+                seen,
+                self.nodes[n as usize]
+                    .cons
+                    .iter()
+                    .any(|x| matches!(x, Cons::HandRaise { region: r } if *r == region)),
+                "hand_raise of ({n}, {region}) differs from the live HandRaise rules of the node"
+            );
             if region != u32::MAX && !seen {
                 self.cons(n, Cons::HandRaise { region });
             }
