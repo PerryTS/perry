@@ -63,8 +63,8 @@ mod lazy_shadow_tests {
         crate::object::js_object_set_field_by_name(flat, s("alpha"), 1.0);
         crate::object::js_object_set_field_by_name(flat, s("beta"), 2.0);
         let flat_v = obj_value(flat);
-        let lazy = keys_of(for_in_keys_with(flat_v, true));
-        let eager = keys_of(for_in_keys_with(flat_v, false));
+        let lazy = keys_of(for_in_keys_with(flat_v, true, false));
+        let eager = keys_of(for_in_keys_with(flat_v, false, false));
         assert_eq!(
             lazy, eager,
             "a flat object's for-in keys must not depend on when the shadow set is built"
@@ -83,8 +83,8 @@ mod lazy_shadow_tests {
         let child_v = obj_value(child);
         crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
 
-        let lazy = keys_of(for_in_keys_with(child_v, true));
-        let eager = keys_of(for_in_keys_with(child_v, false));
+        let lazy = keys_of(for_in_keys_with(child_v, true, false));
+        let eager = keys_of(for_in_keys_with(child_v, false, false));
         assert_eq!(
             lazy, eager,
             "an inherited enumerable key, and an own key shadowing one on the \
@@ -156,8 +156,8 @@ mod lazy_shadow_tests {
         crate::object::js_object_set_field_by_name_nonenum(shadower, s("marker"), 0.0);
 
         let leaf_v = obj_value(*chain.last().unwrap());
-        let lazy = keys_of(for_in_keys_with(leaf_v, true));
-        let eager = keys_of(for_in_keys_with(leaf_v, false));
+        let lazy = keys_of(for_in_keys_with(leaf_v, true, false));
+        let eager = keys_of(for_in_keys_with(leaf_v, false, false));
         assert_eq!(
             lazy, eager,
             "a chain whose only shadowing level spilled past the inline array \
@@ -188,8 +188,8 @@ mod lazy_shadow_tests {
         let child_v = obj_value(child);
         crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
 
-        let lazy = keys_of(for_in_keys_with(child_v, true));
-        let eager = keys_of(for_in_keys_with(child_v, false));
+        let lazy = keys_of(for_in_keys_with(child_v, true, false));
+        let eager = keys_of(for_in_keys_with(child_v, false, false));
         assert_eq!(
             lazy, eager,
             "deferral must not change shadowing by a non-enumerable own name"
@@ -288,4 +288,125 @@ fn a_defined_index_is_an_element_fact_not_a_named_key() {
         ["0", "1", "2", "length"],
         "getOwnPropertyNames"
     );
+}
+
+/// PXFORIN1: for-in over a Proxy subject runs node's traps in node's order
+/// (`ownKeys`, `getPrototypeOf`, then `getOwnPropertyDescriptor` at each key's
+/// visit) and never the `has` trap.
+#[cfg(test)]
+mod proxy_subject_tests {
+    use super::*;
+
+    thread_local! {
+        static LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn s(bytes: &str) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    fn key_name(key: f64) -> String {
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let kv = JSValue::from_bits(key.to_bits());
+        unsafe { crate::string::js_string_key_bytes(kv, &mut scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|t| t.to_string()))
+            .unwrap_or_default()
+    }
+
+    fn log(entry: String) {
+        LOG.with(|l| l.borrow_mut().push(entry));
+    }
+
+    extern "C" fn own_keys_trap(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        target: f64,
+    ) -> f64 {
+        log("ownKeys".to_string());
+        crate::object::js_object_get_own_property_names(target)
+    }
+
+    extern "C" fn gopd_trap(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        target: f64,
+        key: f64,
+    ) -> f64 {
+        log(format!("gopd:{}", key_name(key)));
+        crate::object::js_object_get_own_property_descriptor(target, key)
+    }
+
+    extern "C" fn get_proto_trap(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        target: f64,
+    ) -> f64 {
+        log("getProto".to_string());
+        crate::object::object_ops::js_object_get_prototype_of(target)
+    }
+
+    extern "C" fn has_trap(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        target: f64,
+        key: f64,
+    ) -> f64 {
+        log(format!("has:{}", key_name(key)));
+        crate::object::field_get_set::has_property::js_in_operator(target, key)
+    }
+
+    fn set_fn(
+        handler: *mut ObjectHeader,
+        name: &str,
+        info: *const crate::closure::JsFunctionInfo,
+    ) {
+        let callback = crate::closure::js_closure_alloc(info, 0);
+        let v = f64::from_bits(JSValue::pointer(callback as *const u8).bits());
+        crate::object::js_object_set_field_by_name(handler, s(name), v);
+    }
+
+    #[test]
+    fn for_in_over_a_proxy_runs_own_keys_get_prototype_then_gopd_per_visit_and_no_has() {
+        LOG.with(|l| l.borrow_mut().clear());
+        let target = crate::object::js_object_alloc(0, 0);
+        let tv = f64::from_bits(JSValue::object_ptr(target as *mut u8).bits());
+        crate::object::js_object_set_prototype_of(tv, f64::from_bits(crate::value::TAG_NULL));
+        for name in ["a", "b", "c"] {
+            crate::object::js_object_set_field_by_name(target, s(name), 1.0);
+        }
+        let handler = crate::object::js_object_alloc(0, 0);
+        set_fn(handler, "ownKeys", crate::fn_info!(own_keys_trap, 1));
+        set_fn(handler, "getOwnPropertyDescriptor", crate::fn_info!(gopd_trap, 2));
+        set_fn(handler, "getPrototypeOf", crate::fn_info!(get_proto_trap, 1));
+        set_fn(handler, "has", crate::fn_info!(has_trap, 2));
+        let hv = f64::from_bits(JSValue::object_ptr(handler as *mut u8).bits());
+        let proxy = crate::proxy_hooks::proxy_new(tv, hv);
+
+        let mut fact: i64 = -1;
+        let keys = js_for_in_begin(proxy, &mut fact, std::ptr::null_mut());
+        assert_eq!(fact, 0, "a Proxy subject has no loop fact");
+        assert_eq!(
+            LOG.with(|l| l.borrow().clone()),
+            vec!["ownKeys", "getProto"],
+            "the keys: one ownKeys trap, then getPrototypeOf; no descriptor read yet"
+        );
+        let n = crate::array::js_array_length(keys);
+        assert_eq!(n, 3);
+        // `c` is deleted before its visit: its descriptor is absent, so the
+        // visit asks the prototype (null) and skips it.
+        crate::object::js_object_delete_field_value(tv, s("c"));
+        LOG.with(|l| l.borrow_mut().clear());
+        let kv = f64::from_bits(JSValue::array_ptr(keys).bits());
+        let mut live = Vec::new();
+        for i in 0..n {
+            let r = js_for_in_key_live(proxy, kv, i as f64, fact);
+            live.push(r.to_bits() == JSValue::bool(true).bits());
+        }
+        assert_eq!(live, vec![true, true, false]);
+        assert_eq!(
+            LOG.with(|l| l.borrow().clone()),
+            vec!["gopd:a", "gopd:b", "gopd:c", "getProto"],
+            "each visit reads the key's descriptor; no has trap"
+        );
+    }
 }

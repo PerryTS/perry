@@ -38,7 +38,7 @@ impl World {
 
 unsafe fn holder(d: *const ChainDesc, key: u64, hash: u64) -> Option<*mut ChainNode> {
     match ChainDesc::lookup(d, key, hash) {
-        Found::Hit(e) => Some(e.holder),
+        Found::Hit(e) => Some((*e).holder),
         _ => None,
     }
 }

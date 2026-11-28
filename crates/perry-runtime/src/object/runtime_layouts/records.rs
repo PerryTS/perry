@@ -300,15 +300,15 @@ mod records_1 {
     runtime_layout!(RECORD_F413_0, 2389792640, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_54, RECORD_ATOM_55, RECORD_ATOM_56], realm = ["node:os"]);
     runtime_layout!(RECORD_F414_0, 2296314286, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_57, RECORD_ATOM_58, RECORD_ATOM_59, RECORD_ATOM_60, RECORD_ATOM_61], realm = ["node:os"]);
     runtime_layout!(RECORD_F418_0, 814018159, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_62, RECORD_ATOM_63, RECORD_ATOM_64, RECORD_ATOM_65, RECORD_ATOM_12], realm = ["node:path", "node:path/posix", "node:path/win32"]);
-    runtime_layout!(RECORD_F426_0, 1617101137, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_52, RECORD_ATOM_66, RECORD_ATOM_67], realm = ["node:perf_hooks", "node:worker_threads.Worker"]);
-    runtime_layout!(RECORD_F427_0, 3587014428, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_68, RECORD_ATOM_69, RECORD_ATOM_70], realm = ["node:perf_hooks"]);
-    runtime_layout!(RECORD_F429_0, 547262760, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_12, RECORD_ATOM_71, RECORD_ATOM_72, RECORD_ATOM_73, RECORD_ATOM_74, RECORD_ATOM_75, RECORD_ATOM_76, RECORD_ATOM_77, RECORD_ATOM_78, RECORD_ATOM_79, RECORD_ATOM_80], realm = ["node:perf_hooks"]);
+    runtime_layout!(RECORD_F426_0, 1617101137, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_52, RECORD_ATOM_66, RECORD_ATOM_67], realm = ["Performance.prototype", "node:perf_hooks", "node:worker_threads.Worker"]);
+    runtime_layout!(RECORD_F427_0, 3587014428, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_68, RECORD_ATOM_69, RECORD_ATOM_70], realm = ["Performance.prototype", "node:perf_hooks"]);
+    runtime_layout!(RECORD_F429_0, 547262760, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_12, RECORD_ATOM_71, RECORD_ATOM_72, RECORD_ATOM_73, RECORD_ATOM_74, RECORD_ATOM_75, RECORD_ATOM_76, RECORD_ATOM_77, RECORD_ATOM_78, RECORD_ATOM_79, RECORD_ATOM_80], realm = ["Performance.prototype", "node:perf_hooks"]);
 }
 pub use records_1::*;
 mod records_2 {
     use super::*;
     use super::record_atoms::*;
-    runtime_layout!(RECORD_F430_0, 1240421606, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_81, RECORD_ATOM_82, RECORD_ATOM_83], realm = ["node:perf_hooks"]);
+    runtime_layout!(RECORD_F430_0, 1240421606, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_81, RECORD_ATOM_82, RECORD_ATOM_83], realm = ["Performance.prototype", "node:perf_hooks"]);
     runtime_layout!(RECORD_F434_0, 2947091701, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_84, RECORD_ATOM_85, RECORD_ATOM_86, RECORD_ATOM_87], realm = ["node:perry/ui"]);
     runtime_layout!(RECORD_F470_0, 839821955, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_88, ATOM_25], realm = ["Promise.allSettled"]);
     runtime_layout!(RECORD_F471_0, 1664731420, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_88, RECORD_ATOM_89], realm = ["Promise.allSettled"]);

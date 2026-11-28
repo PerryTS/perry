@@ -313,31 +313,39 @@ fn install_function_restricted_accessors(proto_obj: *mut ObjectHeader) {
     let pairs = [
         (
             &b"arguments"[..],
-            crate::fn_info!(#[realm("Function.prototype.arguments.<get>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get arguments"), with_declared(0)),
-            crate::fn_info!(#[realm("Function.prototype.arguments.<set>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set arguments"), with_declared(1)),
+            crate::fn_info!(#[realm("Function.prototype.arguments.<get>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get arguments"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
+            crate::fn_info!(#[realm("Function.prototype.arguments.<set>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set arguments"), with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         ),
         (
             &b"caller"[..],
-            crate::fn_info!(#[realm("Function.prototype.caller.<get>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get caller"), with_declared(0)),
-            crate::fn_info!(#[realm("Function.prototype.caller.<set>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set caller"), with_declared(1)),
+            crate::fn_info!(#[realm("Function.prototype.caller.<get>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_getter_thunk, 0; with_name("get caller"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
+            crate::fn_info!(#[realm("Function.prototype.caller.<set>", effects = { returns(never) })] export crate::object::global_this::proto_methods::function_restricted_setter_thunk, 1; with_name("set caller"), with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         ),
     ];
+    let half = |info, label: &str, length: u32| {
+        let closure = crate::closure::js_closure_alloc(info, 0);
+        if closure.is_null() {
+            return None;
+        }
+        super::super::native_module::set_bound_native_closure_name(closure, label);
+        super::super::native_module::set_builtin_closure_length(closure as usize, length);
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+        Some(crate::value::js_nanbox_pointer(closure as i64).to_bits())
+    };
+    // Every half is born before any slot is written: a failed allocation
+    // leaves both slots as the static layout made them, never one pair.
+    let mut accessors = Vec::with_capacity(pairs.len());
     for (key, get_info, set_info) in pairs {
         let name = std::str::from_utf8(key).unwrap_or_default();
-        let half = |info, prefix: &str, length: u32| {
-            let closure = crate::closure::js_closure_alloc(info, 0);
-            if closure.is_null() {
-                return None;
-            }
-            let label = format!("{prefix} {name}");
-            super::super::native_module::set_bound_native_closure_name(closure, &label);
-            super::super::native_module::set_builtin_closure_length(closure as usize, length);
-            super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
-            Some(crate::value::js_nanbox_pointer(closure as i64).to_bits())
-        };
-        let (Some(get), Some(set)) = (half(get_info, "get", 0), half(set_info, "set", 1)) else {
+        let (Some(get), Some(set)) = (
+            half(get_info, &format!("get {name}"), 0),
+            half(set_info, &format!("set {name}"), 1),
+        ) else {
             return;
         };
+        accessors.push((key, get, set));
+    }
+    for (key, get, set) in accessors {
         // SAFETY: the fresh intrinsic, under the bootstrap's no-move scope.
         unsafe {
             crate::object::accessor_pair::store_own_accessor_bytes(
@@ -741,15 +749,15 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // resizable resize transfer transferToFixedLength detached
             // @@toStringTag. `valueOf` / `toLocaleString` are Object.prototype's
             // (the chain), not own copies.
-            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0)));
-            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_name("get resizable"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
+            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_name("get resizable"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
@@ -776,7 +784,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     super::super::native_module::set_builtin_closure_length(closure, realm_arraybuffer_transfer_public!(length));
                 }
             }
-            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_name("get detached"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_name("get detached"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
         }
         "SharedArrayBuffer" => {
@@ -784,15 +792,15 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // growable grow @@toStringTag. The brand-checking `slice` / `grow`
             // and getters serve `.call(notSab)`; instances dispatch through
             // buffer_dispatch.
-            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(SharedArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0)));
-            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_name("get growable"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
+            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_name("get growable"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)));
             install_proto_method(
                 proto_obj,
                 "grow",
@@ -1752,7 +1760,7 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             install_webcrypto_proto_getter(
                 proto_obj,
                 "subtle",
-                crate::fn_info!(#[realm("Crypto.prototype.subtle.<get>", effects = { returns(namespace("node:crypto.subtle")) }, constructible = true)] export crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk, 0; with_name("get subtle"), with_declared(0)),
+                crate::fn_info!(#[realm("Crypto.prototype.subtle.<get>", effects = { returns(namespace("node:crypto.subtle")) })] export crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk, 0; with_name("get subtle"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             );
             install_webcrypto_proto_method(
                 proto_obj,
@@ -1771,19 +1779,19 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             for (name, func_ptr) in [
                 (
                     "algorithm",
-                    crate::fn_info!(#[realm("CryptoKey.prototype.algorithm.<get>", constructible = true, effects = { returns(fresh(Object.prototype, fields = {name: prim(str), hash: fresh(Object.prototype, fields = {name: prim(str)}) | prim(undefined), length: prim(num) | prim(undefined), namedCurve: prim(str) | prim(undefined)})) })] export crate::object::global_this::ctor_thunks::cryptokey_algorithm_getter_thunk, 0; with_name("get algorithm"), with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.algorithm.<get>", effects = { returns(fresh(Object.prototype, fields = {name: prim(str), hash: fresh(Object.prototype, fields = {name: prim(str)}) | prim(undefined), length: prim(num) | prim(undefined), namedCurve: prim(str) | prim(undefined)})) })] export crate::object::global_this::ctor_thunks::cryptokey_algorithm_getter_thunk, 0; with_name("get algorithm"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
                 (
                     "extractable",
-                    crate::fn_info!(#[realm("CryptoKey.prototype.extractable.<get>", constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::ctor_thunks::cryptokey_extractable_getter_thunk, 0; with_name("get extractable"), with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.extractable.<get>", effects = { returns(prim(bool)) })] export crate::object::global_this::ctor_thunks::cryptokey_extractable_getter_thunk, 0; with_name("get extractable"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
                 (
                     "type",
-                    crate::fn_info!(#[realm("CryptoKey.prototype.type.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::object::global_this::ctor_thunks::cryptokey_type_getter_thunk, 0; with_name("get type"), with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.type.<get>", effects = { returns(prim(str)) })] export crate::object::global_this::ctor_thunks::cryptokey_type_getter_thunk, 0; with_name("get type"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
                 (
                     "usages",
-                    crate::fn_info!(#[realm("CryptoKey.prototype.usages.<get>", constructible = true, effects = { returns(fresh(Array.prototype, elems = [prim(str)])) })] export crate::object::global_this::ctor_thunks::cryptokey_usages_getter_thunk, 0; with_name("get usages"), with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.usages.<get>", effects = { returns(fresh(Array.prototype, elems = [prim(str)])) })] export crate::object::global_this::ctor_thunks::cryptokey_usages_getter_thunk, 0; with_name("get usages"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
             ] {
                 install_webcrypto_proto_getter(proto_obj, name, func_ptr);

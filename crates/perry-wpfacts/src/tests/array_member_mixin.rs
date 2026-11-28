@@ -33,10 +33,13 @@ fn mixin_parent_keeps_entry_key_exact() {
     assert!(!matches!(v, Verdict::No(_)), "{v:?}");
 }
 
-/// An `extends` value that may be `Array`: the definition may give an
-/// Array its own `@@iterator` path, so the record may take the protocol arm.
+/// An `extends` value that may be `Array`: the definition lands on
+/// `P.prototype`, which only `P` instances inherit. The `Object.entries`
+/// pair is born an Array of %Array.prototype% (CreateArrayFromList), so its
+/// `@@iterator` is the intrinsic one and the record reads exact positions
+/// (DESTR-POS): `k` is the key, `s` never reaches `take`.
 #[test]
-fn array_parent_still_releases_the_pair() {
+fn array_parent_keeps_the_pair_exact() {
     let v = verdict("return Array;");
-    assert!(matches!(v, Verdict::No(_)), "{v:?}");
+    assert!(!matches!(v, Verdict::No(_)), "{v:?}");
 }

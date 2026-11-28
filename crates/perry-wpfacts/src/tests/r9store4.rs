@@ -9,8 +9,8 @@ use perry_hir::Module;
 
 fn facts(src: &str) -> crate::ProgramFacts {
     let path = "a.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "a", &path).expect("lowers");
+    let module = perry_parser::parse_typescript(src, &fixture_source_path(&path)).expect("parses");
+    let hir = perry_hir::lower_module(&module, "a", &fixture_source_path(&path)).expect("lowers");
     let h = vec![(path, hir)];
     let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
     let cfg = FactsConfig {

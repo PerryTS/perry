@@ -249,7 +249,8 @@ impl crate::server::http2_server::Http2SessionHandle {
         let listeners = self.listeners.entry("close".into()).or_default();
         let snapshot = listeners.clone();
         for callback in once {
-            if let Some(at) = listeners.iter().position(|&l| l == callback) {
+            // `close(cb)` registers after the session's earlier listeners.
+            if let Some(at) = listeners.iter().rposition(|&l| l == callback) {
                 listeners.remove(at);
             }
         }
@@ -259,7 +260,7 @@ impl crate::server::http2_server::Http2SessionHandle {
     /// Node's `destroy()`: `destroyed` without `closed`, which only
     /// `close()` sets.
     pub(crate) fn mark_destroyed(&mut self) {
-        if self.session_type == 1 && !self.closed && !self.destroyed {
+        if self.session_type == 1 && !self.destroyed {
             self.activity_count.fetch_sub(1, Ordering::Relaxed);
         }
         self.destroyed = true;

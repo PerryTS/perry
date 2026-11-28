@@ -1054,6 +1054,14 @@ impl Payload {
             _ => {}
         }
     }
+    /// Records the whole input's size in the zstd frame header, as Node's
+    /// one-shot `zstdCompress` does, so its bytes equal `zstdCompressSync`'s.
+    pub(super) fn pledge_zstd_source_size(&mut self, size: u64) -> io::Result<()> {
+        if let Some(Encoder::Zstd(ctx)) = &mut self.encoder {
+            ctx.set_pledged_src_size(Some(size)).map_err(zstd_error)?;
+        }
+        Ok(())
+    }
     /// Accepts large-window Brotli streams (window up to 1 GiB), as Node does
     /// under `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]`. Survives `reset`.
     pub(super) fn allow_brotli_large_window(&mut self) {

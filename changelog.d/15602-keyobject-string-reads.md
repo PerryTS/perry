@@ -1,0 +1,1 @@
+- **Asymmetric `KeyObject` properties.** A key from `crypto.createPrivateKey` / `createPublicKey` reports `type`, `asymmetricKeyType` and `asymmetricKeyDetails` again instead of `undefined`.

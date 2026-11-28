@@ -888,6 +888,13 @@ fn lower_bounded_array_index_get_checked(
     // sort/precise-*). A null `ArrayHeader.named` proves there is none.
     let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &arr_handle);
     let needs_slow = blk.or(I1, &needs_slow, &has_named);
+    // The loop bounds the key by the length only: a holey Array's length may
+    // pass its store (`new Array(k)` past the dense bound, #15608).
+    let header_ptr = blk.inttoptr(I64, &arr_handle);
+    let capacity_ptr = blk.gep(I8, &header_ptr, &[(I64, "4")]);
+    let capacity = blk.load(I32, &capacity_ptr);
+    let past_store = blk.icmp_uge(I32, idx_i32, &capacity);
+    let needs_slow = blk.or(I1, &needs_slow, &past_store);
     ctx.block().cond_br(&needs_slow, &lazy_label, &fast_label);
 
     ctx.current_block = lazy_idx;

@@ -379,6 +379,7 @@ pub fn map_cons(
             kept,
         },
         EnumLoad { key, dst } => EnumLoad { key, dst: n(dst) },
+        MapEntryAt { value, dst } => MapEntryAt { value, dst: n(dst) },
         EnumChain { key, dst, of, from } => EnumChain {
             key,
             dst: n(dst),
@@ -482,6 +483,17 @@ pub fn map_cons(
             reason,
             accessor,
         },
+        DeleteKeyed {
+            o,
+            reason,
+            enum_subject,
+        } => DeleteKeyed {
+            o: n(o),
+            reason,
+            enum_subject,
+        },
+        DeleteEnum { reason } => DeleteEnum { reason },
+        DeleteEnumWhen { t, key, reason } => DeleteEnumWhen { t, key, reason },
         StoreKeyed {
             o,
             src,
@@ -783,6 +795,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxLoad { .. }
             | EnumChain { .. }
             | EnumLoad { .. }
+            | MapEntryAt { .. }
             | ForInAcc { .. }
             | OwnDescAcc { .. }
             | ForInMeet { .. }
@@ -795,6 +808,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IdxKeyCall { .. }
             | ForInBody { .. }
             | DefineKeyed { .. }
+            | DeleteKeyed { .. }
             | StoreKeyed { .. }
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
@@ -846,6 +860,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }
         | EnumLoad { dst, .. }
+        | MapEntryAt { dst, .. }
         | IdxKey { dst, .. }
         | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }

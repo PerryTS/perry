@@ -317,8 +317,8 @@ pub(crate) use class_object_props::{
     define_class_object_own_properties,
 };
 pub(crate) use crypto_key::{
-    crypto_key_property_value, CLASS_ID_BOXED_BIGINT, CLASS_ID_BOXED_BOOLEAN,
-    CLASS_ID_BOXED_NUMBER, CLASS_ID_BOXED_STRING, CLASS_ID_BOXED_SYMBOL,
+    asymmetric_key_string_property, crypto_key_property_value, CLASS_ID_BOXED_BIGINT,
+    CLASS_ID_BOXED_BOOLEAN, CLASS_ID_BOXED_NUMBER, CLASS_ID_BOXED_STRING, CLASS_ID_BOXED_SYMBOL,
 };
 pub(crate) use enumeration::{
     canonical_array_index, canonical_array_index_bytes, ecma_own_key_order,

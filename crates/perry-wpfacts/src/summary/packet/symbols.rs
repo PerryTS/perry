@@ -39,6 +39,7 @@ impl Model {
             ),
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
+            Cons::MapEntryAt { value, dst } => format!("MapEntryAt value={value} dst={dst:?}"),
             Cons::OwnKeys { dst } => format!("OwnKeys dst={:?}", dst),
             Cons::OwnNames { dst } => format!("OwnNames dst={:?}", dst),
             Cons::OwnDescValues { dst, key } => format!("OwnDescValues dst={dst:?} key={key:?}"),
@@ -508,6 +509,22 @@ impl Model {
                 o,
                 self.reasons.get(reason as usize),
                 accessor
+            ),
+            Cons::DeleteKeyed {
+                o,
+                reason,
+                enum_subject,
+            } => format!(
+                "DeleteKeyed o={:?} reason={:?} enum_subject={enum_subject}",
+                o,
+                self.reasons.get(reason as usize)
+            ),
+            Cons::DeleteEnum { reason } => {
+                format!("DeleteEnum reason={:?}", self.reasons.get(reason as usize))
+            }
+            Cons::DeleteEnumWhen { t, key, reason } => format!(
+                "DeleteEnumWhen t={t} key={key:?} reason={:?}",
+                self.reasons.get(reason as usize)
             ),
             Cons::EnumKeyStore { o, src, site, from } => format!(
                 "EnumKeyStore o={:?} src={:?} site={site} from={from:?}",

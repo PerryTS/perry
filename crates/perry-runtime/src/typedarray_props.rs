@@ -937,33 +937,47 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
         }
         let jsval = crate::value::JSValue::from_bits(key.to_bits());
         if jsval.is_string() || jsval.is_short_string() {
-            let key_ptr = crate::value::js_get_string_pointer_unified(key)
-                as *const crate::string::StringHeader;
-            if let Some(name) = string_header_str(key_ptr) {
-                typed_array_set_property_by_name(owner, name, value);
-            }
-            return value;
+            return store_keeping_value(value, |value| {
+                let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                    as *const crate::string::StringHeader;
+                if let Some(name) = string_header_str(key_ptr) {
+                    typed_array_set_property_by_name(owner, name, value());
+                }
+            });
         }
         if !jsval.is_number() {
             // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
             // first, then the string dispatch above. `ta[undefined] = v` creates
-            // the ordinary property "undefined"; it used to be dropped. The key
-            // conversion can run user code and collect, so `value` is rooted
-            // across it (the typed array itself never moves).
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let value_handle = scope.root_nanbox_f64(value);
-            let key_ptr =
-                crate::builtins::js_string_coerce(key) as *const crate::string::StringHeader;
-            let value = value_handle.get_nanbox_f64();
-            if let Some(name) = string_header_str(key_ptr) {
-                typed_array_set_property_by_name(owner, name, value);
-            }
-            return value;
-        } else if key.is_finite() {
-            typed_array_set_numeric_index(owner, key, value);
+            // the ordinary property "undefined"; it used to be dropped.
+            return store_keeping_value(value, |value| {
+                let key_ptr =
+                    crate::builtins::js_string_coerce(key) as *const crate::string::StringHeader;
+                if let Some(name) = string_header_str(key_ptr) {
+                    typed_array_set_property_by_name(owner, name, value());
+                }
+            });
         }
-        value
+        // Every Number key is a CanonicalNumericIndex: NaN and the infinities
+        // are invalid indices, whose store still runs ToNumber on the value.
+        store_keeping_value(value, |value| {
+            typed_array_set_number_key(owner, key, value());
+        })
     }
+}
+
+/// Run `store`, which reads the value through its argument, and return the
+/// value: the store's key and value conversions run user code that can
+/// collect, so a heap value is rooted across them and re-read after (the
+/// typed array itself never moves). A Number needs no root.
+fn store_keeping_value(value: f64, store: impl FnOnce(&dyn Fn() -> f64)) -> f64 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_number() {
+        store(&|| value);
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_f64(value);
+    store(&|| handle.get_nanbox_f64());
+    handle.get_nanbox_f64()
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -1385,3 +1399,7 @@ pub(crate) unsafe fn typed_array_delete_own_property(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "typedarray_props_tests.rs"]
+mod tests;

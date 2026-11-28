@@ -98,10 +98,12 @@ fn chw2_keep_replacement_body_runs() {
     );
 }
 
-/// KEEP: unknown code that holds `Date` may replace `now` with anything:
-/// a read of the call's result stays unproven.
+/// Unknown code that holds `Date` (the runtime and the host, closed world,
+/// owner 2026-11-14) never replaces `now` (owner premise 2026-11-19): the
+/// callees are the program's arrow and the realm's `Date.now`, both give a
+/// Number, and `v.k` on it is proven.
 #[test]
-fn chw2_keep_unknown_writer_result_unproven() {
+fn chw2_unknown_holder_keeps_now() {
     let src = "declare function sink(x: any): void;\n(Date as any).now = (): number => 0;\nsink(Date);\nconst v: any = Date.now();\nexport const r = v.k;\n";
     let hir = lower(src);
     let pf = facts_of(&hir);
@@ -115,8 +117,8 @@ fn chw2_keep_unknown_writer_result_unproven() {
         .collect();
     assert!(!sites.is_empty(), "no site v.k\n{}", pf.dump_text());
     assert!(
-        sites.iter().all(|s| matches!(s.verdict, Verdict::No(_))),
-        "v.k proven: {:?}",
+        sites.iter().all(|s| !matches!(s.verdict, Verdict::No(_))),
+        "v.k unproven: {:?}",
         sites.iter().map(|s| &s.verdict).collect::<Vec<_>>()
     );
 }

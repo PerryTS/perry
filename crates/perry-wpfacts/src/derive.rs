@@ -2840,6 +2840,15 @@ fn judge(
                     own_or_absent += 1;
                 }
             }
+            // SITEB1: the global object's own data property the realm
+            // declares, unwritten (`builtins::global_declared_unwritten`):
+            // its [[Get]] reads the realm's value (10.1.8.1); for a call that
+            // value is the callee, whose set is checked below. A read only
+            // decides the arm: the site stays generic (PerKind, no claim).
+            TokKind::Builtin(_) if crate::builtins::global_declared_unwritten(m, t, s.key) => {
+                receivers.push(m.tok_name(t));
+                native_arms += 1;
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;
@@ -3659,7 +3668,7 @@ fn proto_data_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
             if !seen.insert(p) {
                 continue;
             }
-            if p == op {
+            if p == op || m.collapsed_end(h, p) {
                 ends = true;
                 continue;
             }
@@ -3854,7 +3863,7 @@ fn known_object_store(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), Strin
             if p == TOP {
                 return Err("a prototype from unmodeled code".into());
             }
-            if m.toks[p as usize] == TokKind::ObjectProto {
+            if m.collapsed_end(h, p) {
                 ends = true;
             } else {
                 todo.push(p);
@@ -4059,7 +4068,7 @@ fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
             if !seen.insert(p) {
                 continue;
             }
-            if p == op {
+            if p == op || m.collapsed_end(h, p) {
                 ends = true;
                 continue;
             }
@@ -5079,12 +5088,18 @@ fn window_own(m: &Model, w: &SettledWin) -> bool {
 }
 
 /// The globals a settled window read (`gen::settled`) are the realm's own
-/// data properties: no ⊤ global, no program write of a global, and no
-/// program value under any of the names.
+/// data properties: no ⊤ global, no program write of a global, no named
+/// delete of one of the names (DEL-KEY, `Model::delete_global_key`), and
+/// no program value under any of the names.
 fn window_globals_own(m: &Model, gs: &[Atom]) -> bool {
     gs.is_empty()
         || (!m.global_in_top
             && !m.global_written_own
+            && !m.native_writes.iter().any(|(&(t, k), w)| {
+                w.absent
+                    && k.is_some_and(|k| gs.contains(&k))
+                    && crate::builtins::global_object(m, t)
+            })
             && gs.iter().all(|g| {
                 m.global_fields
                     .iter()

@@ -574,11 +574,7 @@ pub(crate) fn lower_ident_assignment(
             strict: ctx.current_strict,
         });
     }
-    let targets_class_inner = ctx.current_class_inner_name.as_deref() == Some(name.as_str())
-        && !ctx
-            .local_decl_scope_depth(&name)
-            .zip(ctx.current_class_scope_depth)
-            .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
+    let targets_class_inner = ctx.resolve_class_inner_binding(&name).is_some();
     if targets_class_inner {
         Ok(Expr::Sequence(vec![
             *value,
@@ -1258,24 +1254,28 @@ fn array_assignment_iife(
     })
 }
 
-/// `await` and `yield` cannot move into the arrow; such a pattern keeps the
-/// element-read lowering.
-fn suspends(pat: &ast::AssignTargetPat) -> bool {
-    use swc_ecma_visit::{Visit, VisitWith};
-    struct Scan(bool);
-    impl Visit for Scan {
-        fn visit_await_expr(&mut self, _: &ast::AwaitExpr) {
-            self.0 = true;
-        }
-        fn visit_yield_expr(&mut self, _: &ast::YieldExpr) {
-            self.0 = true;
-        }
-        fn visit_function(&mut self, _: &ast::Function) {}
-        fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
-    }
-    let mut scan = Scan(false);
-    pat.visit_with(&mut scan);
+/// `node` holds an `await` or `yield` of the function being lowered (not of
+/// a nested function). Only statements order a suspension against the code
+/// around it: an assignment pattern keeps the element-read lowering, and a
+/// spread object literal keeps the builder, whose statements the suspension
+/// passes replay in the enclosing function (`perry_transform::suspending_iife`).
+pub(super) fn suspends<N: swc_ecma_visit::VisitWith<SuspendScan>>(node: &N) -> bool {
+    let mut scan = SuspendScan(false);
+    node.visit_with(&mut scan);
     scan.0
+}
+
+pub(super) struct SuspendScan(bool);
+
+impl swc_ecma_visit::Visit for SuspendScan {
+    fn visit_await_expr(&mut self, _: &ast::AwaitExpr) {
+        self.0 = true;
+    }
+    fn visit_yield_expr(&mut self, _: &ast::YieldExpr) {
+        self.0 = true;
+    }
+    fn visit_function(&mut self, _: &ast::Function) {}
+    fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
 }
 
 /// #5437: prepend a once-evaluated object prelude (`LocalSet(tmp, object)`)

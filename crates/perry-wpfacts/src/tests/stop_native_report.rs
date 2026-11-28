@@ -17,10 +17,13 @@ fn first_block(src: &str) -> String {
     v.swap_remove(0)
 }
 
-/// B.2.2.2 `__defineGetter__` given a Proxy getter: the Proxy has no model
-/// for the accessor rule (PXESC), so the native hands it to unknown code.
-const NATIVE_HANDS: &str =
-    "const h = {};\n(h as any).__defineGetter__(\"g\", new Proxy(function () {}, {}));\n";
+/// B.2.2.2 `__defineGetter__` called (through `Function.prototype.call`, a
+/// native frame) on a builtin prototype: an accessor under a key the realm
+/// declares there has no model (E5), so the native hands the prototype to
+/// unknown code. The receiver is a parameter: the escape of the getter, a
+/// marker beside ⊤, does not come first. (The former fixture, a Proxy
+/// getter on a plain object, is modeled since PXNT/PXANNEXB: no ⊤.)
+const NATIVE_HANDS: &str = "function k(h: any): void { Object.prototype.__defineGetter__.call(h, \"map\", function () { return 1; }); }\nk(Array.prototype);\n";
 
 #[test]
 fn stop_report_names_the_native_and_the_handed_value() {
@@ -32,19 +35,20 @@ fn stop_report_names_the_native_and_the_handed_value() {
         "no native line:\n{b}"
     );
     assert!(
-        b.lines().any(|l| l.starts_with("  hands:   proxy:0 (Proxy operand of rule ")),
+        b.lines()
+            .any(|l| l.starts_with("  hands:   native:Array (E5 __defineGetter__")),
         "no hands line:\n{b}"
     );
 }
 
-/// The same native call inside a function: the getter is its parameter, and
-/// the binding of a parameter (`run_unsummarized`'s `param-bind` edge) stands
-/// at the function's declaration, so the edge into the getter's node has a
+/// The same native call with the getter a parameter too: the binding of a
+/// parameter (`run_unsummarized`'s `param-bind` edge) stands at the
+/// function's declaration, so the edge into the receiver's node has a
 /// program position.
 #[test]
 fn stop_report_parameter_binding_has_a_position() {
     let b = first_block(
-        "function k(h: any, y: any): void { h.__defineGetter__(\"g\", y); }\nk({}, new Proxy(function () {}, {}));\n",
+        "function k(h: any, y: any): void { Object.prototype.__defineGetter__.call(h, \"map\", y); }\nk(Array.prototype, function () { return 1; });\n",
     );
     assert!(b.contains("a native hands a value to unknown code"), "{b}");
     assert!(b.contains("  fed by:  "), "no fed-by line:\n{b}");

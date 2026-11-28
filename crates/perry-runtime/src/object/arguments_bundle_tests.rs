@@ -202,3 +202,34 @@ fn the_strict_thrower_is_configured_once_per_singleton() {
         assert!(!attrs.writable() && !attrs.enumerable() && !attrs.configurable());
     }
 }
+
+/// `Function.prototype.arguments` / `.caller`: four distinct accessor halves
+/// with node's names and lengths, none of them the strict `callee` thrower.
+#[test]
+fn function_prototype_restricted_accessors_are_four_named_functions() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _ = js_get_global_this();
+    let fp = crate::value::js_nanbox_pointer(crate::array::function_prototype_addr() as i64);
+    let field = |obj: f64, key: &str| {
+        js_object_get_field_by_name_f64(
+            crate::value::js_nanbox_get_pointer(obj) as *const ObjectHeader,
+            crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32),
+        )
+    };
+    let thrower = thrower_closure_value().to_bits();
+    let mut halves = Vec::new();
+    for key in ["arguments", "caller"] {
+        let desc = js_object_get_own_property_descriptor(fp, string(key));
+        for (half, length) in [("get", 0.0), ("set", 1.0)] {
+            let f = field(desc, half);
+            assert_ne!(f.to_bits(), thrower, "{half} {key} is %ThrowTypeError%");
+            let name = super::property_ops::set::key_to_rust_string(field(f, "name"));
+            assert_eq!(name.as_deref(), Some(format!("{half} {key}").as_str()));
+            assert_eq!(field(f, "length"), length, "{half} {key} length");
+            halves.push(f.to_bits());
+        }
+    }
+    halves.sort_unstable();
+    halves.dedup();
+    assert_eq!(halves.len(), 4, "the four halves are distinct functions");
+}

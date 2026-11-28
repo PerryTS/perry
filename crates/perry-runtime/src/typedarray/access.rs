@@ -412,14 +412,22 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
             }
             return;
         }
-        if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
-            // IntegerIndexedElementSet on a bigint view performs `ToBigInt` —
-            // a Number throws `TypeError`. Pass the NaN-boxed BigInt straight
-            // to `store_at` (NOT through `jsvalue_to_f64`, which maps it to NaN).
-            store_at(ta, index as usize, bigint::to_bigint_for_store(value));
+        // IntegerIndexedElementSet on a bigint view performs `ToBigInt` — a
+        // Number throws `TypeError`. The NaN-boxed BigInt goes straight to
+        // `store_at` (NOT through `jsvalue_to_f64`, which maps it to NaN).
+        let converted = if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+            bigint::to_bigint_for_store(value)
         } else {
-            store_at(ta, index as usize, jsvalue_to_f64(value));
+            jsvalue_to_f64(value)
+        };
+        // An object's conversion can shrink or detach the buffer; the index
+        // is validated after it (TypedArraySetElement steps 1-2).
+        if value_needs_coercion_side_effect(value)
+            && index as u32 >= crate::typedarray::element_length(ta)
+        {
+            return;
         }
+        store_at(ta, index as usize, converted);
     }
 }
 

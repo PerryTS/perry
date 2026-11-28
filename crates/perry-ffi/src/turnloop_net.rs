@@ -71,6 +71,9 @@ pub const NET_FLAG_PLAINTEXT: i32 = 8;
 /// A `Wrote` for a write the kernel took whole when the caller wrote it
 /// (Node's `req.async === false`): its callback runs as a `TickObject`.
 pub const NET_FLAG_SYNC_WRITE: i32 = 16;
+/// A `Closed` delivered during agent teardown: release the id, but run no
+/// JS, because the thread is going away.
+pub const NET_FLAG_TEARDOWN: i32 = 32;
 
 /// This module's view of the runtime's completion record.
 ///

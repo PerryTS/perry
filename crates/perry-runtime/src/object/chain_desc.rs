@@ -132,13 +132,15 @@ pub(crate) struct OwnKey {
     pub(crate) enumerable: bool,
 }
 
-/// The answer of one lookup.
+/// The answer of one lookup. A hit names the entry in the desc itself: the
+/// desc is immutable while published and freed only after its slot names
+/// another, and a read runs no user code between the lookup and its use.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Found {
     /// Nearest holder of the key.
-    Hit(ChainEntry),
+    Hit(*const ChainEntry),
     /// A TEXT entry with the same hash: the exact compare decides (cold).
-    Text(ChainEntry),
+    Text(*const ChainEntry),
     /// Not on the chain below `boundary`; null boundary = proven absent.
     Miss(*mut ChainNode),
 }
@@ -164,30 +166,66 @@ impl ChainDesc {
         }
     }
 
-    /// The read leaf: one exact lookup. Typically one probe.
+    /// The read leaf: one exact lookup. Typically one probe: the first
+    /// bucket is answered inline, a longer probe continues in `lookup_rest`.
     #[inline(always)]
     pub(crate) unsafe fn lookup(d: *const ChainDesc, key_bits: u64, hash: u64) -> Found {
+        match Self::lookup_first(d, key_bits, hash) {
+            Some(f) => f,
+            None => Self::lookup_rest(d, key_bits, hash),
+        }
+    }
+
+    /// The first bucket's answer: the key, or empty. None = the probe goes
+    /// on (`lookup_rest`). Out-of-line callers of the rest keep the leaf
+    /// that inlines this free of saved registers.
+    #[inline(always)]
+    pub(crate) unsafe fn lookup_first(
+        d: *const ChainDesc,
+        key_bits: u64,
+        hash: u64,
+    ) -> Option<Found> {
+        let e = Self::entries(d).add(hash as usize & (*d).mask as usize);
+        // A site key is an atom, a TEXT entry's key is not: equal bits
+        // are a hit (a TEXT entry so named walks, which is exact).
+        if (*e).key_bits == key_bits {
+            return Some(if (*e).act != act::TEXT {
+                Found::Hit(e)
+            } else {
+                Found::Text(e)
+            });
+        }
+        if (*e).key_bits == EMPTY_KEY {
+            return Some(Found::Miss((*d).boundary));
+        }
+        None
+    }
+
+    /// The probe past the first bucket, whose key is neither `key_bits` nor
+    /// empty: its TEXT test, then the next buckets in order, as in `lookup`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) unsafe fn lookup_rest(d: *const ChainDesc, key_bits: u64, hash: u64) -> Found {
         let mask = (*d).mask as usize;
         let es = Self::entries(d);
         let mut b = hash as usize & mask;
         loop {
-            let e = &*es.add(b);
-            // A site key is an atom, a TEXT entry's key is not: equal bits
-            // are a hit (a TEXT entry so named walks, which is exact).
-            if e.key_bits == key_bits {
-                return if e.act != act::TEXT {
-                    Found::Hit(*e)
-                } else {
-                    Found::Text(*e)
-                };
-            }
-            if e.key_bits == EMPTY_KEY {
-                return Found::Miss((*d).boundary);
-            }
-            if e.act == act::TEXT && e.hash32 == hash as u32 {
-                return Found::Text(*e);
+            let e = es.add(b);
+            if (*e).act == act::TEXT && (*e).hash32 == hash as u32 {
+                return Found::Text(e);
             }
             b = (b + 1) & mask;
+            let e = es.add(b);
+            if (*e).key_bits == key_bits {
+                return if (*e).act != act::TEXT {
+                    Found::Hit(e)
+                } else {
+                    Found::Text(e)
+                };
+            }
+            if (*e).key_bits == EMPTY_KEY {
+                return Found::Miss((*d).boundary);
+            }
         }
     }
 

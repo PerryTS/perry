@@ -547,10 +547,13 @@ fn lower_rep(
         step(ctx, &inside, "arep.inside");
     }
     // In the floor `capacity >= floor > idx`: the slot exists. So does one
-    // below a fixed length (`capacity >= length`), and one at a held
-    // loop's bounded counter (`idx < length <= capacity`).
+    // below a fixed length (`capacity >= length`). A held loop's bounded
+    // counter and a kept read's key are below the length only, and a holey
+    // Array's length may pass its store (`new Array(k)` past the dense
+    // bound): only a hole-free receiver skips the capacity test there.
     let front = r.floor > 0 || read.bounded == Some(true);
-    let unbounded = read.in_extent() || read.bounded.is_some() || read.kept.is_some();
+    let held = read.bounded.is_some() && (r.dense || read.kept == Some(true));
+    let unbounded = read.in_extent() || held || read.kept == Some(true);
     if !rest_bound && !(unbounded && front) {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);

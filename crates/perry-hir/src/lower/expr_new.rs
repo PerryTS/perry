@@ -19,6 +19,73 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use super::expr_new_builtins::{is_reified_global_builtin_constructor, module_constructor_name};
 use super::{lower_expr, LoweringContext};
 
+/// `new Error(a, b, c...)` / `new AggregateError(e, m, o, x...)` / spread
+/// arguments: JS evaluates EVERY operand left to right before the constructor
+/// runs. The fast `Expr::*ErrorNew*` nodes carry only the operands the
+/// constructor reads, so when the call has more operands (or a spread) the
+/// leading operands are bound to scoped temps, the surplus operands are
+/// evaluated for their effects, and the constructor then reads the temps.
+/// `ctor` receives the first `n` operand values.
+fn error_ctor_all_operands(
+    ctx: &mut LoweringContext,
+    ast_args: &[ast::ExprOrSpread],
+    n: usize,
+    ctor: impl FnOnce(Vec<Expr>) -> Expr,
+) -> Result<Option<Expr>> {
+    let has_spread = ast_args.iter().any(|a| a.spread.is_some());
+    if !has_spread && ast_args.len() <= n {
+        return Ok(None);
+    }
+    let mut lowered = Vec::new();
+    for a in ast_args {
+        lowered.push(lower_expr(ctx, &a.expr)?);
+    }
+    if has_spread {
+        let tmp = ctx.fresh_local();
+        let value = Expr::ArraySpread(
+            ast_args
+                .iter()
+                .zip(&lowered)
+                .map(|(a, e)| {
+                    if a.spread.is_some() {
+                        crate::ArrayElement::Spread(e.clone())
+                    } else {
+                        crate::ArrayElement::Expr(e.clone())
+                    }
+                })
+                .collect(),
+        );
+        let ops = (0..n)
+            .map(|i| Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(tmp)),
+                index: Box::new(Expr::Number(i as f64)),
+            })
+            .collect();
+        return Ok(Some(Expr::ScopedTemp {
+            id: tmp,
+            value: Box::new(value),
+            body: Box::new(ctor(ops)),
+        }));
+    }
+    let extras = lowered.split_off(n);
+    let temps: Vec<LocalId> = (0..n).map(|_| ctx.fresh_local()).collect();
+    let mut body_seq: Vec<Expr> = extras;
+    body_seq.push(ctor(temps.iter().map(|t| Expr::LocalGet(*t)).collect()));
+    let mut body = Expr::Sequence(body_seq);
+    for (t, v) in temps.into_iter().zip(lowered).rev() {
+        body = Expr::ScopedTemp {
+            id: t,
+            value: Box::new(v),
+            body: Box::new(body),
+        };
+    }
+    Ok(Some(body))
+}
+
+
 mod helpers;
 mod member;
 mod non_ident;
@@ -397,20 +464,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // it also carries the unique registration key for collision-renamed
             // declarations (`h$0`) and named class expressions. All other
             // identifiers continue through the ordinary scope-local rename map.
-            let nearest_local_is_inside_class_binding = ctx
-                .local_decl_scope_depth(ident.sym.as_ref())
-                .zip(ctx.current_class_scope_depth)
-                .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
-            let is_current_class_self = ctx.current_class_inner_name.as_deref()
-                == Some(ident.sym.as_str())
-                && ctx.current_class.is_some()
-                && !nearest_local_is_inside_class_binding;
+            let class_inner_binding = ctx.resolve_class_inner_binding(ident.sym.as_ref());
+            let is_current_class_self = class_inner_binding.is_some();
             // #10359: a re-dispatched `globalThis.<name>` is the global's own
             // name — never a collision-renamed or enclosing user class key.
             let mut class_name = if force_global_intrinsic {
                 source_class_name.to_string()
-            } else if is_current_class_self {
-                ctx.current_class.clone().unwrap()
+            } else if let Some(class) = class_inner_binding {
+                class
             } else {
                 ctx.resolve_class_name(source_class_name)
             };
@@ -1266,6 +1327,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // missing first arg defaults to `undefined`, NOT an empty array.
             // #2836: the third `options` argument carries `{ cause }`.
             if class_name == "AggregateError" && !shadowed_by_user_binding {
+                if let Some(e) = error_ctor_all_operands(
+                    ctx,
+                    new_expr.args.as_deref().unwrap_or(&[]),
+                    3,
+                    |mut ops| {
+                        let options = ops.pop().unwrap();
+                        let message = ops.pop().unwrap();
+                        let errors = ops.pop().unwrap();
+                        Expr::AggregateErrorNew {
+                            errors: Box::new(errors),
+                            message: Box::new(message),
+                            options: Some(Box::new(options)),
+                        }
+                    },
+                )? {
+                    return Ok(e);
+                }
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1305,6 +1383,31 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // would miss it. Pull `cause` directly from the AST first, then
                 // fall through to the standard argument lowering for other shapes.
                 let ast_args = new_expr.args.as_deref().unwrap_or(&[]);
+                {
+                    let kind: u32 = match class_name.as_str() {
+                        "TypeError" => 1,
+                        "RangeError" => 2,
+                        "ReferenceError" => 3,
+                        "SyntaxError" => 4,
+                        _ => 0,
+                    };
+                    let plain = class_name == "BugIndicatingError";
+                    if let Some(e) = error_ctor_all_operands(ctx, ast_args, 2, |mut ops| {
+                        let options = ops.pop().unwrap();
+                        let message = ops.pop().unwrap();
+                        if plain {
+                            Expr::ErrorNew(Some(Box::new(message)))
+                        } else {
+                            Expr::ErrorNewWithOptions {
+                                kind,
+                                message: Box::new(message),
+                                options: Box::new(options),
+                            }
+                        }
+                    })? {
+                        return Ok(e);
+                    }
+                }
                 // #2836: a 2-argument constructor — `new <ErrorKind>(message,
                 // options)` — applies the ES2022 `{ cause }` option across the
                 // base `Error` AND every native subclass. `BugIndicatingError`
