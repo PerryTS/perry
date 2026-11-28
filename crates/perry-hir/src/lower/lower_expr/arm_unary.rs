@@ -145,7 +145,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // return typeof l } }` registers the class under a generated
                 // `l__class_expr_*` key, but `l` is still lexically bound in
                 // the class body.
-                && ctx.current_class_inner_name.as_deref() != Some(n)
+                && ctx.resolve_class_inner_binding(n).is_none()
                 && !is_builtin_function(n)
                 && !is_known_global_identifier_name(n)
                 && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
