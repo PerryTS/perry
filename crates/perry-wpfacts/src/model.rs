@@ -3306,6 +3306,11 @@ pub struct Model {
     /// shape (the global object's token, the key, the destination): a
     /// global named later that the shape can spell is read into each.
     pub global_shaped_reads: Vec<(Tok, Key, NodeId)>,
+    /// GALL: the global object's read under a key of no shape (`Key::any()`):
+    /// the union of all its own values and what `Object.prototype` holds
+    /// under any key (`global_shaped_read`), one node of the global object
+    /// as an object's any-key read is its `all_fields` node.
+    pub global_all: Option<NodeId>,
     /// GLOBK G2: the global object's fields under String keys the solver
     /// cannot name: what the program stores there under a key proven a
     /// String (ECMA-262 7.1.19, 10.1.9), one field per key shape (0: any

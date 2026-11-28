@@ -957,7 +957,38 @@ fn declared_global_getter_load(
 /// of `Object.prototype` under the key, and `undefined`. A key a write by
 /// unmodeled code may have made (any key: `STAR_KEY`) reads ⊤, now or on
 /// that write's replay (`NativeMiss::Global`).
+///
+/// GALL: under a key of no shape (`Key::any()`: an unknown String, an
+/// index, an element read) the read is the same set for every site: the
+/// union of every own value of the global object and of `Object.prototype`
+/// under any key. That union is one node of the global object (its
+/// any-key read, as an ordinary object's is its `all_fields` node), filled
+/// once by the rule below and kept complete by the same replays (a global
+/// named later: `global_shaped_replay`; a write by unmodeled code:
+/// `NativeMiss::Global`); each such read is an edge from it. Per site, the
+/// union took one named read of every declared and program global per
+/// receiver token: work (sites x globals) and a successor of every
+/// global's field and G2 store field per site (next.js: 97k work per
+/// element read of a ⊤ receiver, 76% of the widened solve).
 fn global_shaped_read(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
+    if matches!(key, Key::Any(0)) {
+        let all = match m.global_all {
+            Some(n) => n,
+            None => {
+                let n = m.node_l("global-all");
+                m.global_all = Some(n);
+                global_key_read(m, t, key, n);
+                n
+            }
+        };
+        m.edge(all, dst);
+        return;
+    }
+    global_key_read(m, t, key, dst);
+}
+
+/// `global_shaped_read`'s rule for one destination.
+fn global_key_read(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     let mut names: Vec<String> = Vec::new();
     if let Some(s) = m.declarations.named("%Global%", m) {
         for p in &m.declarations.shape(s).properties {
