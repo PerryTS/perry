@@ -574,11 +574,7 @@ pub(crate) fn lower_ident_assignment(
             strict: ctx.current_strict,
         });
     }
-    let targets_class_inner = ctx.current_class_inner_name.as_deref() == Some(name.as_str())
-        && !ctx
-            .local_decl_scope_depth(&name)
-            .zip(ctx.current_class_scope_depth)
-            .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
+    let targets_class_inner = ctx.resolve_class_inner_binding(&name).is_some();
     if targets_class_inner {
         Ok(Expr::Sequence(vec![
             *value,

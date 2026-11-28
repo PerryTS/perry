@@ -364,6 +364,11 @@ pub fn lower_class_decl(
     ctx.current_class = Some(name.clone());
     let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
+    let enclosing_len = ctx.push_enclosing_class_inner_name(
+        old_inner_name.as_ref(),
+        old_class.as_ref(),
+        old_class_scope_depth,
+    );
     // The inner (const) binding visible in the body is the source ident.
     ctx.current_class_inner_name = Some(class_decl.ident.sym.to_string());
     let old_is_derived = ctx.current_class_is_derived;
@@ -1492,6 +1497,7 @@ pub fn lower_class_decl(
     ctx.current_class = old_class;
     ctx.current_class_scope_depth = old_class_scope_depth;
     ctx.current_class_inner_name = old_inner_name;
+    ctx.enclosing_class_inner_names.truncate(enclosing_len);
     ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
     // Issue #562: restore the prior super-ident slot.

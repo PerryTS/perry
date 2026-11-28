@@ -36,6 +36,11 @@ pub(crate) fn lower_class_from_ast(
     ctx.current_class = Some(name.to_string());
     let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
+    let enclosing_len = ctx.push_enclosing_class_inner_name(
+        old_inner_name.as_ref(),
+        old_class.as_ref(),
+        old_class_scope_depth,
+    );
     // Only a source identifier creates an inner binding. An anonymous
     // class's inferred display name must not shadow its enclosing variable.
     let explicit_inner_name = ctx.pending_class_inner_name.take();
@@ -640,6 +645,7 @@ pub(crate) fn lower_class_from_ast(
     ctx.current_class = old_class;
     ctx.current_class_scope_depth = old_class_scope_depth;
     ctx.current_class_inner_name = old_inner_name;
+    ctx.enclosing_class_inner_names.truncate(enclosing_len);
     ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
     // Issue #562: restore prior super-ident slot.
