@@ -472,6 +472,29 @@ fn lazy_interface_children_link_to_their_parent_in_their_birth() {
     }
 }
 
+/// `Object.getPrototypeOf` of an unborn lazy interface child births it, so it
+/// answers the parent constructor the birth links.
+#[test]
+fn unborn_lazy_child_constructor_reports_its_parent() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    for (child, parent) in [("CustomEvent", "Event"), ("MessageEvent", "Event")] {
+        let child_id = crate::object::BuiltinConstructorIdentity::for_name(child).unwrap();
+        assert_eq!(
+            crate::array::intrinsic_prototype_addr_if_bound(child_id),
+            0,
+            "{child} is unborn"
+        );
+        let ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
+        let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(ctor).to_bits(),
+            parent_ctor.to_bits(),
+            "Object.getPrototypeOf({child}) === {parent}"
+        );
+    }
+}
+
 /// Two-phase realm, stage 1: the "realm complete" predicate is false on a
 /// thread without a realm and true once `js_get_global_this` returned (the
 /// two phases run back to back); the complete entry returns the one global.
