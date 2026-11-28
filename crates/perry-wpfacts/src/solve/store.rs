@@ -684,6 +684,15 @@ impl Model {
         // The key names a number only: the numeric range's field.
         let num_only = elem || digits_other;
         let key = if elem { Key::any() } else { key };
+        // Rule NUM-ACC (store side): a Number-or-BigInt key is a numeric
+        // name (7.1.19 ToPropertyKey, 6.1.6.1.20 / 6.1.6.2.21 ToString), and
+        // OrdinarySetWithOwnDescriptor (10.1.9.2) meets a setter only under
+        // that name or one defined under a computed key: the setter walks
+        // run under the Number key's shape (`number_key_shape`).
+        let walk_key = match num_only {
+            true => Key::Any(self.number_key_shape()),
+            false => key,
+        };
         // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
         // [[Set]] under a numeric key (an element-key store is one: a Number
         // key, an index string, an append) runs TypedArraySetElement, which
@@ -868,7 +877,7 @@ impl Model {
                     self.accessor_walk(
                         self.store_recv.unwrap_or(t),
                         t,
-                        key,
+                        walk_key,
                         ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
                     );
                     let region = self.store_region.unwrap_or(self.thrown);
@@ -1400,7 +1409,7 @@ impl Model {
             self.accessor_walk(
                 self.store_recv.unwrap_or(t),
                 t,
-                key,
+                walk_key,
                 ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
             );
             let region = self.store_region.unwrap_or(self.thrown);
