@@ -1078,6 +1078,22 @@ pub fn schedule_native_turn(callback: i64, provider_type: &'static str) -> i64 {
     .0
 }
 
+/// Remove the queued native turns whose closure runs `body`, in the order they
+/// were scheduled, and return their closures; those turns never run. Nothing
+/// allocates between the removal and the return, so a caller roots the closures
+/// before its next allocation.
+pub(crate) fn take_native_turns(body: *const u8) -> Vec<i64> {
+    store::with_current(|timers| {
+        timers.take_where(|entry| {
+            entry.callback != 0
+                && crate::closure::js_closure_get_func(entry.callback as *const _) == body
+        })
+    })
+    .into_iter()
+    .map(|entry| entry.callback)
+    .collect()
+}
+
 /// The timers-phase sibling of [`schedule_native_immediate`]: an internal
 /// node `Timeout` (an abort-signal or socket timeout), so its delay is
 /// normalized as `setTimeout`'s is.

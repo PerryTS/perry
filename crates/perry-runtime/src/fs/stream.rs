@@ -394,7 +394,7 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
     }
 }
 
-fn is_direct_write_data(value: f64) -> bool {
+pub(super) fn is_direct_write_data(value: f64) -> bool {
     let js = JSValue::from_bits(value.to_bits());
     if js.is_any_string() || crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
         return true;
