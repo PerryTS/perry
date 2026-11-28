@@ -1747,6 +1747,7 @@ mod native_dispatch_builtin;
 mod navigator_decl;
 mod navigator_store;
 mod realmval;
+mod global_all;
 mod amp_loop;
 pub(crate) mod amp_flow;
 mod amp_k3;
