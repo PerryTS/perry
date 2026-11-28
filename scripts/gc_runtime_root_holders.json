@@ -3154,7 +3154,7 @@
       "file": "crates/perry-runtime/src/object/layout_probe/chain_glue.rs",
       "name": "WAIT",
       "verdict": "not_a_gc_pointer",
-      "why": "Head of the intrusive waiting list of native ChainNode allocations (cd::new_node), not GC cells. Every waiting node is also linked on ALL, whose obj words for_each_node_obj rewrites during collection, and prune takes a dead node off WAIT before freeing it."
+      "why": "Head of the intrusive waiting list of native ChainNode allocations (cd::new_node), not GC cells. Every waiting node is also linked on ALL, whose obj and desc key words for_each_node_word rewrites during collection, and prune takes a dead node off WAIT before freeing it."
     },
     {
       "file": "crates/perry-stdlib/src/fetch/mod.rs",
