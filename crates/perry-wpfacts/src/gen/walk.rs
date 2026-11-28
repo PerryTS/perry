@@ -805,6 +805,18 @@ impl<'a> Gen<'a> {
         t.parent_value.is_some() && t.parent.is_none() && !self.m.realm_parent.contains_key(&tm)
     }
 
+    /// `x` is `tm` or a class up `tm`'s parent links.
+    fn on_chain(&self, tm: TmplId, x: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if c == x {
+                return true;
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     /// `tm` is linked to a realm parent (`Model::realm_parent`) whose declared
     /// construct hands the instance to other code before `tm`'s own keys
     /// are defined.
@@ -999,6 +1011,11 @@ impl<'a> Gen<'a> {
             // run its own method at the call (10.1.8 [[Get]] from their
             // prototype, a subclass's first). Every class up to that value
             // link may be below `tm`, as a class linked by name is.
+            // SITEB6: unless that class is `tm` or one of `tm`'s ancestors
+            // by its links: a prototype chain has no cycle (ECMA-262 10.1.2.1
+            // OrdinarySetPrototypeOf step 8; a class's prototype is made
+            // after its heritage is evaluated, 15.7.14 ClassDefinitionEvaluation
+            // steps 6-7), so no value can settle it below `tm`.
             let overridden = tms.iter().any(|&d| {
                 let mut cur = Some(d);
                 let mut between = Vec::new();
@@ -1011,7 +1028,9 @@ impl<'a> Gen<'a> {
                 }
                 let below = match cur {
                     Some(_) => true,
-                    None => between.last().is_some_and(|&top| self.value_parent_pending(top)),
+                    None => between.last().is_some_and(|&top| {
+                        self.value_parent_pending(top) && !self.on_chain(tm, top)
+                    }),
                 };
                 below
                     && between.iter().any(|b: &TmplId| {
