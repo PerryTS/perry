@@ -130,6 +130,15 @@ pub(super) fn lower_super_prop(
                 // super/prop-expr-cls-val{,-from-arrow}). A truly dynamic computed
                 // key (not a literal) still falls back below.
                 Ok(Expr::SuperPropertyGet { property: key })
+            } else if let Some(home) = class_super_home(ctx) {
+                // A dynamic key is still a SuperProperty reference: the
+                // lookup starts at the home object's prototype, the receiver
+                // is the current `this` (same reference as the call form).
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(home),
+                    key: Box::new(lower_expr(ctx, &computed.expr)?),
+                    receiver: Box::new(Expr::This),
+                })
             } else {
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
@@ -142,6 +151,23 @@ pub(super) fn lower_super_prop(
             }
         }
     }
+}
+
+/// The [[HomeObject]] of the class member being lowered: the class itself in
+/// a static member, its `prototype` otherwise. `super[key]` looks `key` up on
+/// that home's prototype. `None` outside a class body.
+pub(super) fn class_super_home(ctx: &LoweringContext) -> Option<Expr> {
+    let class_name = ctx.current_class.clone()?;
+    Some(if ctx.current_class_member_is_static {
+        Expr::ClassRef(class_name)
+    } else {
+        Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(Expr::ClassRef(class_name)),
+            property: "prototype".to_string(),
+            byte_offset: 0,
+        }
+    })
 }
 
 pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) -> Result<Expr> {
