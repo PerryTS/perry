@@ -204,10 +204,28 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
-            let mut spread = c.spread.clone();
-            if let Some(&a) = c.arg(1) {
-                spread.push(a);
-            }
+            // CreateListFromArrayLike(argArray) (20.2.3.1 step 4): the
+            // target's arguments are argArray's elements, at positions no
+            // one knows, as the caller's own spreads' are. Every reader of a
+            // call's spreads reads each spread node as a set of arrays whose
+            // elements land anywhere, so one node holding all of them is the
+            // same list: the made call has one spread, whatever the caller
+            // had. Pushing argArray onto the caller's spreads made the
+            // `apply` a made `apply` makes one spread longer than its maker,
+            // a new arity under the same root and key (`solver_call_keyed`),
+            // without end (`Function.prototype.apply.bind(forEach)`).
+            let spread = match (&c.spread[..], c.arg(1)) {
+                ([], None) => vec![],
+                ([], Some(&a)) => vec![a],
+                ([s], None) => vec![*s],
+                (ss, a) => {
+                    let u = m.node_l("apply-spread");
+                    for &s in ss.iter().chain(a) {
+                        m.edge(s, u);
+                    }
+                    vec![u]
+                }
+            };
             if let Some(call2) = m.solver_call_keyed(
                 call,
                 (crate::summary::MK_FN_APPLY, t, 0),
