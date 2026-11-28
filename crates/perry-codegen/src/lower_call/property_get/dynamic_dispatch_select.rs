@@ -34,7 +34,7 @@ pub(super) fn select(
     property: &str,
     implementors: &[(u32, String)],
     cased: &[bool],
-) -> (String, Vec<usize>) {
+) -> (String, Vec<usize>, Vec<usize>) {
     let (word, admitted) =
         crate::lower_call::method_override::emit_direct_method_selection_probe(ctx, recv);
     select_with_word(ctx, recv, property, implementors, cased, &word, &admitted)
@@ -62,7 +62,10 @@ struct Arm {
 /// proof (the classes between their own prototype and H) are case values of
 /// one arm, with one proof and one answer. A class that declares the body
 /// keeps its own arm (its call may be its layout clone). Returns the
-/// selection and each arm's answer implementor.
+/// selection, each arm's answer implementor, and the exact ones among them:
+/// an arm of a class that declares the body, whose only case value is that
+/// class's id. Its answer is taken only by a receiver whose header carries
+/// exactly that class id (CALL-ONE, `dynamic_dispatch.rs`).
 pub(super) fn select_with_word(
     ctx: &mut FnCtx<'_>,
     recv: &str,
@@ -71,7 +74,7 @@ pub(super) fn select_with_word(
     cased: &[bool],
     word: &str,
     admitted: &str,
-) -> (String, Vec<usize>) {
+) -> (String, Vec<usize>, Vec<usize>) {
     let cid = ctx.block().trunc(I64, word, I32);
     let class_of = |ctx: &FnCtx<'_>, id: u32| {
         ctx.class_ids
@@ -209,5 +212,12 @@ pub(super) fn select_with_word(
     (
         ctx.block().phi(I32, &refs),
         arms.iter().map(|a| a.rep).collect(),
+        arms.iter()
+            .filter(|a| {
+                let id = implementors[a.rep].0;
+                a.own == Some(id) && a.class_ids == [id]
+            })
+            .map(|a| a.rep)
+            .collect(),
     )
 }

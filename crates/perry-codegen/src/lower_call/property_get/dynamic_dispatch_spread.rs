@@ -42,7 +42,9 @@ use crate::nanbox::double_literal;
 use crate::rooting::{self, Arg, Repr};
 use crate::types::{DOUBLE, I1, I32, I64};
 
-use super::tower::{emit_tower_pshape_call, tower_layout_proven, tower_pshape_route};
+use super::tower::{
+    emit_tower_pshape_call, report_call_one, tower_layout_proven, tower_pshape_route,
+};
 
 pub(super) struct Site<'a> {
     pub object: &'a Expr,
@@ -56,6 +58,8 @@ pub(super) struct Site<'a> {
     pub proven: Option<&'a (Vec<(u32, usize)>, bool)>,
     pub split: bool,
     pub call_byte_offset: u32,
+    /// The call's member expression (the CALL-ONE site report's key).
+    pub member: &'a Expr,
 }
 
 fn arg_expr(a: &CallArg) -> &Expr {
@@ -267,11 +271,14 @@ pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     let key_idx = ctx.strings.intern(s.property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+    // `exact`: the arms whose only case value is their own class's id.
+    let mut exact: Vec<usize> = Vec::new();
     let selected = if let Some((_, nullable)) = s.proven {
         crate::expr::wpfacts_access::emit_class_id(ctx, &recv, *nullable)
     } else if s.cased.contains(&true) {
-        let (selected, arms) =
+        let (selected, arms, exact_arms) =
             super::select::select(ctx, &recv, s.property, s.implementors, s.cased);
+        exact = exact_arms;
         // A selection names only an arm's answer implementor; the classes it
         // merged into that arm have no switch case of their own.
         for (i, d) in direct.iter_mut().enumerate() {
@@ -297,6 +304,7 @@ pub(super) fn emit(ctx: &mut FnCtx<'_>, s: Site<'_>) -> Result<String> {
     let tower = Tower {
         s: &s,
         direct: &direct,
+        exact: &exact,
         selected: &selected,
         claimed: &claimed,
         method_id: &method_id,
@@ -557,6 +565,7 @@ fn params_tail(ctx: &mut FnCtx<'_>, p: &Parts<'_>, k: &str, undefined: &str) -> 
 struct Tower<'t, 'a> {
     s: &'t Site<'a>,
     direct: &'t [bool],
+    exact: &'t [usize],
     selected: &'t str,
     claimed: &'t str,
     method_id: &'t str,
@@ -604,6 +613,7 @@ impl Tower<'_, '_> {
         ctx.block().emit_raw(sw);
         ctx.block().mark_terminated();
         let mut phi = Vec::new();
+        let mut call_one = (0usize, 0usize);
         for &(i, b) in &arms {
             ctx.current_block = b;
             let fname = s.implementors[i].1.clone();
@@ -621,8 +631,14 @@ impl Tower<'_, '_> {
                 Some(route) => {
                     let recv_handle = unbox_to_i64(ctx.block(), recv_box);
                     let owner = s.impl_owner[i].as_deref().unwrap_or_default();
-                    let layout_proven =
-                        s.proven.is_some() && tower_layout_proven(ctx, owner, s.implementors[i].0);
+                    // CALL-ONE: an exact arm's receiver is this class, as a
+                    // proven site's is (`dynamic_dispatch.rs`).
+                    let layout_proven = (s.proven.is_some() || self.exact.contains(&i))
+                        && tower_layout_proven(ctx, owner, s.implementors[i].0);
+                    if s.proven.is_none() {
+                        call_one.1 += 1;
+                        call_one.0 += usize::from(layout_proven);
+                    }
                     emit_tower_pshape_call(
                         ctx,
                         i,
@@ -642,6 +658,8 @@ impl Tower<'_, '_> {
             }
             phi.push((v, after));
         }
+        let refused_cases = if s.proven.is_none() { arms.len() } else { 0 };
+        report_call_one(ctx, s.member, s.property, call_one, refused_cases);
         Ok(phi)
     }
 
