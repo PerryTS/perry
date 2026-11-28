@@ -83,7 +83,7 @@ const FUNCTION: &[(&str, Mem)] = &[
     ("toString", Mem::Fn),
     (WK_HAS_INSTANCE, Mem::Fn),
     // %Function.prototype%'s `arguments` and `caller` accessors, whose
-    // getter and setter are %ThrowTypeError% (ECMA-262 10.2.4
+    // getter and setter always throw (ECMA-262 10.2.4
     // AddRestrictedFunctionProperties): a getter the model lists as a
     // method (`loads::family_member` runs its declaration).
     ("arguments", Mem::Fn),

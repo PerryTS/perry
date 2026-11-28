@@ -1527,7 +1527,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
             }
             // An accessor the realm declares on `Function.prototype`
-            // (`caller`, `arguments`: %ThrowTypeError%, ECMA-262 10.2.4): no
+            // (`caller`, `arguments`: always throwing, ECMA-262 10.2.4): no
             // program function owns the key (17.1: a strict function never
             // gets one), so the read runs the declared getter on the
             // function.
