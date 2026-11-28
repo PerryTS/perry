@@ -1225,6 +1225,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.edge(u, dst);
                 m.add_prim(dst, prim::UNDEF | prim::NULL);
             }
+            // The loader's resolver, a function the realm does not declare.
+            Some("resolve") => {
+                let bf = builtin_fn(m, "require.resolve");
+                m.add_tok(dst, bf);
+            }
             _ if hostval_load(m, t, "require", key, name.as_deref(), dst) => {}
             _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
             // REALMVAL: every member the `require` declaration gives has a
