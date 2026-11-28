@@ -622,6 +622,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    let p = super::chain_link(m, origin, p);
     crate::family_reach::chain(m, origin, p, key);
     computed_method(m, key);
     if native_waits(m, NativeRecv::Proto(p, origin), key, call) {
@@ -850,6 +851,31 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
 
 /// Annex B defines a descriptor; only an unmodeled receiver keeps the
 /// reflective escape fallback. Known holders use the descriptor accessor flow.
+/// The native method the prototype `p` holds under `key`, as a load finds
+/// it there (`tok_load`): the method a call that finds it there runs
+/// (`proto_method`), named in its native frame (`Model::native_frame`).
+pub(crate) fn proto_native(m: &mut Model, p: Tok, key: Key) -> Option<Tok> {
+    let Key::Named(a) = key else { return None };
+    let name = m.atoms[a as usize].clone();
+    let native = match m.toks[p as usize] {
+        TokKind::ObjectProto => matches!(members::member(Family::Object, &name), Some(Mem::Fn))
+            .then(|| member_native(m, Family::Object, None, &name))
+            .flatten(),
+        TokKind::NativeProto(_, ns) => match ns.and_then(loads::proto_family) {
+            Some((fam, what, _)) => member_native(m, fam, what, &name),
+            None => m
+                .native_property(p, &name)
+                .and_then(|q| q.native)
+                .map(|identity| Native::Member {
+                    identity,
+                    holder: None,
+                }),
+        },
+        _ => None,
+    }?;
+    Some(m.tok(TokKind::BuiltinFn(native)))
+}
+
 pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bool) {
     let c = m.calls[call as usize].clone();
     if c.args.len() < 2 && c.spread.is_empty() {
@@ -888,7 +914,26 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     let own = !modeled && origin != TOP && !m.is_marker(origin) && !m.is_chain_proto(origin);
     if modeled || own {
         let key = if own { m.atom(crate::STAR_KEY) } else { key };
+        // One holder per (call, own, setter): the rules below read the
+        // holder's tokens as they come (ThisFrom edges from it, Accessor
+        // installs on each), and the call's key and arguments are the
+        // same for every receiver, so a receiver of the same call is one
+        // more token of that holder, not a copy of its rules. Generation in
+        // an inert body (D2) makes its own: its rules wait for the body's
+        // activation, and a receiver outside it must not wait with them.
+        #[cfg(test)]
+        let packet = m.packet_scope.is_some();
+        #[cfg(not(test))]
+        let packet = false;
+        let memo = !packet && !m.gen_inert(m.cur_fn);
+        if let Some(&holder) = m.annexb_holders.get(&(call, own, setter)).filter(|_| memo) {
+            m.add_tok(holder, origin);
+            return;
+        }
         let holder = m.node_l("annexb-holder");
+        if memo {
+            m.annexb_holders.insert((call, own, setter), holder);
+        }
         m.add_tok(holder, origin);
         if own {
             // The getter / setter runs with `this` = the receiver.
@@ -914,10 +959,8 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
             );
         }
         for &spread in &c.spread {
-            let f = m.node_l("annexb-spread-function");
+            let f = m.spread_elems_of(spread);
             let key = m.atom(crate::STAR_KEY);
-            let elem = m.elem_key();
-            m.cons(spread, Cons::Load { key: elem, dst: f });
             m.cons(
                 f,
                 Cons::Accessor {

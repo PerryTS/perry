@@ -728,10 +728,47 @@ impl Model {
 
     #[track_caller]
     fn cons_untagged(&mut self, n: NodeId, c: Cons) {
-        let defer = std::mem::take(&mut self.chain_defer);
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;
+        }
+        // A node's rules are a set: the rule it already has, attached
+        // again (by the next copy of a call, the next receiver a native
+        // method runs on), adds no rule and no replay (its replay is
+        // idempotent). What the attach itself records still holds of the
+        // second one: made inside a clause it joins that clause's reach
+        // mask, outside every clause it is every run's (rule M1, as
+        // `note_edge_reach`); made in a generation region it raises there
+        // too; it is a consumer of a watched cell. A rule of an inert
+        // body's foreign node waits for the activation, which replays what
+        // it recorded.
+        if !self.foreign_rule(n) {
+            let next = self.nodes[n as usize].cons.len() as u32;
+            match self.cons_seen.entry((n, c)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let ci = *e.get();
+                    match self.clause {
+                        Some((f, m)) if self.cur_fn == f => {
+                            if let Some(r) = self.cons_reach.get_mut(&(n, ci)) {
+                                *r |= m;
+                            }
+                        }
+                        _ => {
+                            self.cons_reach.remove(&(n, ci));
+                        }
+                    }
+                    if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
+                        self.cons(n, Cons::Raise { region });
+                    }
+                    if !self.cell_watch.is_empty() && self.cell_watch.remove(&n) {
+                        self.cell_woken.push(n);
+                    }
+                    return;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(next);
+                }
+            }
         }
         self.stats_cons += 1;
         if let Cons::FieldTruthy { dst, .. } = c {
@@ -837,16 +874,32 @@ impl Model {
             return;
         }
         self.own_refuted_cons(n, c);
-        if defer {
-            // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c, ci));
-            return;
-        }
         self.replay_cons(n, c, ci);
     }
 
-    /// Apply the attached constraint `c` of `n` to what `n` holds now.
+    /// Apply the attached constraint `c` of `n` to what `n` holds now; a
+    /// replay asked for while one runs is queued (`Model::replay_q`) and run
+    /// by the outermost one. The solve's result is the least fixpoint of
+    /// the rules, whatever order they are applied in, and every rule is
+    /// applied to what its node holds once the queue is drained.
     pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
+        if self.replaying {
+            self.replay_q.push((n, c, ci));
+            return;
+        }
+        self.replaying = true;
+        self.replay_one(n, c, ci);
+        while let Some((n2, c2, i2)) = self.replay_q.pop() {
+            if self.aborted {
+                self.replay_q.clear();
+                break;
+            }
+            self.replay_one(n2, c2, i2);
+        }
+        self.replaying = false;
+    }
+
+    fn replay_one(&mut self, n: NodeId, c: Cons, ci: u32) {
         if matches!(c, Cons::Detached) || self.inert_node(n) {
             return;
         }
@@ -895,6 +948,33 @@ impl Model {
     // --------------------------------------------------------------- fields
 
     /// The node holding the prototype objects of `t`.
+    /// Rule OPROTO (M1): chain node `n` of `t` starts at the exact intrinsic
+    /// prototypes `t` is born with (`builtins::intrinsic_proto_seeds`), or
+    /// at `Object.prototype` where it has none of its own.
+    fn seed_chain(&mut self, n: NodeId, t: Tok, objproto: Tok) {
+        let seeds = crate::builtins::intrinsic_proto_seeds(self, t);
+        if seeds.is_empty() {
+            self.add_tok(n, objproto);
+        }
+        for &s in &seeds {
+            self.add_tok(n, s);
+        }
+        if !seeds.is_empty() {
+            self.birth_protos.insert(t, seeds);
+        }
+    }
+
+    /// Rule OPROTO (M1): does a walk of `t`'s chain end at its prototype `p`
+    /// as at the collapsed `ObjectProto`? `ObjectProto` itself, or an
+    /// intrinsic prototype `t` was born with (`birth_protos`): a lookup there
+    /// reads the collapsed chain with `t` as origin (`builtins::chain_link`),
+    /// which stands for every link above it.
+    pub fn collapsed_end(&self, t: Tok, p: Tok) -> bool {
+        matches!(self.toks[p as usize], TokKind::ObjectProto)
+            || (matches!(self.toks[p as usize], TokKind::NativeProto(..))
+                && self.birth_protos.get(&t).is_some_and(|v| v.contains(&p)))
+    }
+
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
         #[cfg(test)]
         if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
@@ -951,7 +1031,9 @@ impl Model {
                             self.add_tok(n, pt);
                         }
                     }
-                    None => self.add_tok(n, objproto),
+                    None => {
+                        self.seed_chain(n, t, objproto)
+                    }
                 },
             },
             TokKind::Proto(tm) => match (
@@ -971,10 +1053,22 @@ impl Model {
                     Some((_, pp)) => self.edge(pp, n),
                     // A null-prototype record: the chain ends here.
                     None if self.tmpls[tm as usize].null_proto => {}
-                    None => self.add_tok(n, objproto),
+                    // Rule OPROTO (M1): a generator function's `prototype`
+                    // object is born with %GeneratorPrototype% (27.3.4.3).
+                    None => self.seed_chain(n, t, objproto),
                 },
             },
-            TokKind::NativeProto(..) => self.add_tok(n, objproto),
+            // Rule OPROTO (M1): an intrinsic prototype's chain is the one the
+            // realm declares (`%ArrayIteratorPrototype%` ->
+            // `%IteratorPrototype%`; null ends it).
+            TokKind::NativeProto(..) => match crate::builtins::declared_proto(self, t) {
+                Ok(Some(p)) => {
+                    self.add_tok(n, p);
+                    self.birth_protos.insert(t, vec![p]);
+                }
+                Ok(None) => {}
+                Err(()) => self.add_tok(n, objproto),
+            },
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.
@@ -1011,10 +1105,32 @@ impl Model {
                 }));
                 self.add_tok(n, p);
             }
+            // BoundFunctionCreate (ECMA-262 10.4.1.3 step 1): a bound
+            // value's [[Prototype]] is `target.[[GetPrototypeOf]]()`, a
+            // bound target's its own target's: the root target's
+            // prototypes, or what a Proxy root's `getPrototypeOf` trap
+            // returns (10.5.1).
+            TokKind::Bound(b) => {
+                let root = self.bound_root[b as usize];
+                let rn = match self.toks[root as usize] {
+                    TokKind::Proxy(p) => self.proxy_proto_trap(p),
+                    _ => self.proto_node(root),
+                };
+                self.edge(rn, n);
+                // Rule OPROTO (M1): the bound value is born with its root
+                // target's intrinsic prototypes, so a walk of its chain ends
+                // where the root's does (`collapsed_end`, `chain_link`).
+                if let Some(v) = self.birth_protos.get(&root).cloned() {
+                    self.birth_protos.insert(t, v);
+                }
+            }
+            // Rule OPROTO (M1): a builtin-made receiver's chain starts at
+            // its exact intrinsic prototype (`builtins::intrinsic_proto_seeds`).
             TokKind::Func(_, _)
-            | TokKind::Bound(_)
             | TokKind::BuiltinFn(_)
-            | TokKind::Builtin(_) => self.add_tok(n, objproto),
+            | TokKind::Builtin(_) => {
+                self.seed_chain(n, t, objproto)
+            }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));
@@ -1041,7 +1157,9 @@ impl Model {
                                 None => self.add_tok(n, objproto),
                             }
                         }
-                        _ => self.add_tok(n, objproto),
+                        _ => {
+                            self.seed_chain(n, t, objproto)
+                        }
                     },
                 },
             },

@@ -164,14 +164,6 @@ pub(crate) fn register_class_parent_dynamic(
     // and Event-shaped dispatch gates. Builtins without a class id keep the
     // parentless baseline (no throw — they ARE constructors).
     if let Some(name) = identify_global_builtin_constructor(parent_value) {
-        // `%Proxy%` is constructable but intentionally has no usable
-        // `prototype` property, so it fails ClassDefinitionEvaluation's
-        // prototype-object-or-null check.
-        if name == "Proxy" {
-            super::super::object_ops::throw_object_type_error(
-                b"Class extends value has invalid prototype property",
-            );
-        }
         let parent_cid = super::super::instanceof::global_builtin_constructor_class_id(name);
         if parent_cid != 0 && parent_cid != class_id {
             register_class(class_id, parent_cid);

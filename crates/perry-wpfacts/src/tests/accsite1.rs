@@ -10,8 +10,8 @@ use perry_hir::Module;
 
 fn hirs(src: &str) -> Vec<(String, Module)> {
     let path = "a.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "a", &path).expect("lowers");
+    let module = perry_parser::parse_typescript(src, &fixture_source_path(&path)).expect("parses");
+    let hir = perry_hir::lower_module(&module, "a", &fixture_source_path(&path)).expect("lowers");
     vec![(path, hir)]
 }
 

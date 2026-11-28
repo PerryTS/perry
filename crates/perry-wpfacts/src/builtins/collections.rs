@@ -10,22 +10,20 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
     // One bound value per (birth site, target): a bound value is a
     // birth, so every instance's copy of the bind call makes the
-    // same one. Every bound target of a site shares one (`f =
-    // f.bind(x)` in a loop rebinds its own result: per target that
-    // would mint a new value each round). Its parts (target, bound
-    // `this`, bound arguments) are its own nodes, and every bind
-    // call that makes it copies its operands into them: the first
-    // maker may be a summarized body's shared observation node,
-    // which feeds no effect, while each instance's call carries
-    // its caller's values.
-    let key = (
-        m.birth_ctx(call),
-        if matches!(m.toks[t as usize], TokKind::Bound(_)) {
-            u32::MAX
-        } else {
-            t
-        },
-    );
+    // same one. Every bound target of a site with one root target
+    // shares one (`f = f.bind(x)` in a loop rebinds its own result:
+    // per target that would mint a new value each round); the root
+    // is what its chain is (BoundFunctionCreate, ECMA-262 10.4.1.3
+    // step 1: `target.[[GetPrototypeOf]]()`, a bound target's being
+    // its own target's), so it stays exact per root. Its parts
+    // (target, bound `this`, bound arguments) are its own nodes, and
+    // every bind call that makes it copies its operands into them:
+    // the first maker may be a summarized body's shared observation
+    // node, which feeds no effect, while each instance's call
+    // carries its caller's values.
+    let rebind = matches!(m.toks[t as usize], TokKind::Bound(_));
+    let root = super::bound_root(m, t);
+    let key = (m.birth_ctx(call), root, rebind);
     let b = match m.bound_index.get(&key) {
         Some(&b) => b,
         None => {
@@ -36,6 +34,7 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
                 .collect();
             let b = m.bound.len() as u32;
             m.bound.push((target, bthis, bargs));
+            m.bound_root.push(root);
             if let Some(source) = m.diagnostic_source_call(call) {
                 m.diagnostic
                     .as_mut()
@@ -61,6 +60,12 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
         }
     }
     let bt = m.tok(TokKind::Bound(b));
+    // A Proxy target's [[GetPrototypeOf]] runs its `getPrototypeOf` trap
+    // at the bind (10.4.1.3 step 1, 10.5.1): the bound value's prototype
+    // node, which holds the trap's result, is made with the value.
+    if matches!(m.toks[root as usize], TokKind::Proxy(_)) {
+        m.proto_node(bt);
+    }
     m.add_tok(c.ret, bt);
     // bind(...spread), or more bound args than the bound value's
     // first maker had (a call the solver made for the site): the
@@ -199,10 +204,28 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
-            let mut spread = c.spread.clone();
-            if let Some(&a) = c.arg(1) {
-                spread.push(a);
-            }
+            // CreateListFromArrayLike(argArray) (20.2.3.1 step 4): the
+            // target's arguments are argArray's elements, at positions no
+            // one knows, as the caller's own spreads' are. Every reader of a
+            // call's spreads reads each spread node as a set of arrays whose
+            // elements land anywhere, so one node holding all of them is the
+            // same list: the made call has one spread, whatever the caller
+            // had. Pushing argArray onto the caller's spreads made the
+            // `apply` a made `apply` makes one spread longer than its maker,
+            // a new arity under the same root and key (`solver_call_keyed`),
+            // without end (`Function.prototype.apply.bind(forEach)`).
+            let spread = match (&c.spread[..], c.arg(1)) {
+                ([], None) => vec![],
+                ([], Some(&a)) => vec![a],
+                ([s], None) => vec![*s],
+                (ss, a) => {
+                    let u = m.node_l("apply-spread");
+                    for &s in ss.iter().chain(a) {
+                        m.edge(s, u);
+                    }
+                    vec![u]
+                }
+            };
             if let Some(call2) = m.solver_call_keyed(
                 call,
                 (crate::summary::MK_FN_APPLY, t, 0),
@@ -881,6 +904,10 @@ pub(super) fn entry_pairs(
     values: NodeId,
 ) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
+    // CreateArrayFromList: an ordinary Array (rule RP2).
+    if let Some(tm) = m.tmpl_of(pair) {
+        m.ordinary_arrays.insert(tm);
+    }
     let k = m.index_slot(pair, 0);
     match keys {
         Some(keys) => m.edge(keys, k),
@@ -1142,7 +1169,7 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
     }
     let n = m.node_l("arr-iterated");
     m.arr_iterated.insert(t, n);
-    let elems = m.field_any(t);
+    let elems = m.array_like_elems(t);
     m.edge(elems, n);
     if m.is_arr(t) {
         let h = m.hole(t);
@@ -1235,10 +1262,16 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
 /// reads (`num_fields` into the any-field, the plain-key chain read), the
 /// receiver node and what the method does to it. Returns the receiver node.
 fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
-    let own = m.num_fields(t);
-    let elems = m.field_any(t);
-    m.edge(own, elems);
-    m.plain_key(t, ChainAct::Load(elems, m.thrown));
+    if m.elems_in_any(t) {
+        let own = m.num_fields(t);
+        let elems = m.field_any(t);
+        m.edge(own, elems);
+        m.plain_key(t, ChainAct::Load(elems, m.thrown));
+    } else {
+        // Rule W10-IDX: the index reads go to their own node, never the
+        // any-key field a named read of `t` reads (`array_like_elems`).
+        m.array_like_elems(t);
+    }
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1391,7 +1424,22 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         m.arr_len_permuted(t);
     }
     let c = m.calls[call as usize].clone();
-    let elems = m.field_any(t);
+    // Rule W10-IDX: what the method reads at the receiver's indices
+    // (`elems`) and what it writes there (`put`): one node, the any-key
+    // field, for an Array (`elems_in_any`); on any other receiver the
+    // index reads and the program's [[Set]] under an index key, so no
+    // write reaches a name that is no index.
+    let elems = m.array_like_elems(t);
+    let put = m.array_like_put(t);
+    if put != elems
+        && matches!(
+            name,
+            Some("copyWithin" | "reverse" | "sort" | "splice" | "shift" | "unshift")
+        )
+    {
+        // The method moves values between indices (Set(O, to, Get(O, from))).
+        m.edge(elems, put);
+    }
     // Every method here reads or writes the receiver's indices through its
     // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
     // program's accessors under those keys run.
@@ -1465,11 +1513,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // computed key could name.
         Some("unshift") => {
             for &a in &c.args {
-                m.edge(a, elems);
+                m.edge(a, put);
             }
             let key = m.elem_key();
             for &s in &c.spread {
-                m.cons(s, Cons::Load { key, dst: elems });
+                m.cons(s, Cons::Load { key, dst: put });
             }
             ret_prim(m, call, prim::NUM);
         }
@@ -1487,7 +1535,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `constructor`.
         Some("splice") => {
             for &a in c.args_from(2).iter() {
-                m.edge(a, elems);
+                m.edge(a, put);
             }
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);

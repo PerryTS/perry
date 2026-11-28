@@ -371,7 +371,7 @@ fn install_method(
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0)),
+        crate::fn_info!(#[realm("Storage.prototype.length.<get>", effects = { returns(prim(num)) })] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     );
     if getter.is_null() {
@@ -420,12 +420,12 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
 /// rooted store object, so `_value` is not a property value).
 fn set_global_storage_property(global: *mut ObjectHeader, name: &str, _value: *mut ObjectHeader) {
     let getter_fn = match name {
-        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0)),
-        _ => crate::fn_info!(#[realm("sessionStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0)),
+        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
+        _ => crate::fn_info!(#[realm("sessionStorage.<get>", spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
     };
     let getter = crate::closure::js_closure_alloc(getter_fn, 0);
     let setter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "localStorage.<set>", provider = closure_alloc; "sessionStorage.<set>", provider = closure_alloc; })] export crate::web_storage::storage_global_setter, 1; with_declared(1)),
+        crate::fn_info!(#[realm(realm_decl! { "localStorage.<set>", provider = closure_alloc; "sessionStorage.<set>", provider = closure_alloc; })] export crate::web_storage::storage_global_setter, 1; with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     );
     if !getter.is_null() && !setter.is_null() {

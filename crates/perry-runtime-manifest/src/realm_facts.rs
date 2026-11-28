@@ -902,6 +902,19 @@ pub(super) fn callable(
         .instance
         .clone()
         .unwrap_or_else(|| format!("{}.prototype", facts.name));
+    // A constructor family declared `no_prototype` (global_this_tables.rs:
+    // the Proxy constructor, ECMA-262 28.2.1) has no own `prototype` and no
+    // instance prototype; the runtime family births none.
+    let no_prototype = kind == "constructor"
+        && super::families::read(include_str!(
+            "../../perry-runtime/src/object/global_this_tables.rs"
+        ))?
+        .get(facts.family.as_deref().unwrap_or(&facts.name))
+        .and_then(|family| family.get("no_prototype"))
+            == Some(&Value::Bool(true));
+    if no_prototype && facts.instance.is_some() {
+        return Err(format!("{}: a no_prototype family has no instance", facts.name));
+    }
     if facts.births.contains(&prototype)
         || (kind == "constructor" && facts.births.contains(&instance))
     {
@@ -911,7 +924,7 @@ pub(super) fn callable(
     births.insert(prototype.clone());
     births.remove(&facts.name);
     let mut keys = vec![string("length"), string("name")];
-    if kind == "constructor" {
+    if kind == "constructor" && !no_prototype {
         let instance = facts
             .instance
             .clone()
@@ -933,6 +946,17 @@ pub(super) fn callable(
     {
         keys.push(string("prototype"));
     }
+    // A built-in getter or setter is not a constructor (ECMA-262 10.3, 10.4.1):
+    // it has no [[Construct]] and no own `prototype`. Its body says so
+    // (FN_NON_CONSTRUCTOR), so the runtime and this declaration agree.
+    if matches!(kind, "getter" | "setter") && keys.iter().any(|k| k.string() == Some("prototype"))
+    {
+        return Err(format!(
+            "{}: a built-in getter/setter is not a constructor; give its body FN_NON_CONSTRUCTOR \
+             and drop constructible",
+            facts.name
+        ));
+    }
     let constructor = if kind == "constructor" {
         let families = super::families::read(include_str!(
             "../../perry-runtime/src/object/global_this_tables.rs"
@@ -940,6 +964,14 @@ pub(super) fn callable(
         families
             .get(facts.family.as_deref().unwrap_or(&facts.name))
             .cloned()
+            .map(|mut family| {
+                // `no_prototype` is consumed above (no instance, no own
+                // prototype key); the wire constructor record does not carry it.
+                if let Value::Object(fields) = &mut family {
+                    fields.remove("no_prototype");
+                }
+                family
+            })
     } else {
         None
     };

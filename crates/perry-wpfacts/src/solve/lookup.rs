@@ -1346,20 +1346,23 @@ impl Model {
     /// dst ⊇ `t`'s prototypes as values (DECISIONS 217): what
     /// `Object.getPrototypeOf(t)` and `t.__proto__` return. A literal's
     /// class prototype is its layout, no object (`Cons::ProtoValues`);
-    /// `ObjectProto` stands for every builtin prototype, so its own
-    /// prototype may be itself (Array.prototype's is Object.prototype) or
-    /// null; a module record's (`module.exports` or a namespace) may be null.
+    /// `ObjectProto` is %Object.prototype%, whose prototype is null (rule
+    /// OPROTO); a module record's (`module.exports` or a namespace) may be null.
     pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
-        if !self.unit_mode && builtins::builtin_function(self, t) {
+        // A bound value's [[Prototype]] is its root target's
+        // (BoundFunctionCreate, ECMA-262 10.4.1.3 step 1); its prototype
+        // node holds the root's (`proto_node`).
+        let r = builtins::bound_root(self, t);
+        if !self.unit_mode && builtins::builtin_function(self, r) {
             let key = Key::Named(self.atom("__proto__"));
-            self.builtin_field_use(t, key, ChainAct::Load(dst, self.thrown));
+            self.builtin_field_use(r, key, ChainAct::Load(dst, self.thrown));
         }
         self.proto_value_at(t, dst);
         // A program function born with another intrinsic prototype
         // (`%AsyncGeneratorFunction.prototype%`, a generator object's
         // `%GeneratorPrototype%` chain) has one the model does not
         // describe: not `Function.prototype`, whose reads differ.
-        if let TokKind::Func(f, _) = self.toks[t as usize] {
+        if let TokKind::Func(f, _) = self.toks[r as usize] {
             if !builtins::born_with_function_proto(self, f) {
                 self.add_tok(dst, TOP);
                 return;
@@ -1373,10 +1376,9 @@ impl Model {
     pub(super) fn proto_value_at(&mut self, t: Tok, dst: NodeId) {
         match self.toks[t as usize] {
             TokKind::Top => self.add_tok(dst, TOP),
-            TokKind::ObjectProto => {
-                self.add_tok(dst, t);
-                self.add_prim(dst, prim::NULL);
-            }
+            // Rule OPROTO: %Object.prototype%.[[Prototype]] is null (ECMA-262
+            // 20.1.3); `ObjectProto` is no other prototype.
+            TokKind::ObjectProto => self.add_prim(dst, prim::NULL),
             _ => {
                 if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
                     let op = self.tok(TokKind::ObjectProto);
@@ -1779,7 +1781,8 @@ impl Model {
 
     /// ENUM2: prototype `q` of chain link `from` has no enumerable built-in
     /// member: a built-in object of `enum_free`, a program value
-    /// (`enum_obj`), or the collapsed `ObjectProto` where the seed of
+    /// (`enum_obj`), or the collapsed `ObjectProto` (or an intrinsic
+    /// prototype `from` was born with, `Model::collapsed_end`) where the seed of
     /// `from` makes it such an intrinsic prototype
     /// (`builtins::enum_free_seed`), or a built-in instance whose own
     /// enumerable properties are its program-written fields and, for a
@@ -1788,8 +1791,7 @@ impl Model {
         self.enum_free(q)
             || self.enum_obj(q)
             || builtins::enum_free_link_obj(self, q)
-            || matches!(self.toks[q as usize], TokKind::ObjectProto)
-                && builtins::enum_free_seed(self, from)
+            || self.collapsed_end(from, q) && builtins::enum_free_seed(self, from)
     }
 
     /// A builtin prototype on a chain (`ObjectProto` stands for each of
@@ -2025,8 +2027,15 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
+                // The method found on `start` runs in its native frame, as
+                // the dispatch of the value `bind_via` hands the call does
+                // (`Model::native_frame`): whichever of the two runs first,
+                // what it hands to unknown code raises into the call's region.
+                let native = builtins::proto_native(self, start, key);
                 self.with_native(call, |m, call| {
-                    builtins::proto_method(m, start, origin, key, call)
+                    m.native_frame(call, native, |m| {
+                        builtins::proto_method(m, start, origin, key, call)
+                    })
                 });
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);

@@ -193,12 +193,25 @@ impl Model {
     // See `str_set`: the `STRS_K` comparison is always false while the cap is off.
     #[allow(clippy::absurd_extreme_comparisons)]
     /// The result carries `STRS_RUN` when either side does.
+    ///
+    /// P-PROTOKEY: an unknown String (`STRS_TOP`) is narrower than the
+    /// any-String entry of a reflective key (`reflective_key_strs`): both
+    /// may be every String, but by the premise only the reflective one
+    /// names a class constructor's `prototype` (`class_any_read`). So the
+    /// join of the two is the set holding that entry.
     pub(crate) fn strs_join(&mut self, a: StrSet, b: StrSet) -> StrSet {
-        if a == b || b == STRS_NONE || a == STRS_TOP {
+        if a == b || b == STRS_NONE {
             return a;
         }
-        if a == STRS_NONE || b == STRS_TOP {
+        if a == STRS_NONE {
             return b;
+        }
+        if a == STRS_TOP || b == STRS_TOP {
+            let other = if a == STRS_TOP { b } else { a };
+            return match self.strs_reflective(other) {
+                true => other,
+                false => STRS_TOP,
+            };
         }
         let run = (a | b) & STRS_RUN;
         if a & !STRS_RUN == b & !STRS_RUN {
@@ -235,7 +248,11 @@ impl Model {
             };
             v.push(next);
             if v.len() > STRS_K {
-                return STRS_TOP;
+                // Past the bound: any String, a reflective key's entry kept.
+                return match self.strs_reflective(a) || self.strs_reflective(b) {
+                    true => self.reflective_key_strs(),
+                    false => STRS_TOP,
+                };
             }
         }
         let s = self.str_set(&v);
@@ -345,6 +362,42 @@ impl Model {
                 .str_atoms(node.strs)
                 .iter()
                 .all(|&a| !self.atom_is_mark(a))
+    }
+
+    /// P-PROTOKEY: the Strings a reflective own-key enumeration gives
+    /// (`Object.getOwnPropertyNames`, ECMA-262 20.1.2.10; `Reflect.ownKeys`,
+    /// 28.1.11; the keys of `Object.getOwnPropertyDescriptors`, 20.1.2.9)
+    /// when the keys are not known: any String, as the prefix entry of ""
+    /// (rule M3: every String starts with ""), whose shape is the glob `*`
+    /// (`any_string_shape`). A read under it reads every own key a String
+    /// may name, a class constructor's `prototype` among them; a key of
+    /// unknown String (`STRS_TOP`, shape 0) does not (`class_any_read`).
+    pub(crate) fn reflective_key_strs(&mut self) -> StrSet {
+        let a = self.prefix_atom("");
+        let set = self.str_set(&[a]);
+        self.run_born(set)
+    }
+
+    /// May the key node `n` hold a reflective own key
+    /// (`reflective_key_strs`)?
+    pub(crate) fn key_may_be_reflective(&mut self, n: NodeId) -> bool {
+        self.strs_reflective(self.nodes[n as usize].strs)
+    }
+
+    /// Does the set `s` hold the any-String entry (the prefix entry of "",
+    /// `reflective_key_strs`)?
+    pub(crate) fn strs_reflective(&self, s: StrSet) -> bool {
+        self.str_atoms(s)
+            .iter()
+            .any(|&a| self.atoms[a as usize] == PREFIX_MARK)
+    }
+
+    /// Is `t` the object `Object.getOwnPropertyDescriptors` made (one
+    /// property per own key of its argument, enumerable or not)?
+    pub(crate) fn reflective_box(&self, t: Tok) -> bool {
+        t != TOP
+            && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "descriptors", .. }))
     }
 
     /// Is the entry a solver spelling (a prefix or an infix), not a
@@ -854,7 +907,7 @@ impl Model {
                 return None;
             }
             for p in pr.pts.to_sorted() {
-                if p == op {
+                if p == op || self.collapsed_end(h, p) {
                     continue;
                 }
                 if !matches!(self.toks[p as usize], TokKind::Proto(_)) {

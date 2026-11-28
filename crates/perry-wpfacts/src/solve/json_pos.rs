@@ -53,7 +53,16 @@ impl Model {
     /// so the result keeps its own two tokens and every nested object (or
     /// array) shares one. A program store still links any object anywhere,
     /// through the ordinary edges.
+    ///
+    /// FRESHSITE R2: the inner pair is a function of the result pair: one
+    /// per parse birth (`json_inner_of`), however often the parse runs. A
+    /// new pair per evaluation abstracts nothing the result's tokens do not
+    /// already stand for (every parse at that birth), and minted one new
+    /// object and array template per run of JSON.parse.
     pub(crate) fn json_inner(&mut self, root: Tok, arr: Tok) -> (Tok, Tok) {
+        if let Some(&pair) = self.json_inner_of.get(&(root, arr)) {
+            return pair;
+        }
         let disp = |m: &Model, t: Tok| match m.toks[t as usize] {
             TokKind::Obj(tm, c) => (c, m.tmpls[tm as usize].display.clone()),
             _ => unreachable!("a JSON result is an object token"),
@@ -62,6 +71,7 @@ impl Model {
         let o = self.json_clone(root, c, format!("{d}~inner"));
         let (c, d) = disp(self, arr);
         let a = self.json_clone(arr, c, format!("{d}~inner"));
+        self.json_inner_of.insert((root, arr), (o, a));
         (o, a)
     }
 

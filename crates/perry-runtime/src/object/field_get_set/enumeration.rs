@@ -5,6 +5,9 @@ use super::*;
 
 #[path = "ordinary_keys.rs"]
 mod ordinary_keys;
+#[path = "for_in_proxy.rs"]
+mod for_in_proxy;
+pub use for_in_proxy::js_for_in_key_live;
 
 /// Map/Set receivers: the collection's DATA lives in internal slots (never
 /// own enumerable properties — Node: `Object.keys(new Map([...])) === []`),
@@ -308,7 +311,7 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
     if let Some((keys, _, _)) = ordinary_keys::for_in_keys_of_value(value.to_bits(), false) {
         return keys;
     }
-    for_in_keys_with(value, lazy_shadow_enabled())
+    for_in_keys_with(value, lazy_shadow_enabled(), false)
 }
 
 /// The for-in loop's begin (DYNP E6 step 4): its keys, the loop fact
@@ -342,7 +345,7 @@ pub extern "C" fn js_for_in_begin(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
-    let keys = for_in_keys_with(value, lazy_shadow_enabled());
+    let keys = for_in_keys_with(value, lazy_shadow_enabled(), true);
     let fact =
         unsafe { ordinary_keys::for_in_loop_fact(receiver.get_nanbox_f64().to_bits(), keys) };
     unsafe {
@@ -362,37 +365,21 @@ pub extern "C" fn js_for_in_loop_fact(obj: f64, keys: *const ArrayHeader) -> i64
     unsafe { ordinary_keys::for_in_loop_fact(obj.to_bits(), keys) as i64 }
 }
 
-/// The for-in loop's deletion check `keys[idx] in obj` under the loop fact
-/// `fact` (DYNP E3c). `keys` is the loop's snapshot (an array only the loop
-/// holds) and `idx` the loop counter below its length, so the key is its
-/// element `idx`, read directly. The own key still at its place answers
-/// `true` from a few loads ([`ordinary_keys::key_live_by_fact`]); everything
-/// else is the complete `in` operator.
-#[no_mangle]
-pub extern "C" fn js_for_in_key_live(obj: f64, keys: f64, idx: f64, fact: i64) -> f64 {
-    let pos = idx as u32;
-    let arr = (keys.to_bits() & crate::value::POINTER_MASK) as *const ArrayHeader;
-    let in_range = pos as f64 == idx && !arr.is_null() && unsafe { pos < (*arr).length };
-    let key = if in_range {
-        unsafe { f64::from_bits(*crate::array::array_elements_ptr(arr).add(pos as usize)) }
-    } else {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    };
-    if fact != 0
-        && in_range
-        && unsafe {
-            ordinary_keys::key_live_by_fact(obj.to_bits(), key.to_bits(), pos, fact as u64)
-        }
-    {
-        return f64::from_bits(JSValue::bool(true).bits());
-    }
-    crate::object::field_get_set::has_property::js_in_operator(obj, key)
-}
-
 /// The walk itself, with the shadow-set strategy as a parameter so a test can
 /// run BOTH and assert they agree. `js_for_in_keys_value` reads the env once
 /// and delegates here.
-pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeader {
+///
+/// `proxy_subject`: the caller checks every key at its visit through
+/// `js_for_in_key_live` (the for-in loop's begin). A Proxy subject then runs
+/// node's order: `ownKeys`, then `getPrototypeOf`; its string keys all go out
+/// and all shadow the rest of the chain, and each key's descriptor is read at
+/// its visit (`for_in_proxy`), not here. Without a per-key check
+/// (`js_for_in_keys_value`) the Proxy level is filtered here, as `Object.keys`.
+pub(crate) fn for_in_keys_with(
+    value: f64,
+    lazy_shadow: bool,
+    proxy_subject: bool,
+) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
     let diag = crate::hot_diag::enum_on();
     if diag {
@@ -468,6 +455,25 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         let cv = JSValue::from_bits(current.get_nanbox_u64());
         if cv.is_null() || cv.is_undefined() || (!cv.is_reference()) {
             break;
+        }
+        if proxy_subject
+            && level == 0
+            && crate::proxy_hooks::proxy_is_proxy(current.get_nanbox_f64()) != 0
+        {
+            // Nothing is shadowed at level 0, and every own name shadows the
+            // later levels, so the set is live from here.
+            for_in_proxy::push_proxy_own_keys(
+                current.get_nanbox_f64(),
+                &out,
+                &mut seen,
+                &mut scratch,
+            );
+            shadow_live = true;
+            current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
+                current.get_nanbox_f64(),
+            ));
+            level += 1;
+            continue;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
         // skipping any name already shadowed by a closer level.

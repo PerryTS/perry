@@ -291,14 +291,15 @@ impl<'a> Gen<'a> {
             | "typedArrayForOfAdmits" => self.prim_node(prim::BOOL),
             // What codegen lowers them to: the cursor itself, the payload's
             // length, and `mode ? 0 : update`.
-            // Rule RP1: a positional step reads its own index
-            // (`gen/record_steps.rs`).
-            "arrayRecordIndex" => match self.record_steps.get(&(source_args.as_ptr() as usize)) {
-                Some(&j) => self.num_literal(j as f64),
-                None => match arg(0) {
-                    Some(a) => a,
-                    None => self.prim_node(prim::NUM),
-                },
+            // Rule DESTR-POS: an array pattern's pull at literal position
+            // i reads index i (`arrayRecordIndex(c, i)`, perry-hir
+            // `IteratorRecordPlan::element`): the Number i
+            // (`Gen::num_literal`), so the read of an index-exact Array reads
+            // its slot i alone (`Model::exact_index_slot`).
+            "arrayRecordIndex" => match (source_args.get(1), arg(0)) {
+                (Some(Expr::Integer(i)), _) => self.num_literal(*i as f64),
+                (_, Some(a)) => a,
+                (_, None) => self.prim_node(prim::NUM),
             },
             "arrayRecordLength" => self.prim_node(prim::NUM),
             "arrayRecordForUpdate" => {

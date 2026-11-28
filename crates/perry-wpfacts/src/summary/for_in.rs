@@ -25,14 +25,15 @@ impl Model {
             if for_in_diag() {
                 self.for_in_diag_why(f, ft, t);
             }
-            return self.for_in_every_key(call, ft);
+            let refl = list == KeyList::OwnNames || self.reflective_box(t);
+            return self.for_in_every_key(call, ft, refl);
         };
         if !runs {
             self.for_in_named_run(call, ft, &keys);
             self.for_in_named.push((call, ft, t, list));
             return;
         }
-        if self.for_in_key_runs(call, ft, &keys).is_some() {
+        if self.for_in_key_runs(call, ft, &keys, list == KeyList::OwnNames).is_some() {
             self.for_in_runs.push((call, ft, t, list));
         }
     }
@@ -40,7 +41,13 @@ impl Model {
     /// The runs of body `ft` for `keys`, made on first use. `None`: the body
     /// does not take its key as a fresh slot, so it ran with every key
     /// instead; else whether a run was new.
-    fn for_in_key_runs(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> Option<bool> {
+    fn for_in_key_runs(
+        &mut self,
+        call: CallId,
+        ft: Tok,
+        keys: &[Atom],
+        refl: bool,
+    ) -> Option<bool> {
         let mut made = false;
         for &k in keys {
             made |= !self
@@ -61,7 +68,7 @@ impl Model {
                     self.add_s(p, &[], prim::STR, set);
                 }
                 _ => {
-                    self.for_in_every_key(call, ft);
+                    self.for_in_every_key(call, ft, refl);
                     return None;
                 }
             }
@@ -109,7 +116,10 @@ impl Model {
 
     /// Run for-in body `ft` once with every key (the loop as it is).
     #[track_caller]
-    pub(crate) fn for_in_every_key(&mut self, call: CallId, ft: Tok) {
+    /// `refl` (P-PROTOKEY): the loop walks a reflective own-key list
+    /// (`Object.getOwnPropertyNames`, a descriptors object's keys), whose
+    /// keys are reflective (`reflective_key_strs`), not unknown Strings.
+    pub(crate) fn for_in_every_key(&mut self, call: CallId, ft: Tok, refl: bool) {
         if for_in_diag() {
             eprintln!(
                 "perry: wpfacts forindiag every-key body={} at={}",
@@ -117,12 +127,18 @@ impl Model {
                 std::panic::Location::caller()
             );
         }
-        if self.for_in_any.insert((call, ft)) {
-            // The loop as it is: its key is any String key of the value
-            // (14.7.5.10: a String, never a Symbol).
-            if let Some(&k) = self.calls[call as usize].args.first() {
+        // The loop as it is: its key is any String key of the value
+        // (14.7.5.10: a String, never a Symbol); per subject, since one
+        // loop may walk a reflective list and another value's keys.
+        if let Some(&k) = self.calls[call as usize].args.first() {
+            if refl {
+                let set = self.reflective_key_strs();
+                self.add_s(k, &[], prim::STR, set);
+            } else {
                 self.add_prim(k, prim::STR);
             }
+        }
+        if self.for_in_any.insert((call, ft)) {
             self.call_tok(call, ft, None);
         }
     }
@@ -201,7 +217,7 @@ impl Model {
                     .to_sorted()
                     .iter()
                     .all(|&p| match self.toks[p as usize] {
-                        TokKind::ObjectProto => true,
+                        _ if self.collapsed_end(t, p) => true,
                         TokKind::Proto(pm) => pm == tm,
                         _ => false,
                     })
@@ -277,6 +293,12 @@ impl Model {
         };
         let before = (self.nodes[dst as usize].prim, self.nodes[dst as usize].strs);
         match keys {
+            // P-PROTOKEY: the keys of a descriptors object are its source's
+            // own keys, enumerable or not: a reflective key.
+            None if self.reflective_box(t) => {
+                let set = self.reflective_key_strs();
+                self.add_s(dst, &[], prim::STR, set);
+            }
             None => self.add_prim(dst, prim::STR),
             Some(mut v) => {
                 if self.own_keys_seen.insert((t, dst)) {
@@ -370,7 +392,11 @@ impl Model {
         let keys = if t == TOP { None } else { self.proto_names(t) };
         let before = (self.nodes[dst as usize].prim, self.nodes[dst as usize].strs);
         match keys {
-            None => self.add_prim(dst, prim::STR),
+            // P-PROTOKEY: any String, a reflective key (`reflective_key_strs`).
+            None => {
+                let set = self.reflective_key_strs();
+                self.add_s(dst, &[], prim::STR, set);
+            }
             Some(mut v) => {
                 if self.own_names_seen.insert((t, dst)) {
                     self.own_names_on.push((t, dst));
@@ -419,10 +445,14 @@ impl Model {
                     if for_in_diag() {
                         self.for_in_diag_why(f, ft, t);
                     }
-                    self.for_in_every_key(call, ft);
+                    let refl = list == KeyList::OwnNames || self.reflective_box(t);
+                    self.for_in_every_key(call, ft, refl);
                     more = true;
                 }
-                Some(keys) => more |= self.for_in_key_runs(call, ft, &keys) != Some(false),
+                Some(keys) => {
+                    more |= self.for_in_key_runs(call, ft, &keys, list == KeyList::OwnNames)
+                        != Some(false)
+                }
             }
         }
         // FORIN1: the shared named runs, the same way.
@@ -436,7 +466,8 @@ impl Model {
                     if for_in_diag() {
                         self.for_in_diag_why(f, ft, t);
                     }
-                    self.for_in_every_key(call, ft);
+                    let refl = list == KeyList::OwnNames || self.reflective_box(t);
+                    self.for_in_every_key(call, ft, refl);
                     more = true;
                 }
                 Some(keys) => more |= self.for_in_named_run(call, ft, &keys),

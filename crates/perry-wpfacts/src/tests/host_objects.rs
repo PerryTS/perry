@@ -270,10 +270,16 @@ fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
             "console.warn(\"x\");",
             true,
         ),
+        // Rule OPROTO: perry's `process.stdout` is born with
+        // %Object.prototype% (runtime probe, OPROTO4), whose [[Prototype]]
+        // is null (ECMA-262 20.1.3): the store throws a TypeError before
+        // `w` is stored anywhere, so `console.debug` calls the stream's own
+        // `write`. Node's chain (`tty.WriteStream`) differs; the solver
+        // models perry's runtime.
         (
             "Object.getPrototypeOf(Object.getPrototypeOf(process.stdout)).write = w;",
             "console.debug(\"x\");",
-            true,
+            false,
         ),
     ] {
         let src = format!(

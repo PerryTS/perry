@@ -90,6 +90,9 @@ pub const IDX_SPREAD_STR: u16 = 47;
 /// (`builtins::collections::apply_positions`): once per (array node, target,
 /// call).
 pub const IDX_APPLY_POS: u16 = 69;
+/// P-PROTOKEY: an `IdxKey` read under a key that may be a reflective own key
+/// (`Model::key_may_be_reflective`).
+pub const IDX_REFL_KEY: u16 = 70;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -740,8 +743,8 @@ pub struct FuncInfo {
     pub ctor_of: Option<TmplId>,
     /// Arrow function / `captures_this` closure: `this` is the enclosing one.
     pub lexical_this: bool,
-    /// Something outside the call protocol writes the parameters (an object
-    /// literal IIFE, a computed accessor): never summarized.
+    /// Something outside the call protocol writes the parameters (a
+    /// computed accessor): never summarized.
     pub no_summary: bool,
     /// The same outside writes of the parameters, recorded apart from
     /// `no_summary` (which the activation pass sets on every function to
@@ -2103,6 +2106,13 @@ pub struct Model {
     pub stores: Vec<StoreSite>,
     /// (target fns node, bound this, bound args)
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
+    /// Per bound value, its root target: the one function value that is no
+    /// bound function at the end of its target links (`bound_into_result`
+    /// keys a bound value by it). BoundFunctionCreate (ECMA-262 10.4.1.3
+    /// step 1) gives the bound value `target.[[GetPrototypeOf]]()`, and a
+    /// bound target's is its own target's: every chain question on a bound
+    /// value is its root's (`builtins::bound_root`).
+    pub bound_root: Vec<Tok>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     /// R9BIRTH3 rule M: per class, the methods its constructor's followed
     /// `this.m()` calls name (`CtorPhase::m_calls`), checked against the
@@ -2121,6 +2131,9 @@ pub struct Model {
     /// token, the last step) -> the class's object and array tokens.
     /// Compiler-internal: nothing of it reaches the binary.
     pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
+    /// A parse's result pair (object, array) -> the one inner pair of that
+    /// parse birth (`Model::json_inner`, FRESHSITE R2).
+    pub json_inner_of: FxHashMap<(Tok, Tok), (Tok, Tok)>,
     /// JSON-RT parse sites (`solve::json_rt`): the site's `json` object
     /// token -> its any-JSON value, root and nested nodes (made on first
     /// use). Compiler-internal, as everything below.
@@ -2289,6 +2302,10 @@ pub struct Model {
     /// `Model::num_fields`: the fields a number key may name.
     pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
+    /// Rule OPROTO (M1): the intrinsic prototypes `Model::proto_node` seeded
+    /// the chain of a token with at its birth (`Model::seed_chain`; for an
+    /// intrinsic prototype, the [[Prototype]] the realm declares for it).
+    pub birth_protos: FxHashMap<Tok, Vec<Tok>>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
     pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
@@ -2541,6 +2558,13 @@ pub struct Model {
     /// (`o`, `src`, site) its enumerated keys decide: a key it gains later
     /// is stored too (`Model::field`, `Cons::EnumKeyStore`).
     pub enum_key_stores: FxHashMap<Tok, Vec<(NodeId, NodeId, SiteId)>>,
+    /// ENUM-DEL: a global object token -> the reasons of the for-in deletes
+    /// of it (`Model::delete_global_enum`): a key it gains later is deleted
+    /// too (`Model::enum_key_gained`).
+    pub enum_key_deletes: FxHashMap<Tok, Vec<u32>>,
+    /// ENUM-DEL: (global object, key, reason) whose field the for-in delete
+    /// watches (`Model::delete_enum_named`).
+    pub enum_delete_watched: crate::pts::FxHashSet<(Tok, Atom, u32)>,
     pub enum_key_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, NodeId)>,
     /// ENUM3: a for-in subject (or chain link) token -> the node its
     /// unknown-key writes reach (`Model::enum_key_watch`).
@@ -2661,6 +2685,13 @@ pub struct Model {
     /// (receiver, method) serves every call site (`array_like_this`);
     /// `toString`'s `join` call is the call's own.
     pub array_like_this: crate::pts::FxHashMap<(Tok, crate::model::Atom), NodeId>,
+    /// Rule W10-IDX: the index values an Array.prototype method reads from
+    /// a receiver that keeps no elements in its any-key field
+    /// (`Model::array_like_elems`), one node per receiver.
+    pub array_like_elems: crate::pts::FxHashMap<Tok, NodeId>,
+    /// Rule W10-IDX: the node whose values such a method writes under an
+    /// index key of that receiver (`Model::array_like_put`).
+    pub array_like_put: crate::pts::FxHashMap<Tok, NodeId>,
     /// The template a `GetIterator` site makes for the iterator object its
     /// source's `@@iterator` may return (`[iterator#n]`), with the node of
     /// that source (`gen_sources`: a source whose `@@iterator` returns the
@@ -2895,7 +2926,9 @@ pub struct Model {
     /// reaches compiled units only, which use another unit's stand-in
     /// through its contract (DECISIONS 120, `Model::escape`).
     pub interp_free: bool,
-    pub bound_index: FxHashMap<(CallId, Tok), u32>,
+    /// The bound value per (birth site, root target, whether the target is
+    /// itself a bound value).
+    pub bound_index: FxHashMap<(CallId, Tok, bool), u32>,
     /// PROXY2: the Proxy objects, one per birth context of a `new Proxy`.
     pub proxies: Vec<crate::solve::proxy::ProxyRec>,
     pub proxy_index: FxHashMap<CallId, u32>,
@@ -2926,10 +2959,25 @@ pub struct Model {
     /// A call with spread arguments -> the call a builtin model reads
     /// (`Model::builtin_args_view`); a view maps to itself.
     pub spread_view: FxHashMap<CallId, CallId>,
+    /// A spread source node -> the one node holding its elements
+    /// (`Model::spread_elems_of`).
+    pub spread_elems: FxHashMap<NodeId, NodeId>,
+    /// An Annex B define call (`annexb_define`) -> its holder node per
+    /// (own receiver, setter): every receiver of the call that defines the
+    /// same way is a token of that one node.
+    pub annexb_holders: FxHashMap<(CallId, bool, bool), NodeId>,
+    /// The rules attached to each node (`cons_untagged`): a node's rules
+    /// are a set; the value is the rule's index in the node's list.
+    pub cons_seen: crate::pts::FxHashMap<(NodeId, Cons), u32>,
     /// Solver-made call → the call its chain of solver-made calls started
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.
     pub made_root: FxHashMap<CallId, CallId>,
+    /// (program root of the maker chain, native code position) -> the made
+    /// site of every
+    /// solver-made call a maker passes its own id as site
+    /// (`Model::solver_call_raw`, FRESHSITE R1).
+    pub made_sites: FxHashMap<(CallId, &'static std::panic::Location<'static>), CallId>,
     /// (root, maker, aux, aux2, args, spreads) → the one call that maker
     /// makes for every call of that root, and the node its callee
     /// constraint sits on (`Model::solver_call_keyed`).
@@ -3094,6 +3142,9 @@ pub struct Model {
     /// shape admits and every write under a computed key
     /// (`solve/shaped_keys.rs`).
     pub shaped_reads: FxHashMap<(Tok, KeyShapeId), NodeId>,
+    /// P-PROTOKEY: a class constructor's own fields under a key of unknown
+    /// String (`Model::class_any_read`): every own field but `prototype`.
+    pub class_any_reads: FxHashMap<Tok, NodeId>,
     /// A shaped key's store into an object: it reaches only the fields
     /// whose name the shape admits, and computed-key reads.
     pub shaped_stores: FxHashMap<(Tok, KeyShapeId), NodeId>,
@@ -3137,6 +3188,9 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// DEL-KEY: (key node, receiver node, constant) of a computed-key delete
+    /// made by name per String constant of its key (`Cons::DeleteKeyed`).
+    pub delete_keyed: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
     /// (key node, receiver node, value node, store site, index) a
     /// `StoreIndexed` store has been added for: `true` the index store,
     /// `false` the computed-key one. A shared body's replay has its own key
@@ -3269,6 +3323,9 @@ pub struct Model {
     pub global_any_off: bool,
     /// G2: the any-key stores taken, for that replay.
     pub global_any_stores: Vec<(Tok, Key, NodeId, u32)>,
+    /// Rule W10-IDX: the global object's field under Number keys
+    /// (`builtins::global_num_field`), made by the first such store.
+    pub global_num_field: Option<NodeId>,
     /// GLOBK3: the global object's field of what `defineProperty` under a
     /// computed key defines there (`DefineAny`): it flows into the any-key
     /// field and, as a define may replace the configurable accessor
@@ -3315,6 +3372,10 @@ pub struct Model {
     pub foreign_fn_value: bool,
     /// The escape reason of a value handed to foreign code.
     pub foreign_reason: Option<u32>,
+    /// Diagnostics only: the per-call reasons of the values a call of ⊤
+    /// hands to foreign code (`[call N]`, as a call of an unknown function
+    /// value names its call; `diagnostic_esc_via`'s callee rule).
+    pub foreign_call_reasons: crate::pts::FxHashSet<u32>,
     /// Foreign code was handed a value: it holds ⊤ (`note_foreign_holds`).
     pub foreign_holds: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):
@@ -3379,16 +3440,16 @@ pub struct Model {
     /// The work counter at the last budget check (`solve`).
     pub budget_work_at: u64,
     pub aborted: bool,
-    /// SKINROOT27: the prototype-chain walk of `Cons::EnumChain` as a
-    /// worklist. `chain_active`: an EnumChain application is on the stack;
-    /// a deeper link is then attached to its prototype node at once (so the
-    /// solve sees it for later tokens) and its replay on what that node holds
-    /// is queued in `chain_q` (drained by the outermost application) instead
-    /// of recursing one Rust frame group per prototype level. `chain_defer`:
-    /// the next `cons_untagged` queues its replay (consumed at its entry).
-    pub chain_active: bool,
-    pub chain_defer: bool,
-    pub chain_q: Vec<(NodeId, Cons, u32)>,
+    /// The replays of attached rules as a worklist (`Model::replay_cons`).
+    /// `replaying`: a replay is on the stack; a rule attached meanwhile is
+    /// attached at once (so the solve sees it for later tokens) and its
+    /// replay on what its node holds now is queued in `replay_q`, drained
+    /// by the outermost replay, instead of recursing one Rust frame group
+    /// per rule a replay attaches (SKINROOT27: 55k prototype levels of
+    /// `Cons::EnumChain` overflowed r8; R12H: a native namespace call whose
+    /// stored answer attaches a `Cons::CallThis` that makes the next one).
+    pub replaying: bool,
+    pub replay_q: Vec<(NodeId, Cons, u32)>,
     /// Past the work bound (`Model::past_work_bound`): a call that would
     /// make a new calling context runs the function's shared instance
     /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
