@@ -842,6 +842,7 @@ accessor	node:zlib.codes	__proto__	Object.prototype.__proto__.<get>	Object.proto
 accessor	node:zlib.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	node:zlib.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	performance	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
+accessor	performance	nodeTiming	Performance.prototype.nodeTiming.<get>
 accessor	performance	timeOrigin	Performance.prototype.timeOrigin.<get>
 accessor	performance.constants	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	performance.default	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
